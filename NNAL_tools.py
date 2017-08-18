@@ -116,3 +116,43 @@ def modify_MNIST(batch_of_data, batch_of_labels, pool_images,
             
         
     
+def update_batches(batch_of_data, batch_of_labels, new_data, 
+                   new_labels, method='regular'):
+    """Updating a set of existing batches of training data with a newly
+    labeled sampels to finetune the network after expanding the
+    training data
+
+    There are two possible ways to extend the training batches:
+
+    * 'Regular method': the newly labeled data will be aded 
+    to the whole (unbatched) training data and then the re-batch
+    them in a regular way
+    
+    * 'Emphasized method': the newly added samples will be added to 
+    all the previous batches, hence size of the batches will increase
+    
+    """
+    
+    batch_size = batch_of_data[0].shape[0]
+
+    if method=='regular':
+        # un-batching the data
+        training_data = np.concat(batch_of_data, axis=0)
+        training_labels = np.concat(batch_of_labels, axis=0)
+        
+        # append the newly labeled samples
+        training_data = np.concat((trainin_data, new_data), axis=0)
+        training_labels = np.concat((training_labels, new_labels), axis=0)
+        
+        # batch again
+        batch_inds = prep_dat.gen_batch_inds(training_data.shape[0], batch_size)
+        batch_of_data = prep_dat.gen_batch_matrices(training_data, batch_inds)
+        batch_of_labels = prep_dat.gen_batch_matrices(training_labels, batch_inds)
+        
+    elif method=='emphasized':
+        # append the newly labeled samples to all the batches
+        for i in range(len(batch_of_data)):
+            batch_of_data[i] = np.concat((batch_of_data[i], new_data), axis=0)
+            batch_of_labels[i] = np.concat((batch_of_labels[i], new_labels), axis=0)
+        
+    return batch_of_data, batch_of_labels
