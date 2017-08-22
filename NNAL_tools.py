@@ -19,7 +19,7 @@ def uncertainty_filtering(posteriors, B):
     posteriors[posteriors==0] += 1e-8
     
     # uncertainties
-    entropies = -np.sum(posteriors * np.log(posteriors), axis=1)
+    entropies = -np.sum(posteriors * np.log(posteriors), axis=0)
     selected_unlabeled = np.argsort(-entropies)[:B]
     
     return selected_unlabeled
@@ -33,8 +33,8 @@ def enlist_gradients(TF_vars, B, par_list):
     The variable `TF_vars` could be, e.g., log-posteriors of the model,
     whose number of columns is equal to number of classes, but the 
     number of its rows is variables (or None) and so it should be given.
-    The input `B` represents the value that the variable dimension of
-    `TF_vars` will be equal in the time of running. 
+    The input `B` represents the number of rows that we expect to have
+    for `TF_vars` in the time of running. 
     
     The function should get the list of parameters with respect to which
     the gradients are to be taken too.
@@ -44,12 +44,12 @@ def enlist_gradients(TF_vars, B, par_list):
     c = TF_vars.shape[1].value
     
     # first, unstacking the TF variable into an array
-    vars_array = np.empty((B, c), dtype=object)
+    vars_array = np.empty((B,c), dtype=object)
     # along the class-axis
     unstacked_vars = tf.unstack(TF_vars, axis=1)
     # .. and then along the sample-axis
     for j in range(c):
-        vars_array[:, j] = np.array(tf.unstack(unstacked_vars[j], B))
+        vars_array[:,j] = np.array(tf.unstack(unstacked_vars[j], B))
         
     # forming the list of gradients
     funcs = np.reshape(vars_array, c*B)
@@ -82,11 +82,11 @@ def init_MNIST(init_size, batch_size):
 
     # manually creating batches for initial training
     batch_inds = prep_dat.gen_batch_inds(init_size, batch_size)
-    batch_of_data = prep_dat.gen_batch_matrices(init_train_images, batch_inds)
-    batch_of_labels = prep_dat.gen_batch_matrices(init_train_labels, batch_inds)
+    batch_of_data = prep_dat.gen_batch_matrices(init_train_images.T, batch_inds)
+    batch_of_labels = prep_dat.gen_batch_matrices(init_train_labels.T, batch_inds)
     
-    return batch_of_data, batch_of_labels, pool_images, pool_labels, \
-        test_images, test_labels
+    return batch_of_data, batch_of_labels, pool_images.T, pool_labels.T, \
+        test_images.T, test_labels.T
 
 def modify_MNIST(batch_of_data, batch_of_labels, pool_images, 
                  pool_labels, new_images, new_labels):
@@ -133,26 +133,28 @@ def update_batches(batch_of_data, batch_of_labels, new_data,
     
     """
     
-    batch_size = batch_of_data[0].shape[0]
+    batch_size = batch_of_data[0].shape[1]
 
     if method=='regular':
         # un-batching the data
-        training_data = np.concat(batch_of_data, axis=0)
-        training_labels = np.concat(batch_of_labels, axis=0)
+        training_data = np.concatenate(batch_of_data, axis=1)
+        training_labels = np.concatenate(batch_of_labels, axis=1)
         
         # append the newly labeled samples
-        training_data = np.concat((trainin_data, new_data), axis=0)
-        training_labels = np.concat((training_labels, new_labels), axis=0)
+        training_data = np.concatenate((training_data, new_data), axis=1)
+        training_labels = np.concatenate((training_labels, new_labels), axis=1)
         
         # batch again
-        batch_inds = prep_dat.gen_batch_inds(training_data.shape[0], batch_size)
+        batch_inds = prep_dat.gen_batch_inds(training_data.shape[1], batch_size)
         batch_of_data = prep_dat.gen_batch_matrices(training_data, batch_inds)
         batch_of_labels = prep_dat.gen_batch_matrices(training_labels, batch_inds)
         
     elif method=='emphasized':
         # append the newly labeled samples to all the batches
         for i in range(len(batch_of_data)):
-            batch_of_data[i] = np.concat((batch_of_data[i], new_data), axis=0)
-            batch_of_labels[i] = np.concat((batch_of_labels[i], new_labels), axis=0)
+            batch_of_data[i] = np.concatenate((batch_of_data[i], new_data), axis=1)
+            batch_of_labels[i] = np.concatenate((batch_of_labels[i], new_labels), axis=1)
+    else:
+        raise ValueError("Specified method does not exist.")
         
     return batch_of_data, batch_of_labels
