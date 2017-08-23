@@ -17,18 +17,28 @@ def test_MNIST(iters, B, k, init_size, batch_size, epochs):
     
     # FI-based querying
     print("Doing FI-based querying")
-    fi_accs, fi_data, fi_labels = querying_iterations_MNIST(batch_of_data, batch_of_labels, 
-                                                            pool_images, pool_labels, 
-                                                            test_images, test_labels,
-                                                            iters, k, epochs, method="FI")
+    fi_accs, fi_data, fi_labels, fi_added_labels = \
+        querying_iterations_MNIST(batch_of_data, batch_of_labels, 
+                                  pool_images, pool_labels, 
+                                  test_images, test_labels,
+                                  iters, k, epochs, method="FI")
 
     print("Doing random querying")
-    rand_accs, rand_data, rand_labels = querying_iterations_MNIST(batch_of_data, batch_of_labels, 
-                                                                  pool_images, pool_labels, 
-                                                                  test_images, test_labels,
-                                                                  iters, k, epochs, method="random")
+    rand_accs, rand_data, rand_labels, rand_added_labels = \
+        querying_iterations_MNIST(batch_of_data, batch_of_labels, 
+                                  pool_images, pool_labels, 
+                                  test_images, test_labels,
+                                  iters, k, epochs, method="random")
+
+    print("Doing uncertainty sampling")
+    ent_accs, ent_data, ent_labels, ent_added_labels = \
+        querying_iterations_MNIST(batch_of_data, batch_of_labels, 
+                                  pool_images, pool_labels, 
+                                  test_images, test_labels,
+                                  iters, k, epochs, method="entropy")
             
-    return (fi_accs, fi_data, fi_labels), (rand_accs, rand_data, rand_labels)
+    return (fi_accs, fi_added_labels), (rand_accs, rand_added_labels), \
+        (ent_accs, ent_added_labels)
 
 
 def querying_iterations_MNIST(batch_of_data, batch_of_labels, 
@@ -79,16 +89,17 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         accs[0] = accuracy.eval(feed_dict={x: test_images, 
                                             y_: test_labels})
         
-        
         # start the querying iterations
         print("Starting the querying iterations..")
-        all_queries = []
+        added_labels = []
         for t in range(1, iters+1):
-            # compute all the posterior probabilities
-            pool_posteriors = sess.run(posteriors, feed_dict={x: pool_images, y_: pool_labels})
             
             if method=="FI":
                 """FI-based querying"""
+                # compute all the posterior probabilities
+                pool_posteriors = sess.run(posteriors, feed_dict=
+                                           {x: pool_images, y_: pool_labels})
+                
                 # norm of the samples
                 pool_norms = np.sum(pool_images**2, axis=0)
                 # norm of posteriors
@@ -97,15 +108,25 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
                 scores = (pool_norms+1)*(1-pool_posteriors_norms)
 
                 # take the best k scores
-                Q = np.argsort(-scores)[:k]
+                bests = np.argsort(-scores)[:100]
+                Q = np.array([bests[np.random.randint(100)]])
                 
             elif method=="random":
                 """randomd querying"""
                 Q = np.random.randint(0, pool_images.shape[1], k)
+                
+            elif method=="entropy":
+                # compute all the posterior probabilities
+                pool_posteriors = sess.run(posteriors, feed_dict=
+                                           {x: pool_images, y_: pool_labels})
+                entropies = NNAL_tools.compute_entropy(pool_posteriors.T)
+                Q = np.argsort(-entropies)[:k]
             
             new_train_data = pool_images[:,Q]
             new_train_labels = pool_labels[:,Q]
-    
+            
+            added_labels += [np.where(new_train_labels)[0][0]]
+            
             batch_of_data, batch_of_labels = \
                 NNAL_tools.update_batches(batch_of_data, 
                                           batch_of_labels,
@@ -129,4 +150,4 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             nL = np.concatenate(batch_of_data, axis=1).shape[1]
             print("Iteration %d is done. Number of labels: %d" % (t, nL))
     
-    return accs, batch_of_data, batch_of_labels
+    return accs, batch_of_data, batch_of_labels, added_labels

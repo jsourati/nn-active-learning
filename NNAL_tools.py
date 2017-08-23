@@ -57,6 +57,22 @@ def enlist_gradients(TF_vars, B, par_list):
     
     return grads
 
+def compute_entropy(PMFs):
+    """Computing entropy of a given finite-length PMF
+    
+    The PMFs matrix should have dimension [n_classes, n_samples].
+    That is, columnwise.
+    """
+    
+    # getting rid of the zero probabilities so that logarithm
+    # function can be applied
+    PMFs[PMFs==0] += 10e-8
+    
+    # compuing Shannon entropy
+    entropies = -np.sum(PMFs * np.log(PMFs), axis=1)
+    
+    return entropies
+
 def init_MNIST(init_size, batch_size):
     """Prepare the MNIST data to use in our active learning
     framework, by partitioning it into three sets of (1) initial
