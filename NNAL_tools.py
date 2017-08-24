@@ -69,7 +69,7 @@ def compute_entropy(PMFs):
     PMFs[PMFs==0] += 10e-8
     
     # compuing Shannon entropy
-    entropies = -np.sum(PMFs * np.log(PMFs), axis=1)
+    entropies = -np.sum(PMFs * np.log(PMFs), axis=0)
     
     return entropies
 
