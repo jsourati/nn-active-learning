@@ -74,14 +74,17 @@ def train_CNN_MNIST(epochs, batch_size):
         # extracting features, in a loop
         print("Extracting the features..")
         d_extracted = 1024
+        c = 10
         train_features = np.zeros((d_extracted, mnist.train.images.shape[0]))
+        train_labels = np.zeros((c, mnist.train.images.shape[0]))
         for j in range(len(batch_of_data)):
             train_features[:,batch_inds[j]] = sess.run(fc1_output, feed_dict={
                     x: batch_of_data[j], y_: batch_of_labels[j], keep_prob: 1.0})
+            train_labels[:, batch_inds[j]] = mnist.train.labels[batch_inds[j], :].T
         test_features = sess.run(fc1_output, feed_dict={
                 x: mnist.test.images.T, y_: mnist.test.labels.T, keep_prob: 1.0})
         
-    return train_features, test_features
+    return (train_features, train_labels), (test_features, mnist.test.labels.T)
 
 def CNN_layers(W_dict, b_dict, x):
     """Creating the output of CNN layers and return them as TF variables
