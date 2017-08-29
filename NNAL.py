@@ -46,7 +46,8 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
                              test_images, test_labels,
                              iters, k, epochs, method):
     
-    accs = np.zeros(iters+1)
+    c = pool_labels.shape[0]
+    accs = np.zeros((c+1,iters+1))
     
     # initial training
     with tf.Session() as sess:
@@ -86,12 +87,18 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         # initial accuracy
         correct_prediction = tf.equal(tf.argmax(y,0), tf.argmax(y_,0))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        accs[0] = accuracy.eval(feed_dict={x: test_images, 
+        accs[0,0] = accuracy.eval(feed_dict={x: test_images, 
                                             y_: test_labels})
-        
+        # accuracies in each class
+        for j in range(1,c+1):
+            indics = test_labels[j-1,:]==1
+            accs[j,0] = accuracy.eval(feed_dict={x: test_images[:,indics], 
+                                                 y_: test_labels[:,indics]})
+
         # start the querying iterations
         print("Starting the querying iterations..")
         added_labels = []
+        added_images = np.zeros((iters, 784))
         for t in range(1, iters+1):
             
             if method=="FI":
@@ -100,16 +107,19 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
                 pool_posteriors = sess.run(posteriors, feed_dict=
                                            {x: pool_images, y_: pool_labels})
                 
-                # norm of the samples
+                # using the normalized pool-samples
                 pool_norms = np.sum(pool_images**2, axis=0)
+                pool_norms /= pool_norms.max()
+                
                 # norm of posteriors
                 pool_posteriors_norms = np.sum(pool_posteriors**2, axis=1)
                 # scores
                 scores = (pool_norms+1)*(1-pool_posteriors_norms)
 
                 # take the best k scores
-                bests = np.argsort(-scores)[:100]
-                Q = np.array([bests[np.random.randint(100)]])
+                #bests = np.argsort(-scores)[:100]
+                #Q = np.array([bests[np.random.randint(100)]])
+                Q = np.argsort(-scores)[:k]
                 
             elif method=="random":
                 """randomd querying"""
@@ -125,6 +135,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             new_train_data = pool_images[:,Q]
             new_train_labels = pool_labels[:,Q]
             
+            added_images[t-1,:] = np.squeeze(new_train_data)
             added_labels += [np.where(new_train_labels)[0][0]]
             
             batch_of_data, batch_of_labels = \
@@ -141,8 +152,13 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
                     train_step.run(feed_dict={x: batch_of_data[i], 
                                               y_: batch_of_labels[i]})
 
-            accs[t] = accuracy.eval(feed_dict={x: test_images, 
+            accs[0,t] = accuracy.eval(feed_dict={x: test_images, 
                                                y_: test_labels})
+            # accuracies in each class
+            for j in range(1,c+1):
+                indics = test_labels[j-1,:]==1
+                accs[j,t] = accuracy.eval(feed_dict={x: test_images[:,indics], 
+                                                     y_: test_labels[:,indics]})
             # update the pool
             np.delete(pool_images, Q, 1)
             np.delete(pool_labels, Q, 1)
@@ -150,4 +166,4 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             nL = np.concatenate(batch_of_data, axis=1).shape[1]
             print("Iteration %d is done. Number of labels: %d" % (t, nL))
     
-    return accs, batch_of_data, batch_of_labels, added_labels
+    return accs, batch_of_data, batch_of_labels, added_images
