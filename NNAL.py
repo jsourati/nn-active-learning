@@ -47,6 +47,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
                              iters, k, epochs, method):
     
     c = pool_labels.shape[0]
+    d = pool_images.shape[0]
     accs = np.zeros((c+1,iters+1))
     
     # initial training
@@ -55,7 +56,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         print("Initializing the model...")
         
         # input and output placeholders
-        x = tf.placeholder(tf.float32, shape=[784, None])
+        x = tf.placeholder(tf.float32, shape=[d, None])
         y_ = tf.placeholder(tf.float32, shape=[10, None])
 
         # parameters
@@ -88,7 +89,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         correct_prediction = tf.equal(tf.argmax(y,0), tf.argmax(y_,0))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
         accs[0,0] = accuracy.eval(feed_dict={x: test_images, 
-                                            y_: test_labels})
+                                             y_: test_labels})
         # accuracies in each class
         for j in range(1,c+1):
             indics = test_labels[j-1,:]==1
