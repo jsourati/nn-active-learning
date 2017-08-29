@@ -73,28 +73,47 @@ def compute_entropy(PMFs):
     
     return entropies
 
-def init_MNIST(init_size, batch_size):
+def init_MNIST(init_size, batch_size, classes=None):
     """Prepare the MNIST data to use in our active learning
     framework, by partitioning it into three sets of (1) initial
     labeled data, (2) unlabeled data (to query from) and (3)
     test data
     """
-    
+
     # loading the data from the TensorFlow library
     mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+    
+    # normalizing everything
+    #norms = np.expand_dims(np.sqrt(np.sum(test_images**2,axis=1)),1)
+    #test_images = test_images / np.repeat(norms, 784, axis=1)
+    train_images = mnist.train.images
+    train_labels = mnist.train.labels
     test_images = mnist.test.images
     test_labels = mnist.test.labels
-    
+    #norms = np.expand_dims(np.sqrt(np.sum(train_images**2,axis=1)),1)
+    #train_images = train_images / np.repeat(norms, 784, axis=1)
+
+    if classes:
+        indics = np.sum(mnist.train.labels[:,classes], axis=1)>0
+        train_images = mnist.train.images[indics,:]
+        train_labels = mnist.train.labels[indics,:]
+        train_labels = train_labels[:,classes]
+        #
+        indics = np.sum(mnist.test.labels[:,classes], axis=1)>0
+        test_images = mnist.test.images[indics,:]
+        test_labels = mnist.test.labels[indics,:]
+        test_labels = test_labels[:,classes]
+        
     # randomly selecting that many samples from the training data set
-    train_size = mnist.train.images.shape[0]
+    train_size = train_images.shape[0]
     rand_inds = np.random.permutation(train_size)
     init_inds = rand_inds[:init_size]
     unlabeled_inds = rand_inds[init_size:]
     #
-    init_train_images = mnist.train.images[init_inds, :]
-    init_train_labels = mnist.train.labels[init_inds, :]
-    pool_images = mnist.train.images[unlabeled_inds, :]
-    pool_labels = mnist.train.labels[unlabeled_inds, :]
+    init_train_images = train_images[init_inds, :]
+    init_train_labels = train_labels[init_inds, :]
+    pool_images = train_images[unlabeled_inds, :]
+    pool_labels = train_labels[unlabeled_inds, :]
 
     # manually creating batches for initial training
     batch_inds = prep_dat.gen_batch_inds(init_size, batch_size)
