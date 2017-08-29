@@ -73,6 +73,38 @@ def compute_entropy(PMFs):
     
     return entropies
 
+
+def divide_training(train_dat, init_size, batch_size):
+    """Partitioning a given training data into an initial
+    labeled data set (to initialize the model) and a pool of 
+    unlabeled samples, and then batching the initial labeled
+    set
+    
+    It is assumed that the data is column-wise
+    """
+    
+    train_features = train_dat[0]
+    train_labels = train_dat[1]
+    
+    # random assignment of indices to the labeled data
+    # set or to the unlabeled pool
+    train_size = train_features.shape[1]
+    rand_inds = np.random.permutation(train_size)
+    init_inds = rand_inds[:init_size]
+    unlabeled_inds = rand_inds[init_size:]
+    
+    init_features = train_features[:, init_inds]
+    init_labels = train_labels[:, init_inds]
+    pool_features = train_features[:, unlabeled_inds]
+    pool_labels = train_labels[:, unlabeled_inds]
+
+    # manually creating batches for initial training
+    batch_inds = prep_dat.gen_batch_inds(init_size, batch_size)
+    batch_of_data = prep_dat.gen_batch_matrices(init_features, batch_inds)
+    batch_of_labels = prep_dat.gen_batch_matrices(init_labels, batch_inds)
+    
+    return batch_of_data, batch_of_labels, pool_features, pool_labels
+
 def init_MNIST(init_size, batch_size, classes=None):
     """Prepare the MNIST data to use in our active learning
     framework, by partitioning it into three sets of (1) initial
@@ -84,14 +116,10 @@ def init_MNIST(init_size, batch_size, classes=None):
     mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
     
     # normalizing everything
-    #norms = np.expand_dims(np.sqrt(np.sum(test_images**2,axis=1)),1)
-    #test_images = test_images / np.repeat(norms, 784, axis=1)
     train_images = mnist.train.images
     train_labels = mnist.train.labels
     test_images = mnist.test.images
     test_labels = mnist.test.labels
-    #norms = np.expand_dims(np.sqrt(np.sum(train_images**2,axis=1)),1)
-    #train_images = train_images / np.repeat(norms, 784, axis=1)
 
     if classes:
         indics = np.sum(mnist.train.labels[:,classes], axis=1)>0
