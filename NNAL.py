@@ -5,40 +5,46 @@ import sys
 import NNAL_tools
 
 
-def test_MNIST(iters, B, k, init_size, batch_size, epochs):
+def test_MNIST(iters, B, k, init_size, batch_size, epochs, 
+               train_dat=None, test_dat=None):
     """Evaluate active learning based on Fisher information,
     or equivalently expected change of the model, over MNIST
     data set
     """
     
     # preparing MNIST data set
-    batch_of_data, batch_of_labels, pool_images, pool_labels, \
-        test_images, test_labels = NNAL_tools.init_MNIST(init_size, batch_size)
+    if not(train_dat):
+        batch_of_data, batch_of_labels, pool_images, pool_labels, \
+            test_images, test_labels = NNAL_tools.init_MNIST(init_size, batch_size)
+    else:
+        test_images = test_dat[0]
+        test_labels = test_dat[1]
+        batch_of_data, batch_of_labels, pool_images, pool_labels = \
+            NNAL_tools.divide_training(train_dat, init_size, batch_size)
     
     # FI-based querying
     print("Doing FI-based querying")
-    fi_accs, fi_data, fi_labels, fi_added_labels = \
+    fi_accs, fi_data, fi_labels = \
         querying_iterations_MNIST(batch_of_data, batch_of_labels, 
                                   pool_images, pool_labels, 
                                   test_images, test_labels,
                                   iters, k, epochs, method="FI")
 
     print("Doing random querying")
-    rand_accs, rand_data, rand_labels, rand_added_labels = \
+    rand_accs, rand_data, rand_labels = \
         querying_iterations_MNIST(batch_of_data, batch_of_labels, 
                                   pool_images, pool_labels, 
                                   test_images, test_labels,
                                   iters, k, epochs, method="random")
 
     print("Doing uncertainty sampling")
-    ent_accs, ent_data, ent_labels, ent_added_labels = \
+    ent_accs, ent_data, ent_labels = \
         querying_iterations_MNIST(batch_of_data, batch_of_labels, 
                                   pool_images, pool_labels, 
                                   test_images, test_labels,
                                   iters, k, epochs, method="entropy")
             
-    return (fi_accs, fi_added_labels), (rand_accs, rand_added_labels), \
-        (ent_accs, ent_added_labels)
+    return fi_accs, rand_accs, ent_accs
 
 
 def querying_iterations_MNIST(batch_of_data, batch_of_labels, 
@@ -60,7 +66,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         y_ = tf.placeholder(tf.float32, shape=[10, None])
 
         # parameters
-        W = tf.Variable(tf.zeros([10, 784]))
+        W = tf.Variable(tf.zeros([10, d]))
         b = tf.Variable(tf.zeros([10,1]))
         
         # initializing
@@ -99,7 +105,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
         # start the querying iterations
         print("Starting the querying iterations..")
         added_labels = []
-        added_images = np.zeros((iters, 784))
+        #added_images = np.zeros((iters, d))
         for t in range(1, iters+1):
             
             if method=="FI":
@@ -136,7 +142,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             new_train_data = pool_images[:,Q]
             new_train_labels = pool_labels[:,Q]
             
-            added_images[t-1,:] = np.squeeze(new_train_data)
+            #added_images[t-1,:] = np.squeeze(new_train_data)
             added_labels += [np.where(new_train_labels)[0][0]]
             
             batch_of_data, batch_of_labels = \
@@ -167,4 +173,4 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             nL = np.concatenate(batch_of_data, axis=1).shape[1]
             print("Iteration %d is done. Number of labels: %d" % (t, nL))
     
-    return accs, batch_of_data, batch_of_labels, added_images
+    return accs, batch_of_data, batch_of_labels
