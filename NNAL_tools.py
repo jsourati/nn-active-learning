@@ -3,6 +3,8 @@ import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 import pdb
 import sys
+import cv2
+import NN
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -221,3 +223,54 @@ def update_batches(batch_of_data, batch_of_labels, new_data,
         raise ValueError("Specified method does not exist.")
         
     return batch_of_data, batch_of_labels
+
+
+def Alex_features_MNIST(bulk_size):
+    """Pre-processing MNIST data to make them consistent with AlexNet, and
+    then extract the features as the output of the 7'th layer
+    """
+    mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+    imagenet_mean = np.array([104., 117., 124.], dtype=np.float32)
+
+    # we cannot give the whole training data at once because of OOM
+    # forming the division indices
+    train_size = mnist.train.images.shape[0]
+    divisions = np.append(np.arange(0, train_size, bulk_size), train_size)
+        
+    train_features = np.zeros((4096, train_size))
+    for t in range(len(divisions)-1):
+        inds = np.arange(divisions[t], divisions[t+1])
+        Alexified_images = np.zeros((len(inds), 227, 227, 3))
+        for i in range(len(inds)):
+            img = np.reshape(
+                mnist.train.images[inds[i],:], (28,28))
+            img = cv2.resize(img.astype(np.float32), (227,227))
+            img = img.reshape((227,227,1))
+            img = np.repeat(img, 3, axis=2)
+            img -= imagenet_mean
+            Alexified_images[i,:,:,:] = img.reshape((1,227,227,3))
+        
+        train_features[:, inds] = NN.AlexNet_features(Alexified_images).T
+        print("%d / %d" % (t, len(divisions)-1))
+
+    print("Extracting test features...")
+    test_size = mnist.test.images.shape[0]
+    divisions = np.append(np.arange(0, test_size, bulk_size), test_size)
+        
+    test_features = np.zeros((4096, test_size))
+    for t in range(len(divisions)-1):
+        inds = np.arange(divisions[t], divisions[t+1])
+        Alexified_images = np.zeros((len(inds), 227, 227, 3))
+        for i in range(len(inds)):
+            img = np.reshape(
+                mnist.test.images[inds[i],:], (28,28))
+            img = cv2.resize(img.astype(np.float32), (227,227))
+            img = img.reshape((227,227,1))
+            img = np.repeat(img, 3, axis=2)
+            img -= imagenet_mean
+            Alexified_images[i,:,:,:] = img.reshape((1,227,227,3))
+        
+        test_features[:, inds] = NN.AlexNet_features(Alexified_images).T
+        print("%d / %d" % (t, len(divisions)-1))
+    
+    return train_features, test_features
