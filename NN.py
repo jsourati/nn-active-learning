@@ -4,10 +4,46 @@ from tensorflow.examples.tutorials.mnist import input_data
 import copy
 import pdb
 import sys
+import cv2
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
 import prep_dat
+
+read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
+sys.path.insert(0, read_file_path)
+import alexnet
+
+
+def AlexNet_features(img_arr):
+    """Extracting features from the pretrained alexnet 
+    """
+    
+    tf.reset_default_graph()
+
+    # creating the network
+    # placeholder for input and dropout rate
+    x = tf.placeholder(tf.float32, shape=[None, 227, 227, 3])
+    keep_prob = tf.placeholder(tf.float32)
+    
+    # create model with default config 
+    # ( == no skip_layer and 1000 units in the last layer)
+    model = alexnet.AlexNet(
+        x, keep_prob, 1000, [], 
+        weights_path='/home/ch194765/repos/atlas-active-learning/AlexNet/bvlc_alexnet.npy')
+    
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        
+        # Load the pretrained weights into the model
+        model.load_initial_weights(sess)
+        
+        # extract the features
+        features = sess.run(model.feature_layer, 
+                            feed_dict={x: img_arr, keep_prob: 1})
+        
+    return features
+
 
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
@@ -84,7 +120,8 @@ def train_CNN_MNIST(epochs, batch_size):
         test_features = sess.run(fc1_output, feed_dict={
                 x: mnist.test.images.T, y_: mnist.test.labels.T, keep_prob: 1.0})
         
-    return (train_features, train_labels), (test_features, mnist.test.labels.T)
+    return (train_features, train_labels), (test_features, mnist.test.labels.T)   
+    
 
 def CNN_layers(W_dict, b_dict, x):
     """Creating the output of CNN layers and return them as TF variables
