@@ -134,6 +134,55 @@ class CNN(object):
 
             self.output = output
                 
+    def initialize_graph(self, session):
+        init = tf.global_variables_initializer()
+        session.run(init)
+        
+    def get_optimizer(self, learning_rate):
+        """Form the loss function and optimizer of the CNN graph
+        """
+        
+        # number of classes
+        c = self.output.get_shape()[0].value
+        self.y_ = tf.placeholder(tf.float32, [c, None])
+        
+        # loss function
+        loss = tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits(
+                labels=tf.transpose(self.y_), 
+                logits=tf.transpose(self.output)))
+        
+        # optimizer
+        self.train_step = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+        
+        # define the accuracy
+        correct_prediction = tf.equal(tf.argmax(self.output, 0), 
+                                      tf.argmax(self.y_, 0))
+        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        
+    def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
+        """Randomly partition the data into batches and complete one
+        epoch of training
+        
+        Input feature vectors, `X_train` and labels, `Y_train` are columnwise
+        """
+        
+        # random partitioning into batches
+        train_size = X_train.shape[0]
+        batch_inds = prep_dat.gen_batch_inds(train_size, batch_size)
+        batch_of_data = prep_dat.gen_batch_tensors(X_train, batch_inds)
+        batch_of_labels = prep_dat.gen_batch_matrices(Y_train, batch_inds)
+        
+        # completing an epoch
+        for j in range(len(batch_of_data)):
+            if j % 100 == 0:
+                acc = self.accuracy.eval(feed_dict={
+                        self.x: batch_of_data[j], 
+                        self.y_: batch_of_labels[j]})
+                print('Iteratin %d, training accuracy %g' % (j, acc))
+            
+            session.run(self.train_step, feed_dict={self.x: batch_of_data[j], 
+                                                    self.y_: batch_of_labels[j]})
 
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
