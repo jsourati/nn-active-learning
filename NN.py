@@ -45,6 +45,96 @@ def AlexNet_features(img_arr):
     return features
 
 
+class CNN(object):
+    """Class of CNN models
+    """
+    
+    def __init__(self, x, layer_dict, name):
+        """Constructor takes the input placehoder, a dictionary
+        whose keys are names of the layers and the items assigned to each
+        key is a 2-element list inlcuding  depth of this layer and its type,
+        and a name which will be assigned to the scope name of the variabels
+        
+        Type of each layer is either 'fc' (for fully connected) and 'conv' 
+        for convolutional layers. Moreover, depth of each layer will be
+        equal to the number of nodes (in fully-connected layers) and 
+        number of filters (in convolutional layers). This list for 
+        convolutional layers should have three elements, where the last
+        element specifies the kernel size of that layer.
+        
+        The assumption is that at least the first layer is a CNN, hence
+        depth of the input layer is the number of channels of the input.
+        It is further assumed that the last layer of the network is
+        not a CNN
+        """
+        
+        self.x = x
+        self.layer_type = []
+        
+        # creating the network's variables
+        self.var_dict = {}
+        layer_names = list(layer_dict.keys())
+
+        with tf.name_scope(name):
+            for i, layer_name in enumerate(layer_dict):
+                # extract previous depth
+                if i==0:
+                    prev_depth = x.shape[-1].value
+                    output = x
+                    
+                if layer_dict[layer_name][1]=='conv':
+                    kernel_dim = layer_dict[layer_name][2]
+                    self.var_dict.update({
+                            layer_name: [
+                                weight_variable([kernel_dim[0], kernel_dim[1], 
+                                                 prev_depth, layer_dict[layer_name][0]], 
+                                                name=layer_name+'_weight'),
+                                bias_variable([layer_dict[layer_name][0]],
+                                              name=layer_name+'_bias')]
+                            })
+
+                    # output of the layer
+                    output = tf.nn.conv2d(
+                        output, self.var_dict[layer_name][0], strides=[1,1,1,1],
+                        padding='SAME') + self.var_dict[layer_name][1]
+                    output = tf.nn.relu(output)
+                    output = max_pool(output, 2, 2)
+                    
+                    self.layer_type += ['conv']
+                    # storing depth of the current layer for the next one
+                    # if the next layer is fully-connected, the depth of this layer
+                    # would be total number of neurons (and not just the channls)
+                    if layer_dict[layer_names[i+1]][1]=='fc':
+                        prev_depth = np.prod(output.get_shape()[1:]).value
+                        output = tf.reshape(tf.transpose(output), [prev_depth, -1])
+                    else:
+                        prev_depth = output.get_shape()[-1].value
+                    
+                elif layer_dict[layer_name][1]=='fc': 
+                    self.var_dict.update({
+                            layer_name:[
+                                weight_variable([layer_dict[layer_name][0], prev_depth], 
+                                                name=layer_name+'_weight'),
+                                bias_variable([layer_dict[layer_name][0], 1],
+                                              name=layer_name+'_bias')]
+                            })
+                    self.layer_type += ['fc']
+                    
+                    # output of the layer
+                    output = tf.matmul(
+                        self.var_dict[layer_name][0], output) + self.var_dict[layer_name][1]
+                    # apply relu activation only if we are NOT at the last layer 
+                    if i < len(layer_dict)-1:
+                        output = tf.nn.relu(output)
+                    prev_depth = layer_dict[layer_name][0]
+                    
+                else:
+                    raise ValueError("Layer's type should be either 'fc'" + 
+                                     "or 'conv'.")
+
+            self.output = output
+                
+
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
     two layers of convolution (CNN) followed by two fully connected  layers.
@@ -173,17 +263,17 @@ def CNN_variables(kernel_dims, layer_list):
     return W_dict, b_dict
 
 
-def weight_variable(shape):
+def weight_variable(shape, name=None):
     """Creating a kernel tensor with specified shape
     """
     initial = tf.truncated_normal(shape, stddev=0.1)
-    return tf.Variable(initial)
+    return tf.Variable(initial, name=name)
 
-def bias_variable(shape):
+def bias_variable(shape, name=None):
     """Creating a bias term with specified shape
     """
     initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
+    return tf.Variable(initial, name=name)
 
     
 def max_pool(x, w_size, stride):
