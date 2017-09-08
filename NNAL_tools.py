@@ -224,6 +224,34 @@ def update_batches(batch_of_data, batch_of_labels, new_data,
         
     return batch_of_data, batch_of_labels
 
+def prepare_finetuning_data(X_train, Y_train, Q, Y_Q, 
+                            old_data_to_keep, batch_size):
+    """Preparing the data after receiving new labels to update/finetune
+    the model accordingly
+
+    This function takes the set of previously labeled data set, together
+    with a newly labeled queries to use them to update/fine-tune the
+    model based on the newly added labels. Here, we use part of the old
+    labeled data set too, to prevent the network from being overfitted 
+    to the new labels.
+    """
+
+    n_old = X_train.shape[1]
+    if old_data_to_keep < n_old:
+        old_X_train = X_train
+        old_Y_train = Y_train
+    else:
+        # randomly selecting some of the old labeled samples
+        rand_inds = np.random.permutation(n_old)
+        old_X_train = X_train[:, rand_inds[:old_data_to_keep]]
+        old_Y_train = Y_train[:, rand_inds[:old_data_to_keep]]
+
+    # mixing the new and old labels
+    new_X_train = np.concatenate((old_X_train, Q), axis=1)
+    new_Y_train = np.concatenate((old_Y_train, Y_Q), axis=1)
+    
+    return new_X_train, new_Y_train
+
 
 def Alex_features_MNIST(bulk_size):
     """Pre-processing MNIST data to make them consistent with AlexNet, and
