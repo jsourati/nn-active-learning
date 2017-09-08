@@ -5,6 +5,7 @@ import copy
 import pdb
 import sys
 import cv2
+import NNAL_tools
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -70,6 +71,7 @@ class CNN(object):
         
         self.x = x
         self.layer_type = []
+        self.name = name
         
         # creating the network's variables
         self.var_dict = {}
@@ -133,6 +135,9 @@ class CNN(object):
                                      "or 'conv'.")
 
             self.output = output
+            # posterior
+            posteriors = tf.nn.softmax(tf.transpose(output))
+            self.posteriors = tf.transpose(posteriors)
                 
     def initialize_graph(self, session):
         init = tf.global_variables_initializer()
@@ -160,6 +165,21 @@ class CNN(object):
                                       tf.argmax(self.y_, 0))
         self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
         
+    def get_gradients(self):
+        """Forming gradients of the log-posteriors
+        """
+        
+        # collect all the trainable variabels
+        Theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 
+                                  scope=self.name)
+        
+        self.grad_log_posts = {}
+        c = self.output.get_shape()[0].value
+        for j in range(c):
+            self.grad_log_posts.update(
+                {str(j): tf.gradients(tf.log(self.posteriors)[0][j], Theta)})
+
+        
     def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
         """Randomly partition the data into batches and complete one
         epoch of training
@@ -183,6 +203,7 @@ class CNN(object):
             
             session.run(self.train_step, feed_dict={self.x: batch_of_data[j], 
                                                     self.y_: batch_of_labels[j]})
+    
 
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
