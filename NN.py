@@ -177,7 +177,7 @@ class CNN(object):
         c = self.output.get_shape()[0].value
         for j in range(c):
             self.grad_log_posts.update(
-                {str(j): tf.gradients(tf.log(self.posteriors)[0][j], Theta)})
+                {str(j): tf.gradients(tf.log(self.posteriors)[j, 0], Theta)})
 
         
     def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
