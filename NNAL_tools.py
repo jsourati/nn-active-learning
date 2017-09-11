@@ -236,18 +236,18 @@ def prepare_finetuning_data(X_train, Y_train, Q, Y_Q,
     to the new labels.
     """
 
-    n_old = X_train.shape[1]
+    n_old = X_train.shape[0]
     if old_data_to_keep < n_old:
         old_X_train = X_train
         old_Y_train = Y_train
     else:
         # randomly selecting some of the old labeled samples
         rand_inds = np.random.permutation(n_old)
-        old_X_train = X_train[:, rand_inds[:old_data_to_keep]]
+        old_X_train = X_train[rand_inds[:old_data_to_keep],:,:,:]
         old_Y_train = Y_train[:, rand_inds[:old_data_to_keep]]
 
     # mixing the new and old labels
-    new_X_train = np.concatenate((old_X_train, Q), axis=1)
+    new_X_train = np.concatenate((old_X_train, Q), axis=0)
     new_Y_train = np.concatenate((old_Y_train, Y_Q), axis=1)
     
     return new_X_train, new_Y_train
