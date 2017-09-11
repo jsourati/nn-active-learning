@@ -174,3 +174,45 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
             print("Iteration %d is done. Number of labels: %d" % (t, nL))
     
     return accs, batch_of_data, batch_of_labels
+
+def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
+    """Querying a number of unlabeled samples from a given pool
+    """
+
+    if method=='expected_change':
+        # uncertainty filtering
+        print("Computing the posteriors...")
+        if batch_size:
+            posteriors = NNAL_tools.batch_posteriors(
+                model, pool_X, batch_size, session)
+        else:
+            posteriors = session.run(
+                model.posteriors, feed_dict={model.x:pool_X})
+            
+        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+        sel_posteriors = posteriors[:, sel_inds]
+
+        # FI scoring
+        print("Computing the scores..")
+        c = model.output.get_shape()[0].value
+        scores = np.zeros(B)
+        for i in range(B):
+            # gradients of samples one-by-one
+            #pdb.set_trace()
+            grads = session.run(
+                model.grad_log_posts, 
+                feed_dict={model.x:np.expand_dims(
+                        pool_X[sel_inds[i],:,:,:], axis=0)})
+
+            T = len(grads['0'])
+            for j in range(c):
+                class_score = 0.
+                for t in range(T):
+                    class_score += np.sum(grads[str(j)][t]**2)
+                scores[i] += class_score*sel_posteriors[j,i]
+                
+
+        # select the highest k scores
+        Q_inds = np.argsort(-scores)[:k]
+
+    return Q_inds
