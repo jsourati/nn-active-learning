@@ -302,3 +302,36 @@ def Alex_features_MNIST(bulk_size):
         print("%d / %d" % (t, len(divisions)-1))
     
     return train_features, test_features
+
+
+def batch_posteriors(model, X, batch_size, session):
+    """Computing posterior probability of a large set of samples
+    after dividing them into batches so that computations can be
+    done with a limited amount of memory
+    
+    This function is especially useful when GPU's are being used
+    with limited memory. Here, `model` is a tensorflow model with
+    `posteriors` as the variable that returns the posterior 
+    probabilities of given inputs. Also, note that input `X`
+    is assumed to be a tensor of format [batch, width, height,
+    channels].
+    """
+    
+    n = X.shape[0]
+    c = model.output.get_shape()[0].value
+    posteriors = np.zeros((c, n))
+    
+    # batch-wise computations
+    quot, rem = np.divmod(n, batch_size)
+    for i in range(quot):
+        if i<quot-1:
+            inds = np.arange(i*batch_size, (i+1)*batch_size)
+        else:
+            inds = slice(i*batch_size, n)
+            
+        iter_X = X[inds,:,:,:]
+        posteriors[:,inds] = session.run(
+            model.posteriors, feed_dict={model.x:iter_X})
+        
+    return posteriors
+    
