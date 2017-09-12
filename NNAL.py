@@ -177,9 +177,40 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
 
 def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
     """Querying a number of unlabeled samples from a given pool
+    
+    :Parameters:
+    
+      **model** : CNN model object
+        any CNN class object which has methods, `output` as the 
+        output of the network, and `posteriors` as the estimated
+        posterior probability of the classes
+        
+      **k** : positive integer
+        number of queries to be selected
+        
+      **B** : positive integer
+        number of samples to keep in uncertainty filterins
+        (only will be used in `egl` and `fi` methods)
+        
+      **pool_X** : 4D tensors
+        pool of unlabeled samples that is stored in format
+        `[batch, rows, columns, n_channels]`
+        
+      **method** : string
+        the querying method
+        
+      **session** : tf.Session()
+        the tensorflow session operating on the model
+        
+      **batch_size** : integers (default is None)
+        size of the batches for batch-wise computation of
+        posteriors and gradients; if not provided, full data
+        will be used at once in those computations, which is
+        prone to out-of-memory error especially when GPU's
+        are being used
     """
 
-    if method=='expected_change':
+    if method=='egl':
         # uncertainty filtering
         print("Computing the posteriors...")
         if batch_size:
@@ -210,9 +241,12 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
                 for t in range(T):
                     class_score += np.sum(grads[str(j)][t]**2)
                 scores[i] += class_score*sel_posteriors[j,i]
-                
 
         # select the highest k scores
-        Q_inds = np.argsort(-scores)[:k]
+        Q_inds = sel_inds[np.argsort(-scores)[:k]]
+
+    elif method=='random':
+        n = pool_X.shape[0]
+        Q_inds = np.random.permutation(n)[:k]
 
     return Q_inds
