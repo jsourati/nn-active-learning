@@ -3,6 +3,7 @@ import tensorflow as tf
 import pdb
 import sys
 import warnings
+import NN
 import NNAL_tools
 from cvxopt import matrix, solvers
 
@@ -281,6 +282,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         A = []
         for i in range(B):
             # gradients of samples one-by-one
+            pdb.set_trace()
             grads = session.run(
                 model.grad_log_posts, 
                 feed_dict={model.x:np.expand_dims(
@@ -320,3 +322,74 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         Q_inds = sel_inds[Q_inds]
 
     return Q_inds
+
+def run_CNNAL(CNN_dict, init_X_train, init_Y_train,
+              X_pool, Y_pool, X_test, Y_test, epochs, 
+              k, B, method, iters, train_batch=50, 
+              eval_batch=None):
+    """Starting with a CNN model that is trained with an initial
+    labeled data set, and then perform certain number of querying 
+    iterations using a specified active learning method
+    """
+    
+    test_acc = np.zeros(iters+1)
+    
+    tf.reset_default_graph()
+    
+    with tf.Session() as session:
+
+        # the CNN model
+        x = tf.placeholder(tf.float32,[None, 28, 28, 1])
+
+        # creating the CNN object
+        A = NN.CNN(x, CNN_dict, 'test_scope')
+        A.get_optimizer(1e-4)
+
+        # initializing the model 
+        epochs = 10
+        A.initialize_graph(session)
+        print(20*'-' + '  Initialization  ' +20*"-")
+        print("Epochs: ", end='')
+        for i in range(epochs):    
+            A.train_graph_one_epoch(init_X_train, 
+                                    init_Y_train, 
+                                    train_batch, session)
+            print(i, end=', ')
+
+        test_acc[0] = A.accuracy.eval(feed_dict={
+                A.x: X_test, A.y_:Y_test})
+        print()
+        print('Test accuracy: %g' %test_acc[0])
+
+        # start querying
+        new_X_train, new_Y_train = init_X_train, init_Y_train
+        new_X_pool, new_Y_pool = X_pool, Y_pool
+        A.get_gradients()
+        print(20*'-' + '  Querying  ' +20*"-")
+        for t in range(iters):
+            print("Iteration %d: "% t)
+            Q_inds = CNN_query(A, k, B, new_X_pool, 
+                               method, session, eval_batch)
+            print('Query index: %d' % Q_inds)
+            # prepare data for another training
+            Q = new_X_pool[Q_inds,:,:,:]
+            Y_Q = new_Y_pool[:,Q_inds]
+            # remove the selected queries from the pool
+            new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
+            new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=1)
+            # update the model
+            print("Updating the model: ", end='')
+            new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
+                new_X_train, new_Y_train, Q, Y_Q, 200+t, 50)
+            for i in range(epochs):    
+                A.train_graph_one_epoch(new_X_train, new_Y_train, 
+                                        train_batch, session)
+                print(i, end=', ')
+
+            test_acc[t+1] = A.accuracy.eval(feed_dict={A.x: X_test, A.y_:Y_test})
+            print()
+            print('Test accuracy: %g' %test_acc[t])
+            
+    return test_acc
+            
+        
