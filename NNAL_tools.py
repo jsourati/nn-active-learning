@@ -1,10 +1,12 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
+from cvxopt import matrix, solvers
 import pdb
 import sys
-import cv2
-import NN
+import copy
+#import cv2
+#import NN
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -334,4 +336,97 @@ def batch_posteriors(model, X, batch_size, session):
             model.posteriors, feed_dict={model.x:iter_X})
         
     return posteriors
+    
+def SDP_query_distribution(A):
+    """Solving SDP problem in FIR-based active learning
+    to obtain the query distribution
+    """
+    
+    n = len(A)
+    d = A[0].shape[0]
+    
+    """Preparing the variables"""
+    # vector c (in the objective)
+    cvec = matrix(
+            np.concatenate((np.zeros(n), 
+                            np.ones(d)))
+            )
+    # matrix inequality constraints
+    G, h = inequality_cvx_matrix(A)
+    # equality constraint (for having probabilities)
+    A_eq = matrix(
+            np.concatenate((np.ones(n), 
+                            np.zeros(d)))).trans()
+    b_eq = matrix(1.)
+    
+    #pdb.set_trace()
+    
+    """Solving SDP"""
+    soln = solvers.sdp(cvec, Gs=G, hs=h, A=A_eq, b=b_eq)
+    
+    return soln
+
+def inequality_cvx_matrix(A):
+    """Preparing inequality vectorized matrices needed
+    to form the SDP of FIR-based active learning
+    
+    CAUTIOUN: `matrix` function in cvxopt, creates a
+    matrix in a different way than the numpy `array`.
+    Specifically, if you give a numpy array to this
+    function, it transposes the array and assign it
+    to the matrix. So we should alway transpose the
+    array once we want to covnert them into cvxopt
+    matrix.
+    """
+    
+    n = len(A)
+    d = A[0].shape[0]
+    
+    # first form matrices that include A:
+    # forming the rows in constraint matrix
+    # corresponding to q_i's, since these remain
+    # unchagned through all the first d constraints
+    # can can be formed only once
+    unchanged_arr = np.zeros((n, (d+1)**2))
+    # also compute the part related to positivity
+    # constraint in this same loop
+    positivity_const = np.zeros((n+d, n**2))
+    for i in range(n):
+        app_A = append_zero(A[i])
+        unchanged_arr[i,:] = np.ravel(app_A.T)
+        positivity_const[i, i*n+i] = 1.
+        
+    # we should also construct the right-hand-side
+    # of the inequality constraints (h's)
+    h = []
+    G = []
+    for j in range(d):
+        ineq_arr = np.zeros((n+d, (d+1)**2))
+        ineq_arr[:n,:] = unchanged_arr
+        # matrix for t_j
+        ineq_arr[n+j,-1] = 1.
+        G += [matrix(-ineq_arr.T)]
+        # the corresponding h-term
+        h_mat = np.zeros((d+1, d+1))
+        h_mat[j, -1] = -1.
+        h_mat[-1, j] = -1.
+        h += [matrix(-h_mat)]
+        
+    # Also, include the positivity constraints
+    G += [matrix(-positivity_const.T)]
+    h += [matrix(np.zeros((n, n)))]
+    
+    return G, h
+    
+
+def append_zero(A):
+    """Function for appending zeros as the
+    last row and column of a given square matrix
+    """
+    
+    d = A.shape[0]
+    A = np.insert(A, d, 0, axis=1)
+    A = np.insert(A, d, 0, axis=0)
+    
+    return A
     
