@@ -2,7 +2,9 @@ import numpy as np
 import tensorflow as tf
 import pdb
 import sys
+import warnings
 import NNAL_tools
+from cvxopt import matrix, solvers
 
 
 def test_MNIST(iters, B, k, init_size, batch_size, epochs, 
@@ -190,7 +192,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         
       **B** : positive integer
         number of samples to keep in uncertainty filterins
-        (only will be used in `egl` and `fi` methods)
+        (only will be used in `egl` and `fi-` methods)
         
       **pool_X** : 4D tensors
         pool of unlabeled samples that is stored in format
@@ -212,7 +214,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
 
     if method=='egl':
         # uncertainty filtering
-        print("Computing the posteriors...")
+        print("Uncertainty filtering...")
         if batch_size:
             posteriors = NNAL_tools.batch_posteriors(
                 model, pool_X, batch_size, session)
@@ -223,13 +225,12 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
         sel_posteriors = posteriors[:, sel_inds]
 
-        # FI scoring
+        # EGL scoring
         print("Computing the scores..")
         c = model.output.get_shape()[0].value
         scores = np.zeros(B)
         for i in range(B):
             # gradients of samples one-by-one
-            #pdb.set_trace()
             grads = session.run(
                 model.grad_log_posts, 
                 feed_dict={model.x:np.expand_dims(
@@ -248,5 +249,71 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
     elif method=='random':
         n = pool_X.shape[0]
         Q_inds = np.random.permutation(n)[:k]
+        
+    elif method=='entropy':
+        # computing the posteriors
+        if batch_size:
+            posteriors = NNAL_tools.batch_posteriors(
+                model, pool_X, batch_size, session)
+        else:
+            posteriors = session.run(
+                model.posteriors, feed_dict={model.x:pool_X})
+            
+        entropies = NNAL_tools.compute_entropy(posteriors)
+        Q_inds = np.argsort(-entropies)[:k]
+        
+    elif method=='fi-sum':
+        # uncertainty filtering
+        print("Uncertainty filtering...")
+        if batch_size:
+            posteriors = NNAL_tools.batch_posteriors(
+                model, pool_X, batch_size, session)
+        else:
+            posteriors = session.run(
+                model.posteriors, feed_dict={model.x:pool_X})
+            
+        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+        sel_posteriors = posteriors[:, sel_inds]
+        
+        # forming A-matrices
+        layer_num = len(model.layer_type)
+        c = model.output.get_shape()[0].value
+        A = []
+        for i in range(B):
+            # gradients of samples one-by-one
+            grads = session.run(
+                model.grad_log_posts, 
+                feed_dict={model.x:np.expand_dims(
+                        pool_X[sel_inds[i],:,:,:], axis=0)})
+
+            layer_grad = np.zeros(layer_num)
+            Ai = np.zeros((layer_num, layer_num))
+            for j in range(c):
+                for t in range(layer_num):
+                    layer_grad[t] = np.sum(
+                        grads[str(j)][2*t]) + np.sum(
+                        grads[str(j)][2*t+1])
+                Ai += sel_posteriors[j,i]*np.outer(
+                    layer_grad,layer_grad) + np.eye(
+                    layer_num)*1e-5
+            A += [Ai]
+        # SDP
+        print('Solving SDP..')
+        soln = NNAL_tools.SDP_query_distribution(A)
+        print('status: %s'% (soln['status']))
+        
+        q_opt = soln['x'][:B]
+        if q_opt.min()<-.01:
+            warnings.warn('Optimal q has significant'+
+                          ' negative values..')    
+        q_opt[q_opt<0] = 0.
+
+        # draw k samples from the obtained query distribution 
+        Q_inds = q_opt.cumsum(
+            ).searchsorted(np.random.sample(k))
+        # in case of numerical issue, fix it
+        if Q_inds==B:
+            Q_inds = B-1
+        Q_inds = sel_inds[Q_inds]
 
     return Q_inds
