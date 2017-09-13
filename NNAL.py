@@ -290,19 +290,22 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
             Ai = np.zeros((layer_num, layer_num))
             for j in range(c):
                 for t in range(layer_num):
+                    grW = grads[str(j)][2*t]
+                    grb = grads[str(j)][2*t+1]
                     layer_grad[t] = np.sum(
-                        grads[str(j)][2*t]) + np.sum(
-                        grads[str(j)][2*t+1])
+                        grW)/np.prod(grW.shape) + np.sum(
+                        grb)/len(grb)
                 Ai += sel_posteriors[j,i]*np.outer(
                     layer_grad,layer_grad) + np.eye(
                     layer_num)*1e-5
             A += [Ai]
         # SDP
         print('Solving SDP..')
+        #pdb.set_trace()
         soln = NNAL_tools.SDP_query_distribution(A)
         print('status: %s'% (soln['status']))
         
-        q_opt = soln['x'][:B]
+        q_opt = np.array(soln['x'][:B])
         if q_opt.min()<-.01:
             warnings.warn('Optimal q has significant'+
                           ' negative values..')    
