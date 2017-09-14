@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 from cvxopt import matrix, solvers
+solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
@@ -148,12 +149,50 @@ def init_MNIST(init_size, batch_size, classes=None):
     pool_labels = train_labels[unlabeled_inds, :]
 
     # manually creating batches for initial training
-    batch_inds = prep_dat.gen_batch_inds(init_size, batch_size)
-    batch_of_data = prep_dat.gen_batch_matrices(init_train_images.T, batch_inds)
-    batch_of_labels = prep_dat.gen_batch_matrices(init_train_labels.T, batch_inds)
+    batch_inds = prep_dat.gen_batch_inds(
+        init_size, batch_size)
+    batch_of_data = prep_dat.gen_batch_matrices(
+        init_train_images.T, batch_inds)
+    batch_of_labels = prep_dat.gen_batch_matrices(
+        init_train_labels.T, batch_inds)
     
     return batch_of_data, batch_of_labels, pool_images.T, pool_labels.T, \
         test_images.T, test_labels.T
+
+def init_restricted_classes(X_train, Y_train, classes,
+                            per_class_size):
+    """Preparing a  data set to be used as the initial
+    labeled data set in an active learning framework
+    """
+
+    class_inds = np.where(Y_train.T==1.)[1] == classes[0]
+    class_inds = np.where(class_inds)[0]
+    n_class = len(class_inds)
+    # 
+    rand_inds = np.random.permutation(n_class)
+    selected_inds = class_inds[rand_inds[:per_class_size]]
+    init_X_train = X_train[selected_inds,:,:,:]
+    init_Y_train = Y_train[:,selected_inds]
+    # updating the pool
+    X_pool = np.delete(X_train, selected_inds, 0)
+    Y_pool = np.delete(Y_train, selected_inds, 1)
+    for i in range(1, len(classes)):
+        class_inds = np.where(Y_pool.T==1.)[1] == classes[i]
+        class_inds = np.where(class_inds)[0]
+        n_class = len(class_inds)
+        # 
+        rand_inds = np.random.permutation(n_class)
+        selected_inds = class_inds[rand_inds[:per_class_size]]
+        init_X_train = np.concatenate(
+            (init_X_train, X_pool[selected_inds,:,:,:]), axis=0)
+        init_Y_train = np.concatenate(
+            (init_Y_train, Y_pool[:,selected_inds]), axis=1)
+        # updating the pool
+        X_pool = np.delete(X_pool, selected_inds, 0)
+        Y_pool = np.delete(Y_pool, selected_inds, 1)
+
+
+    return init_X_train, init_Y_train, X_pool, Y_pool
 
 def modify_MNIST(batch_of_data, batch_of_labels, pool_images, 
                  pool_labels, new_images, new_labels):
@@ -358,8 +397,6 @@ def SDP_query_distribution(A):
             np.concatenate((np.ones(n), 
                             np.zeros(d)))).trans()
     b_eq = matrix(1.)
-    
-    #pdb.set_trace()
     
     """Solving SDP"""
     soln = solvers.sdp(cvec, Gs=G, hs=h, A=A_eq, b=b_eq)
