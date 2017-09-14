@@ -128,6 +128,10 @@ class CNN(object):
                     # apply relu activation only if we are NOT at the last layer 
                     if i < len(layer_dict)-1:
                         output = tf.nn.relu(output)
+                        # set the output of the layer one before last as 
+                        # the features that the network will extract
+                        if i==len(layer_dict)-2:
+                            self.features = output
                     prev_depth = layer_dict[layer_name][0]
                     
                 else:
@@ -142,6 +146,32 @@ class CNN(object):
     def initialize_graph(self, session):
         init = tf.global_variables_initializer()
         session.run(init)
+        
+    def extract_features(self, X, session, batch_size=None):
+        """Extracting features
+        """
+        
+        n = X.shape[0]
+        if batch_size:
+            d = self.features.get_shape()[0].value
+            features = np.zeros((d, n))
+            quot, rem = np.divmod(n, batch_size)
+            for i in range(quot):
+                if i<quot-1:
+                    inds = np.arange(i*batch_size, (i+1)*batch_size)
+                else:
+                    inds = slice(i*batch_size, n)
+                    
+                iter_X = X[inds,:,:,:]
+                features[:,inds] = session.run(
+                    self.features, feed_dict={self.x:iter_X})
+                
+        else:
+            features = session.run(
+                self.features, feed_dict={self.x:X})
+            
+        return features
+                    
         
     def get_optimizer(self, learning_rate):
         """Form the loss function and optimizer of the CNN graph
@@ -199,7 +229,7 @@ class CNN(object):
                 acc = self.accuracy.eval(feed_dict={
                         self.x: batch_of_data[j], 
                         self.y_: batch_of_labels[j]})
-                print('Iteratin %d, training accuracy %g' % (j, acc))
+                #print('Iteratin %d, training accuracy %g' % (j, acc))
             
             session.run(self.train_step, feed_dict={self.x: batch_of_data[j], 
                                                     self.y_: batch_of_labels[j]})
