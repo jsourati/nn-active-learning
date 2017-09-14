@@ -366,6 +366,8 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
             Q_inds += [iter_sel]
             rem_inds = np.delete(
                 rem_inds, np.argmax(rep_scores))
+            
+        Q_inds = sel_inds[Q_inds]
 
     return Q_inds
 
