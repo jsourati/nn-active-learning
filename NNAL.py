@@ -282,7 +282,6 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         A = []
         for i in range(B):
             # gradients of samples one-by-one
-            pdb.set_trace()
             grads = session.run(
                 model.grad_log_posts, 
                 feed_dict={model.x:np.expand_dims(
@@ -320,6 +319,56 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         if Q_inds==B:
             Q_inds = B-1
         Q_inds = sel_inds[Q_inds]
+        
+    elif method=='rep-entropy':
+        # uncertainty filtering
+        # uncertainty filtering
+        print("Uncertainty filtering...")
+        if batch_size:
+            posteriors = NNAL_tools.batch_posteriors(
+                model, pool_X, batch_size, session)
+        else:
+            posteriors = session.run(
+                model.posteriors, feed_dict={model.x:pool_X})
+            
+        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+        sel_posteriors = posteriors[:, sel_inds]
+        n = pool_X.shape[0]
+        nsel_inds = list(set(np.arange(n)) - set(sel_inds))
+        
+        print("Finding Similarities..")
+        # extract the features
+        F = model.extract_features(pool_X, session, batch_size)
+        F_uncertain = F[:, sel_inds]
+        norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
+        F_rest_pool = F[:, nsel_inds]
+        norms_rest = np.sqrt(np.sum(F_rest_pool**2, axis=0))
+        
+        # compute cos-similarities between filtered images
+        # and the rest of the unlabeled samples
+        sims = np.zeros((B, n-B))
+        for i in range(B):
+            dots = np.dot(F_rest_pool.T, F_uncertain[:,i])
+            ndots = dots / (norms_rest*norms_uncertain[i])
+            sims[i,:] = ndots
+            
+        print("Greedy optimization..")
+        # start from empty set
+        Q_inds = []
+        rem_inds = np.arange(B)
+        total_sim = 0.
+        # add most representative samples one by one
+        for i in range(k):
+            rep_scores = np.zeros(B-k)
+            for j in range(B-k):
+                cand_Q = Q_inds + [rem_inds[j]]
+                rep_scores[j] = np.sum(
+                    np.max(sims[cand_Q, :], axis=0))
+            iter_sel = rem_inds[np.argmax(rep_scores)]
+            # update the iterating sets
+            Q_inds += [iter_sel]
+            rem_inds = np.delete(
+                rem_inds, np.argmax(rep_scores))
 
     return Q_inds
 
