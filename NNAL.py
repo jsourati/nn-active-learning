@@ -346,24 +346,21 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         
         # compute cos-similarities between filtered images
         # and the rest of the unlabeled samples
-        sims = np.zeros((B, n-B))
-        for i in range(B):
-            dots = np.dot(F_rest_pool.T, F_uncertain[:,i])
-            ndots = dots / (norms_rest*norms_uncertain[i])
-            sims[i,:] = ndots
+        dots = np.dot(F_rest_pool.T, F_uncertain)
+        norms_outer = np.outer(norms_rest, norms_uncertain)
+        sims = dots / norms_outer
             
         print("Greedy optimization..")
         # start from empty set
         Q_inds = []
         rem_inds = np.arange(B)
-        total_sim = 0.
         # add most representative samples one by one
         for i in range(k):
-            rep_scores = np.zeros(B-k)
-            for j in range(B-k):
+            rep_scores = np.zeros(B-i)
+            for j in range(B-i):
                 cand_Q = Q_inds + [rem_inds[j]]
                 rep_scores[j] = np.sum(
-                    np.max(sims[cand_Q, :], axis=0))
+                    np.max(sims[:, cand_Q], axis=1))
             iter_sel = rem_inds[np.argmax(rep_scores)]
             # update the iterating sets
             Q_inds += [iter_sel]
