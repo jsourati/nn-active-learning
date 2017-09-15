@@ -376,7 +376,7 @@ def batch_posteriors(model, X, batch_size, session):
         
     return posteriors
     
-def SDP_query_distribution(A):
+def SDP_query_distribution(A, k):
     """Solving SDP problem in FIR-based active learning
     to obtain the query distribution
     """
@@ -391,7 +391,7 @@ def SDP_query_distribution(A):
                             np.ones(d)))
             )
     # matrix inequality constraints
-    G, h = inequality_cvx_matrix(A)
+    G, h = inequality_cvx_matrix(A, k)
     # equality constraint (for having probabilities)
     A_eq = matrix(
             np.concatenate((np.ones(n), 
@@ -403,7 +403,7 @@ def SDP_query_distribution(A):
     
     return soln
 
-def inequality_cvx_matrix(A):
+def inequality_cvx_matrix(A, k=None):
     """Preparing inequality vectorized matrices needed
     to form the SDP of FIR-based active learning
     
@@ -414,6 +414,10 @@ def inequality_cvx_matrix(A):
     to the matrix. So we should alway transpose the
     array once we want to covnert them into cvxopt
     matrix.
+
+    If `k` is given, it means that an extra constraint
+    should be applied to prevent the query PMF from 
+    becoming too peaky (degenerate distributin)
     """
     
     n = len(A)
@@ -452,6 +456,11 @@ def inequality_cvx_matrix(A):
     # Also, include the positivity constraints
     G += [matrix(-positivity_const.T)]
     h += [matrix(np.zeros((n, n)))]
+    
+    # add q_i <= 1/k if k is given
+    if k:
+        G += [matrix(positivity_const.T)]
+        h += [matrix(np.eye(n)/np.float(k))]
     
     return G, h
     
