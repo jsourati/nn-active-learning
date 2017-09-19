@@ -143,9 +143,33 @@ class CNN(object):
             posteriors = tf.nn.softmax(tf.transpose(output))
             self.posteriors = tf.transpose(posteriors)
                 
-    def initialize_graph(self, session):
-        init = tf.global_variables_initializer()
-        session.run(init)
+    def initialize_graph(self, init_X_train, init_Y_train, 
+                         train_batch, epochs,  addr=None):
+        """Initializing a graph given an initial training data set 
+        and saving the results if necessary
+        """
+        init = tf.global_variables_initializer()        
+        with tf.Session() as sess:
+            sess.run(init)
+            
+            print(20*'-' + '  Initialization  ' +20*"-")
+            print("Epochs: ", end='')
+            for i in range(epochs):    
+                self.train_graph_one_epoch(
+                    init_X_train, 
+                    init_Y_train, 
+                    train_batch, sess)
+
+                print(i, end=', ')
+            if addr:
+                self.save_model(addr, sess)
+        
+    def save_model(self, addr, session):
+        """Saving the current model
+        """
+        saver = tf.train.Saver()
+        saver.save(session, addr)
+        self.save_path = addr
         
     def extract_features(self, X, session, batch_size=None):
         """Extracting features
@@ -225,11 +249,10 @@ class CNN(object):
         
         # completing an epoch
         for j in range(len(batch_of_data)):
-            if j % 100 == 0:
-                acc = self.accuracy.eval(feed_dict={
-                        self.x: batch_of_data[j], 
-                        self.y_: batch_of_labels[j]})
-                #print('Iteratin %d, training accuracy %g' % (j, acc))
+            #if False:
+            #    acc = self.accuracy.eval(feed_dict={
+            #            self.x: batch_of_data[j], 
+            #            self.y_: batch_of_labels[j]})
             
             session.run(self.train_step, feed_dict={self.x: batch_of_data[j], 
                                                     self.y_: batch_of_labels[j]})
