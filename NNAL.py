@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import pdb
 import sys
+import pickle
 import warnings
 import NN
 import NNAL_tools
@@ -287,23 +288,17 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
                 feed_dict={model.x:np.expand_dims(
                         pool_X[sel_inds[i],:,:,:], axis=0)})
 
-            layer_grad = np.zeros(layer_num)
             Ai = np.zeros((layer_num, layer_num))
             for j in range(c):
-                for t in range(layer_num):
-                    grW = grads[str(j)][2*t]
-                    grb = grads[str(j)][2*t+1]
-                    layer_grad[t] = np.sum(
-                        grW)/np.prod(grW.shape) + np.sum(
-                        grb)/len(grb)
+                shrunk_grad = NNAL_tools.shrink_gradient(
+                    grads[str(j)], method='layer_sum')
                 Ai += sel_posteriors[j,i]*np.outer(
-                    layer_grad,layer_grad) + np.eye(
+                    shrunk_grad,shrunk_grad) + np.eye(
                     layer_num)*1e-5
             A += [Ai]
         # SDP
         print('Solving SDP..')
-        #pdb.set_trace()
-        soln = NNAL_tools.SDP_query_distribution(A)
+        soln = NNAL_tools.SDP_query_distribution(A, k)
         print('status: %s'% (soln['status']))
         
         q_opt = np.array(soln['x'][:B])
@@ -312,12 +307,24 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
                           ' negative values..')    
         q_opt[q_opt<0] = 0.
 
-        # draw k samples from the obtained query distribution 
+        # draw k samples from the obtained query distribution
         Q_inds = q_opt.cumsum(
             ).searchsorted(np.random.sample(k))
+        Q_inds = np.unique(Q_inds)
+        
+        # for now make sure we get exactly k samples
+        k_sample = True
+        if k_sample:
+            # keep sampling until k samples is obtained
+            while len(Q_inds) < k:
+                rand_ind = q_opt.cumsum(
+                    ).searchsorted(np.random.sample(1))
+                if not((Q_inds==rand_ind).any()):
+                    Q_inds = np.append(Q_inds, rand_ind)
+                
         # in case of numerical issue, fix it
-        if Q_inds==B:
-            Q_inds = B-1
+        if (Q_inds==B).any():
+            Q_inds[Q_inds==B] = B-1
         Q_inds = sel_inds[Q_inds]
         
     elif method=='rep-entropy':
@@ -371,7 +378,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
 
     return Q_inds
 
-def run_CNNAL(CNN_dict, init_X_train, init_Y_train,
+def run_CNNAL(A, init_X_train, init_Y_train,
               X_pool, Y_pool, X_test, Y_test, epochs, 
               k, B, method, iters, train_batch=50, 
               eval_batch=None):
@@ -381,29 +388,10 @@ def run_CNNAL(CNN_dict, init_X_train, init_Y_train,
     """
     
     test_acc = np.zeros(iters+1)
-    
-    tf.reset_default_graph()
-    
+    saver = tf.train.Saver()
+
     with tf.Session() as session:
-
-        # the CNN model
-        x = tf.placeholder(tf.float32,[None, 28, 28, 1])
-
-        # creating the CNN object
-        A = NN.CNN(x, CNN_dict, 'test_scope')
-        A.get_optimizer(1e-4)
-
-        # initializing the model 
-        epochs = 10
-        A.initialize_graph(session)
-        print(20*'-' + '  Initialization  ' +20*"-")
-        print("Epochs: ", end='')
-        for i in range(epochs):    
-            A.train_graph_one_epoch(init_X_train, 
-                                    init_Y_train, 
-                                    train_batch, session)
-            print(i, end=', ')
-
+        saver.restore(session, A.save_path)
         test_acc[0] = A.accuracy.eval(feed_dict={
                 A.x: X_test, A.y_:Y_test})
         print()
@@ -413,14 +401,20 @@ def run_CNNAL(CNN_dict, init_X_train, init_Y_train,
         new_X_train, new_Y_train = init_X_train, init_Y_train
         new_X_pool, new_Y_pool = X_pool, Y_pool
         A.get_gradients()
+        # number of selected in each iteration is useful
+        # when samling from a distribution and repeated
+        # queries might be present
+        #query_num = np.zeros(iters)
         print(20*'-' + '  Querying  ' +20*"-")
         for t in range(iters):
             print("Iteration %d: "% t)
             Q_inds = CNN_query(A, k, B, new_X_pool, 
                                method, session, eval_batch)
-            print('Query index: %d' % Q_inds)
+            #query_num[t] = len(Q_inds)
+            print('Query index: '+' '.join(str(q) for q in Q_inds))
             # prepare data for another training
             Q = new_X_pool[Q_inds,:,:,:]
+            pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
             Y_Q = new_Y_pool[:,Q_inds]
             # remove the selected queries from the pool
             new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
@@ -434,9 +428,10 @@ def run_CNNAL(CNN_dict, init_X_train, init_Y_train,
                                         train_batch, session)
                 print(i, end=', ')
 
-            test_acc[t+1] = A.accuracy.eval(feed_dict={A.x: X_test, A.y_:Y_test})
+            test_acc[t+1] = A.accuracy.eval(
+                feed_dict={A.x: X_test, A.y_:Y_test})
             print()
-            print('Test accuracy: %g' %test_acc[t])
+            print('Test accuracy: %g' %test_acc[t+1])
             
     return test_acc
             
