@@ -278,7 +278,7 @@ def prepare_finetuning_data(X_train, Y_train, Q, Y_Q,
     """
 
     n_old = X_train.shape[0]
-    if old_data_to_keep < n_old:
+    if old_data_to_keep > n_old:
         old_X_train = X_train
         old_Y_train = Y_train
     else:
@@ -470,7 +470,7 @@ def shrink_gradient(grad, method, args=None):
     the derivatives
     """
     
-    if method=='layer-sum':
+    if method=='layer_sum':
         
         layer_num = int(len(grad) / 2)
         shrunk_grad = np.zeros(layer_num)
@@ -484,25 +484,23 @@ def shrink_gradient(grad, method, args=None):
             shrunk_grad[t] = (np.sum(np.abs(
                 grW)) + np.sum(np.abs(grb)))/grad_size
                 
-    elif method=='layer-rand':
+    elif method=='layer_rand':
         # layers to sample from
         layer_inds = args['layer_inds']
+        
         # number of parameters randomly sampled
         # per layer
         nppl = args['nppl']
         
         shrunk_grad = np.zeros(nppl, len(layer_inds))
-        
+        rand_inds = np.zeros(nppl, len(layer_inds))
         for t in range(len(layer_inds)):
             # layer grad in a single vector
             grW = np.ravel(grad[2*t])
             grb = grad[2*t+1]
             gr = np.concatenate((grW,  grb))
             
-            rand_inds = np.random.permutations(
-                len(gr))[:nppl]
-            
-            shrunk_grad[:, t] = gr[rand_inds]
+            shrunk_grad[:, t] = gr[args['inds'][:,t]]
                 
     return np.ravel(shrunk_grad)
 
