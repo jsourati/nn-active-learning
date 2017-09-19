@@ -464,6 +464,47 @@ def inequality_cvx_matrix(A, k=None):
     
     return G, h
     
+def shrink_gradient(grad, method, args=None):
+    """Shrinking gradient vectors by summing-up 
+    the sub-components, or choosing a subset of 
+    the derivatives
+    """
+    
+    if method=='layer-sum':
+        
+        layer_num = int(len(grad) / 2)
+        shrunk_grad = np.zeros(layer_num)
+
+        for t in range(layer_num):
+            grW = grad[2*t]
+            grb = grad[2*t+1]
+            # summing up derivatives related to
+            # the parameters of each layer
+            grad_size = np.prod(grW.shape)+len(grb)
+            shrunk_grad[t] = (np.sum(np.abs(
+                grW)) + np.sum(np.abs(grb)))/grad_size
+                
+    elif method=='layer-rand':
+        # layers to sample from
+        layer_inds = args['layer_inds']
+        # number of parameters randomly sampled
+        # per layer
+        nppl = args['nppl']
+        
+        shrunk_grad = np.zeros(nppl, len(layer_inds))
+        
+        for t in range(len(layer_inds)):
+            # layer grad in a single vector
+            grW = np.ravel(grad[2*t])
+            grb = grad[2*t+1]
+            gr = np.concatenate((grW,  grb))
+            
+            rand_inds = np.random.permutations(
+                len(gr))[:nppl]
+            
+            shrunk_grad[:, t] = gr[rand_inds]
+                
+    return np.ravel(shrunk_grad)
 
 def append_zero(A):
     """Function for appending zeros as the
