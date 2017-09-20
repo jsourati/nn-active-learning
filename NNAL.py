@@ -179,7 +179,8 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
     
     return accs, batch_of_data, batch_of_labels
 
-def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
+def CNN_query(model, k, B, pool_X, method, session, 
+              batch_size=None, shrink_method=None):
     """Querying a number of unlabeled samples from a given pool
     
     :Parameters:
@@ -264,7 +265,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         entropies = NNAL_tools.compute_entropy(posteriors)
         Q_inds = np.argsort(-entropies)[:k]
         
-    elif method=='fi-sum':
+    elif method=='fi':
         # uncertainty filtering
         print("Uncertainty filtering...")
         if batch_size:
@@ -291,7 +292,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
             Ai = np.zeros((layer_num, layer_num))
             for j in range(c):
                 shrunk_grad = NNAL_tools.shrink_gradient(
-                    grads[str(j)], method='layer_sum')
+                    grads[str(j)], 'sum')
                 Ai += sel_posteriors[j,i]*np.outer(
                     shrunk_grad,shrunk_grad) + np.eye(
                     layer_num)*1e-5
@@ -313,7 +314,7 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         Q_inds = np.unique(Q_inds)
         
         # for now make sure we get exactly k samples
-        k_sample = True
+        k_sample = False
         if k_sample:
             # keep sampling until k samples is obtained
             while len(Q_inds) < k:
@@ -328,7 +329,6 @@ def CNN_query(model, k, B, pool_X, method, session, batch_size=None):
         Q_inds = sel_inds[Q_inds]
         
     elif method=='rep-entropy':
-        # uncertainty filtering
         # uncertainty filtering
         print("Uncertainty filtering...")
         if batch_size:
@@ -404,17 +404,17 @@ def run_CNNAL(A, init_X_train, init_Y_train,
         # number of selected in each iteration is useful
         # when samling from a distribution and repeated
         # queries might be present
-        #query_num = np.zeros(iters)
+        query_num = np.zeros(iters)
         print(20*'-' + '  Querying  ' +20*"-")
         for t in range(iters):
             print("Iteration %d: "% t)
             Q_inds = CNN_query(A, k, B, new_X_pool, 
                                method, session, eval_batch)
-            #query_num[t] = len(Q_inds)
+            query_num[t] = len(Q_inds)
             print('Query index: '+' '.join(str(q) for q in Q_inds))
             # prepare data for another training
             Q = new_X_pool[Q_inds,:,:,:]
-            pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
+            #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
             Y_Q = new_Y_pool[:,Q_inds]
             # remove the selected queries from the pool
             new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
@@ -433,6 +433,6 @@ def run_CNNAL(A, init_X_train, init_Y_train,
             print()
             print('Test accuracy: %g' %test_acc[t+1])
             
-    return test_acc
+    return test_acc, query_num
             
         
