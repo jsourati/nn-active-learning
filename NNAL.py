@@ -279,7 +279,7 @@ def CNN_query(model, k, B, pool_X, method, session,
         sel_posteriors = posteriors[:, sel_inds]
         
         # forming A-matrices
-        layer_num = len(model.layer_type)
+        layer_num = len(model.var_dict)
         c = model.output.get_shape()[0].value
         A = []
         for i in range(B):
@@ -301,31 +301,10 @@ def CNN_query(model, k, B, pool_X, method, session,
         print('Solving SDP..')
         soln = NNAL_tools.SDP_query_distribution(A, k)
         print('status: %s'% (soln['status']))
-        
         q_opt = np.array(soln['x'][:B])
-        if q_opt.min()<-.01:
-            warnings.warn('Optimal q has significant'+
-                          ' negative values..')    
-        q_opt[q_opt<0] = 0.
 
-        # draw k samples from the obtained query distribution
-        Q_inds = q_opt.cumsum(
-            ).searchsorted(np.random.sample(k))
-        Q_inds = np.unique(Q_inds)
-        
-        # for now make sure we get exactly k samples
-        k_sample = False
-        if k_sample:
-            # keep sampling until k samples is obtained
-            while len(Q_inds) < k:
-                rand_ind = q_opt.cumsum(
-                    ).searchsorted(np.random.sample(1))
-                if not((Q_inds==rand_ind).any()):
-                    Q_inds = np.append(Q_inds, rand_ind)
-                
-        # in case of numerical issue, fix it
-        if (Q_inds==B).any():
-            Q_inds[Q_inds==B] = B-1
+        Q_inds = NNAL_tools.sample_query_dstr(
+            q_opt, k, replacement=False)
         Q_inds = sel_inds[Q_inds]
         
     elif method=='rep-entropy':
