@@ -380,20 +380,20 @@ def CNN_query(model, k, B, pool_X, method, session,
 
 def run_CNNAL(A, init_X_train, init_Y_train,
               X_pool, Y_pool, X_test, Y_test, epochs, 
-              k, B, method, iters, train_batch=50, 
+              k, B, method, max_queries, train_batch=50, 
               eval_batch=None):
     """Starting with a CNN model that is trained with an initial
     labeled data set, and then perform certain number of querying 
     iterations using a specified active learning method
     """
     
-    test_acc = np.zeros(iters+1)
+    test_acc = []
     saver = tf.train.Saver()
 
     with tf.Session() as session:
         saver.restore(session, A.save_path)
-        test_acc[0] = A.accuracy.eval(feed_dict={
-                A.x: X_test, A.y_:Y_test})
+        test_acc += [A.accuracy.eval(feed_dict={
+                    A.x: X_test, A.y_:Y_test})]
         print()
         print('Test accuracy: %g' %test_acc[0])
 
@@ -404,13 +404,14 @@ def run_CNNAL(A, init_X_train, init_Y_train,
         # number of selected in each iteration is useful
         # when samling from a distribution and repeated
         # queries might be present
-        query_num = np.zeros(iters)
+        query_num = []
         print(20*'-' + '  Querying  ' +20*"-")
-        for t in range(iters):
+        t = 0
+        while sum(query_num) < max_queries:
             print("Iteration %d: "% t)
             Q_inds = CNN_query(A, k, B, new_X_pool, 
                                method, session, eval_batch)
-            query_num[t] = len(Q_inds)
+            query_num += [len(Q_inds)]
             print('Query index: '+' '.join(str(q) for q in Q_inds))
             # prepare data for another training
             Q = new_X_pool[Q_inds,:,:,:]
@@ -428,11 +429,12 @@ def run_CNNAL(A, init_X_train, init_Y_train,
                                         train_batch, session)
                 print(i, end=', ')
 
-            test_acc[t+1] = A.accuracy.eval(
-                feed_dict={A.x: X_test, A.y_:Y_test})
+            test_acc += [A.accuracy.eval(
+                    feed_dict={A.x: X_test, A.y_:Y_test})]
             print()
             print('Test accuracy: %g' %test_acc[t+1])
+            t += 1
             
-    return test_acc, query_num
+    return np.array(test_acc), np.append(0, np.array(query_num))
             
         
