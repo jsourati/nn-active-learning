@@ -470,7 +470,7 @@ def shrink_gradient(grad, method, args=None):
     the derivatives
     """
     
-    if method=='layer_sum':
+    if method=='sum':
         
         layer_num = int(len(grad) / 2)
         shrunk_grad = np.zeros(layer_num)
@@ -481,10 +481,10 @@ def shrink_gradient(grad, method, args=None):
             # summing up derivatives related to
             # the parameters of each layer
             grad_size = np.prod(grW.shape)+len(grb)
-            shrunk_grad[t] = (np.sum(np.abs(
-                grW)) + np.sum(np.abs(grb)))/grad_size
+            shrunk_grad[t] = (np.sum(
+                grW) + np.sum(grb))/grad_size
                 
-    elif method=='layer_rand':
+    elif method=='rand':
         # layers to sample from
         layer_inds = args['layer_inds']
         
@@ -515,3 +515,59 @@ def append_zero(A):
     
     return A
     
+def sample_query_dstr(q_dstr, k, replacement=True):
+    """Drawing a batch of samles from the query
+    distribution.
+    """
+
+    if q_dstr.min()<-.01:
+            warnings.warn('Optimal q has significant'+
+                          ' negative values..')    
+    q_dstr[q_dstr<0] = 0.
+    
+    if replacement:
+        # drawing samples without replacement
+        Q_inds = q_dstr.cumsum(
+            ).searchsorted(np.random.sample(k))
+        Q_inds = np.unique(Q_inds)
+
+        # if we need to make sure exactly k samples 
+        # will be drawn
+        k_sample = False
+        if k_sample:
+            # keep sampling until k samples is obtained
+            while len(Q_inds) < k:
+                rand_ind = q_dstr.cumsum(
+                    ).searchsorted(np.random.sample(1))
+                if not((Q_inds==rand_ind).any()):
+                    Q_inds = np.append(Q_inds, rand_ind)
+
+        # in case of numerical issue, fix it
+        if (Q_inds==len(q_dstr)).any():
+            Q_inds[Q_inds==len(q_dstr)] = len(q_dstr)-1
+    else:
+        # draw samples with replacement 
+        # this way we can always make sure of having
+        # exactly k samles.
+        rem_inds = np.arange(len(q_dstr))
+        Q_inds = []
+        while len(Q_inds)<k:
+            single_ind = [q_dstr.cumsum(
+                    ).searchsorted(
+                    np.random.sample(1))]
+            Q_inds += [rem_inds[single_ind][0]]
+            # remove the last drawn sample from PMF
+            rem_inds = np.delete(rem_inds, single_ind)
+            q_dstr = np.delete(q_dstr, single_ind)
+            # re-normalization
+            # (make sure not all masses are zero)
+            if all(q_dstr==0):
+                q_dstr[:] = 1.
+            q_dstr = q_dstr / np.sum(q_dstr)
+        
+        Q_inds = np.array(Q_inds)
+        
+    return Q_inds
+            
+            
+        
