@@ -50,7 +50,7 @@ class CNN(object):
     """Class of CNN models
     """
     
-    def __init__(self, x, layer_dict, name):
+    def __init__(self, x, layer_dict, name, feature_layer=None):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
         key is a 2-element list inlcuding  depth of this layer and its type,
@@ -66,7 +66,10 @@ class CNN(object):
         The assumption is that at least the first layer is a CNN, hence
         depth of the input layer is the number of channels of the input.
         It is further assumed that the last layer of the network is
-        not a CNN
+        not a CNN.
+        
+        Also, there is the option of specifying a layer whose output
+        could be used extracted feature vectors of the input samples.
         """
         
         self.x = x
@@ -78,84 +81,142 @@ class CNN(object):
         layer_names = list(layer_dict.keys())
 
         with tf.name_scope(name):
-            for i, layer_name in enumerate(layer_dict):
+            for i in range(len(layer_dict)-1):
                 # extract previous depth
                 if i==0:
-                    prev_depth = x.shape[-1].value
-                    output = x
-                    
-                if layer_dict[layer_name][1]=='conv':
-                    kernel_dim = layer_dict[layer_name][2]
-                    self.var_dict.update({
-                            layer_name: [
-                                weight_variable([kernel_dim[0], kernel_dim[1], 
-                                                 prev_depth, layer_dict[layer_name][0]], 
-                                                name=layer_name+'_weight'),
-                                bias_variable([layer_dict[layer_name][0]],
-                                              name=layer_name+'_bias')]
-                            })
-
-                    # output of the layer
-                    output = tf.nn.conv2d(
-                        output, self.var_dict[layer_name][0], strides=[1,1,1,1],
-                        padding='SAME') + self.var_dict[layer_name][1]
-                    output = tf.nn.relu(output)
-                    
-                    # storing depth of the current layer for the next one
-                    # if the next layer is fully-connected, the depth of this layer
-                    # would be total number of neurons (and not just the channls)
-                    if layer_dict[layer_names[i+1]][1]=='fc':
-                        prev_depth = np.prod(output.get_shape()[1:]).value
-                        output = tf.reshape(tf.transpose(output), [prev_depth, -1])
-                    else:
-                        prev_depth = output.get_shape()[-1].value
-                    
-                elif layer_dict[layer_name][1]=='fc': 
-                    self.var_dict.update({
-                            layer_name:[
-                                weight_variable([layer_dict[layer_name][0], prev_depth], 
-                                                name=layer_name+'_weight'),
-                                bias_variable([layer_dict[layer_name][0], 1],
-                                              name=layer_name+'_bias')]
-                            })
-                    
-                    # output of the layer
-                    output = tf.matmul(
-                        self.var_dict[layer_name][0], output) + self.var_dict[layer_name][1]
-                    # apply relu activation only if we are NOT at the last layer 
-                    if i < len(layer_dict)-1:
-                        output = tf.nn.relu(output)
-                        # set the output of the layer one before last as 
-                        # the features that the network will extract
-                        if i==len(layer_dict)-2:
-                            self.features = output
-                    prev_depth = layer_dict[layer_name][0]
-
-                elif layer_dict[layer_name][1] == 'pool':
-                    #pdb.set_trace()
-                    pool_size = layer_dict[layer_name][0]
-                    output = max_pool(output, pool_size[0], pool_size[1])
-                    if layer_dict[layer_names[i+1]][1]=='fc':
-                        prev_depth = np.prod(output.get_shape()[1:]).value
-                        output = tf.reshape(tf.transpose(output), [prev_depth, -1])
-                    
-                else:
-                    raise ValueError("Layer's type should be either 'fc'" + 
-                                     ", 'conv' or 'pool'.")
+                    #prev_depth = x.shape[-1].value
+                    self.output = x
                 
-                self.layer_type += [layer_dict[layer_name][1]]
+                #pdb.set_trace()
+                self.add_layer(
+                    layer_dict[layer_names[i]], 
+                    layer_names[i],
+                    layer_dict[layer_names[i+1]][1])
+                
+                # set the output of the layer one before last as 
+                # the features that the network will extract
+                if i==feature_layer:
+                    self.features = self.output
+                
+                self.layer_type += [
+                    layer_dict[layer_names[i]][1]]
             
-            self.output = output
+            self.add_layer(
+                layer_dict[layer_names[-1]],
+                layer_names[-1],
+                last_layer=True)
+            
+            self.layer_type += [
+                layer_dict[layer_names[-1]][1]]
+            
             # posterior
-            posteriors = tf.nn.softmax(tf.transpose(output))
+            posteriors = tf.nn.softmax(tf.transpose(self.output))
             self.posteriors = tf.transpose(posteriors)
-                
-    def mirror(self):
-        """Creating a mirror of the 'encoder' part of the graph
+            
+    def add_layer(self, layer_specs, name, 
+                  next_layer_type=None, 
+                  last_layer=True):
+        """Adding a layer to the graph
+        
+        Type of the next layer should also be given so that
+        the appropriate output can be prepared
         """
         
-        # start from the last layer
+        if layer_specs[1]=='conv':
+            # if the next layer is fully-connected we need
+            # to output a flatten tensor
+            if next_layer_type=='fc':
+                pdb.set_trace()
+                self.add_conv(layer_specs, name, flatten=True)
+            else:
+                self.add_conv(layer_specs, name, flatten=False)
+
+        elif layer_specs[1]=='fc': 
+            # apply relu activation only if we are NOT 
+            # at the last layer 
+            if last_layer:
+                self.add_fc(layer_specs, name, activation=False)
+            else:
+                self.add_fc(layer_specs, name, activation=True)
+
+        elif layer_specs[1] == 'pool':
+            # if the next layer is fully-connected we need
+            # to output a flatten tensor
+            if next_layer_type=='fc':
+                self.add_pool(layer_specs, flatten=True)
+            else:
+                self.add_pool(layer_specs, flatten=False)
+        else:
+            raise ValueError("Layer's type should be either 'fc'" + 
+                             ", 'conv' or 'pool'.")
+                
+                
+    def add_conv(self, layer_specs, name, flatten=True):
+        """Adding a convolutional layer to the graph given 
+        the specifications
+        """
+        kernel_dim = layer_specs[2]
+        prev_depth = self.output.get_shape()[-1].value
         
+        self.var_dict.update(
+            {name: [
+                    weight_variable([kernel_dim[0], kernel_dim[1], 
+                                     prev_depth, layer_specs[0]], 
+                                    name=name+'_weight'),
+                    bias_variable([layer_specs[0]],
+                                  name=name+'_bias')]
+             }
+            )
+        # output of the layer
+        output = tf.nn.conv2d(
+            self.output, 
+            self.var_dict[name][0], 
+            strides=[1,1,1,1],
+            padding='SAME') + self.var_dict[name][1]
+        self.output = tf.nn.relu(output)
+        
+        # if the flatten flag is True, flatten the output tensor
+        # into a 2D array, where each column has a vectorized
+        # tensor in it
+        if flatten:
+            out_size = np.prod(self.output.get_shape()[1:]).value
+            self.output = tf.reshape(
+                tf.transpose(self.output), [out_size, -1])
+    
+    def add_fc(self, layer_specs, name, activation=True):
+        """Adding a fully-connected layer with a given 
+        specification to the graph
+        """
+        prev_depth = self.output.get_shape()[0].value
+        self.var_dict.update(
+            {name:[
+                    weight_variable(
+                        [layer_specs[0], prev_depth], 
+                        name=name+'_weight'),
+                    bias_variable(
+                        [layer_specs[0], 1],
+                        name=name+'_bias')]
+                }
+            )
+        # output of the layer
+        self.output = tf.matmul(self.var_dict[name][0], 
+                           self.output) + self.var_dict[name][1]
+        # apply activation function if necessary
+        if activation:
+            self.output = tf.nn.relu(self.output)
+            
+    def add_pool(self, layer_specs, flatten=False):
+        """Adding a (max-)pooling layer with given specifications
+        """
+        pool_size = layer_specs[0]
+        self.output = max_pool(self.output, 
+                               pool_size[0], 
+                               pool_size[1])
+        # flatten the output if necessary
+        if flatten:
+            out_size = np.prod(self.output.get_shape()[1:]).value
+            self.output = tf.reshape(
+                tf.transpose(self.output), [out_size, -1])
             
     def initialize_graph(self, init_X_train, init_Y_train, 
                          train_batch, epochs,  addr=None):
