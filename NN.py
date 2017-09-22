@@ -4,7 +4,7 @@ from tensorflow.examples.tutorials.mnist import input_data
 import copy
 import pdb
 import sys
-import cv2
+#import cv2
 import NNAL_tools
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
@@ -100,9 +100,7 @@ class CNN(object):
                         output, self.var_dict[layer_name][0], strides=[1,1,1,1],
                         padding='SAME') + self.var_dict[layer_name][1]
                     output = tf.nn.relu(output)
-                    output = max_pool(output, 2, 2)
                     
-                    self.layer_type += ['conv']
                     # storing depth of the current layer for the next one
                     # if the next layer is fully-connected, the depth of this layer
                     # would be total number of neurons (and not just the channls)
@@ -120,7 +118,6 @@ class CNN(object):
                                 bias_variable([layer_dict[layer_name][0], 1],
                                               name=layer_name+'_bias')]
                             })
-                    self.layer_type += ['fc']
                     
                     # output of the layer
                     output = tf.matmul(
@@ -133,16 +130,33 @@ class CNN(object):
                         if i==len(layer_dict)-2:
                             self.features = output
                     prev_depth = layer_dict[layer_name][0]
+
+                elif layer_dict[layer_name][1] == 'pool':
+                    #pdb.set_trace()
+                    pool_size = layer_dict[layer_name][0]
+                    output = max_pool(output, pool_size[0], pool_size[1])
+                    if layer_dict[layer_names[i+1]][1]=='fc':
+                        prev_depth = np.prod(output.get_shape()[1:]).value
+                        output = tf.reshape(tf.transpose(output), [prev_depth, -1])
                     
                 else:
                     raise ValueError("Layer's type should be either 'fc'" + 
-                                     "or 'conv'.")
-
+                                     ", 'conv' or 'pool'.")
+                
+                self.layer_type += [layer_dict[layer_name][1]]
+            
             self.output = output
             # posterior
             posteriors = tf.nn.softmax(tf.transpose(output))
             self.posteriors = tf.transpose(posteriors)
                 
+    def mirror(self):
+        """Creating a mirror of the 'encoder' part of the graph
+        """
+        
+        # start from the last layer
+        
+            
     def initialize_graph(self, init_X_train, init_Y_train, 
                          train_batch, epochs,  addr=None):
         """Initializing a graph given an initial training data set 
