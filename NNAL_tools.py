@@ -6,9 +6,9 @@ solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
-import cv2
+#import cv2
 import os
-#import NN
+import NN
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -79,6 +79,32 @@ def compute_entropy(PMFs):
     
     return entropies
 
+def test_training_part(labels, test_ratio):
+    """Paritioning a given labeled data set into test and 
+    training partitions, with a given test-to-total ratio
+    
+    The labels matrix is assumed to be a hot-one column-wise
+    matrix.
+    """
+    
+    (c,n) = labels.shape
+    
+    test_inds = []
+    train_inds = np.arange(n)
+    # randomly selecting indices from each class
+    for j in range(c):
+        class_inds = np.where(np.where(labels)[0]==j)[0]
+        test_size = round(len(class_inds)*test_ratio)
+        rand_inds = np.random.permutation(
+            len(class_inds))[:test_size]
+        test_class_inds = class_inds[rand_inds]
+        test_inds += list(test_class_inds)
+        
+    test_inds = np.array(test_inds)
+    train_inds = np.delete(train_inds, test_inds)
+
+    return train_inds, test_inds
+        
 
 def divide_training(train_dat, init_size, batch_size):
     """Partitioning a given training data into an initial
