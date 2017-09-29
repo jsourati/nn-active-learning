@@ -6,7 +6,8 @@ solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
-#import cv2
+import cv2
+import os
 #import NN
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
@@ -391,7 +392,7 @@ def SDP_query_distribution(A, k):
                             np.ones(d)))
             )
     # matrix inequality constraints
-    G, h = inequality_cvx_matrix(A, k)
+    G, h = inequality_cvx_matrix(A)
     # equality constraint (for having probabilities)
     A_eq = matrix(
             np.concatenate((np.ones(n), 
@@ -570,4 +571,29 @@ def sample_query_dstr(q_dstr, k, replacement=True):
     return Q_inds
             
             
+def prepare_data_4Alex(path, folders=None):
+    """Preparing a given data set to be used for
+    testing or fine-tuning AlexNet model
+    """
+    all_images = []
+    all_labels = []
+    if not(folders):
+        # if no specific folders are specified 
+        # read all the folders assuming
+        # that there are only sub-directories
+        folders = os.listdir(path)
         
+    for i in range(len(folders)):
+        image_files = os.listdir(
+            os.path.join(path, folders[i]))
+        
+        for j in range(len(image_files)):
+            img_path = os.path.join(
+                path, folders[i], image_files[j])
+            
+            all_images += [cv2.imread(img_path)]
+            all_labels += [i]
+        
+            
+    return all_images, all_labels
+    
