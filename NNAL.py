@@ -8,6 +8,9 @@ import NN
 import NNAL_tools
 from cvxopt import matrix, solvers
 
+read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet/"
+sys.path.insert(0, read_file_path)
+from alexnet import AlexNet
 
 def test_MNIST(iters, B, k, init_size, batch_size, epochs, 
                train_dat=None, test_dat=None):
@@ -225,8 +228,13 @@ def CNN_query(model, k, B, pool_X, method, session,
             posteriors = session.run(
                 model.posteriors, feed_dict={model.x:pool_X})
             
-        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
-        sel_posteriors = posteriors[:, sel_inds]
+        if B < posteriors.shape[1]:
+            sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+            sel_posteriors = posteriors[:, sel_inds]
+        else:
+            B = posteriors.shape[1]
+            sel_posteriors = posteriors
+            sel_inds = np.arange(B)
 
         # EGL scoring
         print("Computing the scores..")
@@ -274,10 +282,15 @@ def CNN_query(model, k, B, pool_X, method, session,
         else:
             posteriors = session.run(
                 model.posteriors, feed_dict={model.x:pool_X})
-            
-        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
-        sel_posteriors = posteriors[:, sel_inds]
         
+        if B < posteriors.shape[1]:
+            sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+            sel_posteriors = posteriors[:, sel_inds]
+        else:
+            B = posteriors.shape[1]
+            sel_posteriors = posteriors
+            sel_inds = np.arange(B)
+            
         # forming A-matrices
         layer_num = len(model.var_dict)
         c = model.output.get_shape()[0].value
@@ -304,7 +317,7 @@ def CNN_query(model, k, B, pool_X, method, session,
         q_opt = np.array(soln['x'][:B])
 
         Q_inds = NNAL_tools.sample_query_dstr(
-            q_opt, k, replacement=False)
+            q_opt, k, replacement=True)
         Q_inds = sel_inds[Q_inds]
         
     elif method=='rep-entropy':
@@ -316,7 +329,8 @@ def CNN_query(model, k, B, pool_X, method, session,
         else:
             posteriors = session.run(
                 model.posteriors, feed_dict={model.x:pool_X})
-            
+        
+        #B = 16
         sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
         sel_posteriors = posteriors[:, sel_inds]
         n = pool_X.shape[0]
@@ -416,4 +430,98 @@ def run_CNNAL(A, init_X_train, init_Y_train,
             
     return np.array(test_acc), np.append(0, np.array(query_num))
             
+
+
+def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
+                   epochs, k, B, method, max_queries, 
+                   train_batch=50, eval_batch=None):
+    """Running active learning algorithms on a
+    pre-trained AlexNet
+    
+    This function is written separate than `run_CNNAL`, because
+    the architecture of AlexNet cannot be modelled by our 
+    current generic CNN class at this time. It is mainly
+    because AlexNet has more than two groups in some 
+    convolutional layers, where the input is cut in half
+    and same or different filters are used in each group
+    to output a feature map. 
+    
+    Hence, we are using a publicly available piece of code,
+    which is written by Frederik Kratzert in his blog 
+    https://kratzert.github.io/2017/02/24/finetuning-alexnet-with-tensorflow.html
+    for fine-tuning pre-trained AlexNet in TensorFlow given 
+    any labeled data set.
+    """
+
+    # layers we don't wanna modify in the fine-tuning process
+    skip_layer = ['fc8']
+    
+    # path to the pre-trained weights
+    weights_path = '/home/ch194765/repos/atlas-active-learning/AlexNet/bvlc_alexnet.npy'
+
+    # learning parameters
+    learning_rate = 0.001
+    dropout_rate = 0.5
+    
+    # creating the AlexNet mode
+    # -------------------------
+    # preparing variables
+    c = Y_pool.shape[1]
+    x = tf.placeholder(tf.float32, [None, 227, 227, 3])
+    keep_prob = tf.placeholder(tf.float32)
+    
+    # creating the model
+    model = NN.AlexNet_CNN(
+        x, keep_prob, c, skip_layer, weights_path)
+    model.get_optimizer(learning_rate)
+    
+    test_acc = []
+    with tf.Session() as session:
+        model.initialize_graph(session)
         
+        test_acc += [NNAL_tools.batch_accuracy(
+                model, X_test, Y_test, eval_batch, session, col=False)]
+        print()
+        print('Test accuracy: %g' %test_acc[0])
+
+        # start querying
+        new_X_train = np.zeros((0,)+X_pool.shape[1:])
+        new_Y_train = np.zeros((0,c))
+        new_X_pool, new_Y_pool = X_pool, Y_pool
+        model.get_gradients()
+        # number of selected in each iteration is useful
+        # when samling from a distribution and repeated
+        # queries might be present
+        query_num = []
+        print(20*'-' + '  Querying  ' +20*"-")
+        t = 0
+        while sum(query_num) < max_queries:
+            print("Iteration %d: "% t)
+            Q_inds = CNN_query(model, k, B, new_X_pool, 
+                               method, session, eval_batch)
+            query_num += [len(Q_inds)]
+            print('Query index: '+' '.join(str(q) for q in Q_inds))
+            # prepare data for another training
+            Q = new_X_pool[Q_inds,:,:,:]
+            #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
+            Y_Q = new_Y_pool[:,Q_inds]
+            # remove the selected queries from the pool
+            new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
+            new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=1)
+            # update the model
+            print("Updating the model: ", end='')
+            new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
+                new_X_train, new_Y_train, Q, Y_Q, 200+t, 50)
+            for i in range(epochs):    
+                model.train_graph_one_epoch(new_X_train, new_Y_train, 
+                                            train_batch, session)
+                print(i, end=', ')
+
+            test_acc += [NNAL_tools.batch_accuracy(
+                    model, X_test, Y_test, 
+                    eval_batch, session, col=False)]
+            print()
+            print('Test accuracy: %g' %test_acc[t+1])
+            t += 1
+            
+    return np.array(test_acc), np.append(0, np.array(query_num))
