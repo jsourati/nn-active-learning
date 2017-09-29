@@ -504,15 +504,17 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             # prepare data for another training
             Q = new_X_pool[Q_inds,:,:,:]
             #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
-            Y_Q = new_Y_pool[:,Q_inds]
+            Y_Q = new_Y_pool[Q_inds,:]
             # remove the selected queries from the pool
             new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
-            new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=1)
+            new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=0)
             # update the model
             print("Updating the model: ", end='')
             new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
-                new_X_train, new_Y_train, Q, Y_Q, 200+t, 50)
-            for i in range(epochs):    
+                new_X_train, new_Y_train.T, Q, Y_Q.T, 200+t, 50)
+            new_Y_train = new_Y_train.T
+            for i in range(epochs):
+                pdb.set_trace()
                 model.train_graph_one_epoch(new_X_train, new_Y_train, 
                                             train_batch, session)
                 print(i, end=', ')

@@ -341,19 +341,22 @@ class CNN(object):
                         feed_dict={self.x: batch_of_data[j], 
                                    self.y_: batch_of_labels[j]})
     
-class Alexnet_AL(AlexNet):
+class AlexNet_CNN(AlexNet):
     """
     """
     
     def __init__(self, x, keep_prob, c, skip_layer, weights_path):
-        AlexNet.__init__(self, x, keep_prob, c, skip_layer, weights_path)
         self.x = x
+        self.keep_prob = keep_prob
+        AlexNet.__init__(self, self.x, self.keep_prob, c, 
+                         skip_layer, weights_path)
         self.output = self.fc8
         self.posteriors = tf.nn.softmax(self.output)
         self.weights_path = weights_path
         
         
     def initialize_graph(self, session):
+        session.run(tf.global_variables_initializer())
         self.load_initial_weights(session)
         
     def get_optimizer(self, learning_rate):
@@ -361,12 +364,12 @@ class Alexnet_AL(AlexNet):
         """
         # note that for AlexNet the output is row-wise
         c = self.output.get_shape()[1].value
-        self.y_ = tf.placeholder(tf.float32, [c, None])
+        self.y_ = tf.placeholder(tf.float32, [None, c])
         
         # loss function
         loss = tf.reduce_mean(
             tf.nn.softmax_cross_entropy_with_logits(
-                logits = self.output, labels = y_))
+                logits = self.output, labels = self.y_))
         # training operation
         self.pars = tf.trainable_variables()
         gradients = tf.gradients(loss, self.pars)
@@ -381,11 +384,11 @@ class Alexnet_AL(AlexNet):
         
         # also define the accuracy operation
         correct_pred = tf.equal(
-            tf.argmax(self.output, 1), tf.argmax(y_, 1))
+            tf.argmax(self.output, 1), tf.argmax(self.y_, 1))
         self.accuracy = tf.reduce_mean(
             tf.cast(correct_pred, tf.float32))
         
-        def get_gradients(self):
+    def get_gradients(self):
         """Forming gradients of the log-posteriors
         """
         
@@ -393,10 +396,11 @@ class Alexnet_AL(AlexNet):
         c = self.output.get_shape()[1].value
         for j in range(c):
             self.grad_log_posts.update(
-                {str(j): tf.gradients(tf.log(self.posteriors)[0, j], pars)})
+                {str(j): tf.gradients(tf.log(self.posteriors)[0, j], 
+                                      self.pars)})
 
         
-        def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
+    def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
         """Randomly partition the data into batches and complete one
         epoch of training
         
