@@ -395,13 +395,49 @@ def batch_posteriors(model, X, batch_size, session):
         if i<quot-1:
             inds = np.arange(i*batch_size, (i+1)*batch_size)
         else:
-            inds = slice(i*batch_size, n)
+            inds = np.arange(i*batch_size, n)
             
         iter_X = X[inds,:,:,:]
         posteriors[:,inds] = session.run(
             model.posteriors, feed_dict={model.x:iter_X})
         
     return posteriors
+
+def batch_accuracy(model, X, Y, batch_size, session, col=True):
+    """Similar to `batch_posteriors()` this function computes
+    accuracies according to a given test samples, using
+    batches
+    """
+    
+    n = X.shape[0]
+    acc = 0
+    if col:
+        c = model.output.get_shape()[0].value
+    else:
+        c = model.output.get_shape()[1].value
+    # batch-wise computations
+    quot, rem = np.divmod(n, batch_size)
+    for i in range(quot):
+        if i<quot-1:
+            inds = np.arange(i*batch_size, (i+1)*batch_size)
+        else:
+            inds = np.arange(i*batch_size, n)
+            
+        iter_X = X[inds,:,:,:]
+        if col:
+            iter_Y = Y[:,inds]
+        else:
+            iter_Y = Y[inds,:]
+            
+        iter_acc = session.run(
+            model.accuracy, 
+            feed_dict={model.x: iter_X,
+                       model.y_: iter_Y, 
+                       model.keep_prob: 1.}
+            )
+        acc += iter_acc * len(inds)
+        
+    return acc/n
     
 def SDP_query_distribution(A, k):
     """Solving SDP problem in FIR-based active learning
