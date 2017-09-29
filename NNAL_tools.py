@@ -597,3 +597,16 @@ def prepare_data_4Alex(path, folders=None):
             
     return all_images, all_labels
     
+def resize_images(imgs, target_shape):
+    """Resizing a set of 3D images with different sizes
+    to a single target size
+    """
+    
+    n = len(imgs)
+    resized_imgs = np.zeros(((n,)+target_shape)+(3,))
+    for i in range(n):
+        resized = cv2.resize(
+            imgs[i].astype(np.float32), target_shape)
+        resized_imgs[i,:,:,:] = resized
+        
+    return resized_imgs
