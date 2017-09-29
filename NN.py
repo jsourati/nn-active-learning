@@ -14,6 +14,7 @@ import prep_dat
 read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
 sys.path.insert(0, read_file_path)
 import alexnet
+from alexnet import AlexNet
 
 
 def AlexNet_features(img_arr):
@@ -87,7 +88,6 @@ class CNN(object):
                     #prev_depth = x.shape[-1].value
                     self.output = x
                 
-                #pdb.set_trace()
                 self.add_layer(
                     layer_dict[layer_names[i]], 
                     layer_names[i],
@@ -218,6 +218,14 @@ class CNN(object):
             self.output = tf.reshape(
                 tf.transpose(self.output), [out_size, -1])
             
+    def add_unpool(self, layer_specs, flatten=False):
+        """Adding an unpooling layer as the opposite layer of a
+        pooling one, to increase size of the output
+        
+        For now, we are using NN interpolation.
+        """
+        pool_size = layer_specs[0]
+            
     def initialize_graph(self, init_X_train, init_Y_train, 
                          train_batch, epochs,  addr=None):
         """Initializing a graph given an initial training data set 
@@ -329,9 +337,85 @@ class CNN(object):
             #            self.x: batch_of_data[j], 
             #            self.y_: batch_of_labels[j]})
             
-            session.run(self.train_step, feed_dict={self.x: batch_of_data[j], 
-                                                    self.y_: batch_of_labels[j]})
+            session.run(self.train_step, 
+                        feed_dict={self.x: batch_of_data[j], 
+                                   self.y_: batch_of_labels[j]})
     
+class Alexnet_AL(AlexNet):
+    """
+    """
+    
+    def __init__(self, x, keep_prob, c, skip_layer, weights_path):
+        AlexNet.__init__(self, x, keep_prob, c, skip_layer, weights_path)
+        self.x = x
+        self.output = self.fc8
+        self.posteriors = tf.nn.softmax(self.output)
+        self.weights_path = weights_path
+        
+        
+    def initialize_graph(self, session):
+        self.load_initial_weights(session)
+        
+    def get_optimizer(self, learning_rate):
+        """Making the optimizer operation for the graph
+        """
+        # note that for AlexNet the output is row-wise
+        c = self.output.get_shape()[1].value
+        self.y_ = tf.placeholder(tf.float32, [c, None])
+        
+        # loss function
+        loss = tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits(
+                logits = self.output, labels = y_))
+        # training operation
+        self.pars = tf.trainable_variables()
+        gradients = tf.gradients(loss, self.pars)
+        gradients = list(zip(gradients, self.pars))
+
+        # Create optimizer and apply gradient descent 
+        # to the trainable variables
+        optimizer = tf.train.GradientDescentOptimizer(
+            learning_rate)
+        self.train_step = optimizer.apply_gradients(
+            grads_and_vars=gradients)
+        
+        # also define the accuracy operation
+        correct_pred = tf.equal(
+            tf.argmax(self.output, 1), tf.argmax(y_, 1))
+        self.accuracy = tf.reduce_mean(
+            tf.cast(correct_pred, tf.float32))
+        
+        def get_gradients(self):
+        """Forming gradients of the log-posteriors
+        """
+        
+        self.grad_log_posts = {}
+        c = self.output.get_shape()[1].value
+        for j in range(c):
+            self.grad_log_posts.update(
+                {str(j): tf.gradients(tf.log(self.posteriors)[0, j], pars)})
+
+        
+        def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
+        """Randomly partition the data into batches and complete one
+        epoch of training
+        
+        Input feature vectors, `X_train` and labels, `Y_train` are columnwise
+        """
+        
+        # random partitioning into batches
+        train_size = X_train.shape[0]
+        batch_inds = prep_dat.gen_batch_inds(train_size, batch_size)
+        batch_of_data = prep_dat.gen_batch_tensors(X_train, batch_inds)
+        batch_of_labels = prep_dat.gen_batch_matrices(Y_train, batch_inds)
+        
+        # completing an epoch
+        for j in range(len(batch_of_data)):
+            
+            session.run(self.train_step, 
+                        feed_dict={self.x: batch_of_data[j], 
+                                   self.y_: batch_of_labels[j]})
+
 
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
