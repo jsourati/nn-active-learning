@@ -362,6 +362,32 @@ class AlexNet_CNN(AlexNet):
         if addr:
             saver = tf.train.Saver()
             saver.save(session, addr)
+
+    
+    def extract_features(self, X, session, batch_size=None):
+        """Extracting features
+        """
+        
+        n = X.shape[0]
+        if batch_size:
+            d = self.features_layer.shape[1].value
+            features = np.zeros((d, n))
+            quot, rem = np.divmod(n, batch_size)
+            for i in range(quot):
+                if i<quot-1:
+                    inds = np.arange(i*batch_size, (i+1)*batch_size)
+                else:
+                    inds = slice(i*batch_size, n)
+                    
+                iter_X = X[inds,:,:,:]
+                features[:,inds] = session.run(
+                    self.features, feed_dict={self.x:iter_X})
+                
+        else:
+            features = session.run(
+                self.features, feed_dict={self.x:X})
+            
+        return features
         
         
     def get_optimizer(self, learning_rate):
@@ -421,7 +447,7 @@ class AlexNet_CNN(AlexNet):
             batch_of_data = prep_dat.gen_batch_tensors(
                 X_train, batch_inds)
             batch_of_labels = prep_dat.gen_batch_matrices(
-                Y_train, batch_inds)
+                Y_train, batch_inds, col=False)
         else:
             batch_of_data = [X_train]
             batch_of_labels = [Y_train]
