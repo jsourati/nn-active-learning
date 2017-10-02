@@ -4,6 +4,7 @@ import pdb
 import sys
 import pickle
 import warnings
+import os
 import NN
 import NNAL_tools
 from cvxopt import matrix, solvers
@@ -434,7 +435,8 @@ def run_CNNAL(A, init_X_train, init_Y_train,
 
 def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                    epochs, k, B, method, max_queries, 
-                   train_batch=50, eval_batch=None):
+                   train_batch=50, eval_batch=None, 
+                   save_path=None):
     """Running active learning algorithms on a
     pre-trained AlexNet
     
@@ -475,8 +477,13 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     model.get_optimizer(learning_rate)
     
     test_acc = []
+    saver = tf.train.Saver()
     with tf.Session() as session:
-        model.initialize_graph(session)
+        if os.path.isfile(save_path+'.index'):
+            saver.restore(session, save_path)
+        else:
+            model.initialize_graph(
+                session, addr=save_path)
         
         test_acc += [NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 

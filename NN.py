@@ -356,9 +356,13 @@ class AlexNet_CNN(AlexNet):
         self.weights_path = weights_path
         
         
-    def initialize_graph(self, session):
+    def initialize_graph(self, session, addr=None):
         session.run(tf.global_variables_initializer())
         self.load_initial_weights(session)
+        if addr:
+            saver = tf.train.Saver()
+            saver.save(session, addr)
+        
         
     def get_optimizer(self, learning_rate):
         """Making the optimizer operation for the graph
