@@ -370,7 +370,7 @@ class AlexNet_CNN(AlexNet):
         
         n = X.shape[0]
         if batch_size:
-            d = self.features_layer.shape[1].value
+            d = self.feature_layer.shape[1].value
             features = np.zeros((d, n))
             quot, rem = np.divmod(n, batch_size)
             for i in range(quot):
@@ -381,11 +381,17 @@ class AlexNet_CNN(AlexNet):
                     
                 iter_X = X[inds,:,:,:]
                 features[:,inds] = session.run(
-                    self.features, feed_dict={self.x:iter_X})
+                    self.feature_layer, 
+                    feed_dict={self.x:iter_X, 
+                               self.KEEP_PROB:self.dropout_rate}
+                    ).T
                 
         else:
             features = session.run(
-                self.features, feed_dict={self.x:X})
+                self.feature_layer, 
+                feed_dict={self.x:X,
+                           self.KEEP_PROB:self.dropout_rate}
+                ).T
             
         return features
         
