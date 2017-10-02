@@ -345,10 +345,11 @@ class AlexNet_CNN(AlexNet):
     """
     """
     
-    def __init__(self, x, keep_prob, c, skip_layer, weights_path):
+    def __init__(self, x, dropout_rate, c, skip_layer, weights_path):
         self.x = x
-        self.keep_prob = keep_prob
-        AlexNet.__init__(self, self.x, self.keep_prob, c, 
+        self.dropout_rate = dropout_rate
+        keep_prob = tf.placeholder(tf.float32)
+        AlexNet.__init__(self, self.x, keep_prob, c, 
                          skip_layer, weights_path)
         self.output = self.fc8
         self.posteriors = tf.nn.softmax(self.output)
@@ -404,21 +405,32 @@ class AlexNet_CNN(AlexNet):
         """Randomly partition the data into batches and complete one
         epoch of training
         
-        Input feature vectors, `X_train` and labels, `Y_train` are columnwise
+        Input feature vectors, `X_train` and labels, 
+        `Y_train` are columnwise
         """
         
         # random partitioning into batches
         train_size = X_train.shape[0]
-        batch_inds = prep_dat.gen_batch_inds(train_size, batch_size)
-        batch_of_data = prep_dat.gen_batch_tensors(X_train, batch_inds)
-        batch_of_labels = prep_dat.gen_batch_matrices(Y_train, batch_inds)
+        if train_size > batch_size:
+            batch_inds = prep_dat.gen_batch_inds(
+                train_size, batch_size)
+            batch_of_data = prep_dat.gen_batch_tensors(
+                X_train, batch_inds)
+            batch_of_labels = prep_dat.gen_batch_matrices(
+                Y_train, batch_inds)
+        else:
+            batch_of_data = [X_train]
+            batch_of_labels = [Y_train]
         
         # completing an epoch
         for j in range(len(batch_of_data)):
             
-            session.run(self.train_step, 
-                        feed_dict={self.x: batch_of_data[j], 
-                                   self.y_: batch_of_labels[j]})
+            session.run(
+                self.train_step, 
+                feed_dict={self.x: batch_of_data[j], 
+                           self.y_: batch_of_labels[j],
+                           self.KEEP_PROB: self.dropout_rate}
+                )
 
 
 def train_CNN_MNIST(epochs, batch_size):

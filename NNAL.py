@@ -468,11 +468,10 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     # preparing variables
     c = Y_pool.shape[1]
     x = tf.placeholder(tf.float32, [None, 227, 227, 3])
-    keep_prob = tf.placeholder(tf.float32)
     
     # creating the model
     model = NN.AlexNet_CNN(
-        x, keep_prob, c, skip_layer, weights_path)
+        x, dropout_rate, c, skip_layer, weights_path)
     model.get_optimizer(learning_rate)
     
     test_acc = []
@@ -480,7 +479,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         model.initialize_graph(session)
         
         test_acc += [NNAL_tools.batch_accuracy(
-                model, X_test, Y_test, eval_batch, session, col=False)]
+                model, X_test, Y_test, 
+                eval_batch, session, col=False)]
         print()
         print('Test accuracy: %g' %test_acc[0])
 
@@ -514,7 +514,6 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 new_X_train, new_Y_train.T, Q, Y_Q.T, 200+t, 50)
             new_Y_train = new_Y_train.T
             for i in range(epochs):
-                pdb.set_trace()
                 model.train_graph_one_epoch(new_X_train, new_Y_train, 
                                             train_batch, session)
                 print(i, end=', ')

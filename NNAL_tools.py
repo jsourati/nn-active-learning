@@ -433,7 +433,7 @@ def batch_accuracy(model, X, Y, batch_size, session, col=True):
             model.accuracy, 
             feed_dict={model.x: iter_X,
                        model.y_: iter_Y, 
-                       model.keep_prob: 1.}
+                       model.KEEP_PROB: 1.}
             )
         acc += iter_acc * len(inds)
         
