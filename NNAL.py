@@ -434,8 +434,9 @@ def run_CNNAL(A, init_X_train, init_Y_train,
 
 
 def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
-                   epochs, k, B, method, max_queries, 
-                   train_batch=50, eval_batch=None, 
+                   learning_rate, dropout_rate, epochs, 
+                   k, B, method, max_queries, 
+                   train_batch_size=50, eval_batch_size=None, 
                    save_path=None):
     """Running active learning algorithms on a
     pre-trained AlexNet
@@ -460,10 +461,6 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     
     # path to the pre-trained weights
     weights_path = '/home/ch194765/repos/atlas-active-learning/AlexNet/bvlc_alexnet.npy'
-
-    # learning parameters
-    learning_rate = 0.001
-    dropout_rate = 0.5
     
     # creating the AlexNet mode
     # -------------------------
@@ -487,7 +484,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         
         test_acc += [NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
-                eval_batch, session, col=False)]
+                eval_batch_size, session, col=False)]
         print()
         print('Test accuracy: %g' %test_acc[0])
 
@@ -505,7 +502,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         while sum(query_num) < max_queries:
             print("Iteration %d: "% t)
             Q_inds = CNN_query(model, k, B, new_X_pool, 
-                               method, session, eval_batch)
+                               method, session, eval_batch_size)
             query_num += [len(Q_inds)]
             print('Query index: '+' '.join(str(q) for q in Q_inds))
             # prepare data for another training
@@ -518,16 +515,16 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             # update the model
             print("Updating the model: ", end='')
             new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
-                new_X_train, new_Y_train.T, Q, Y_Q.T, 200+t, 50)
+                new_X_train, new_Y_train.T, Q, Y_Q.T, 200+t, train_batch_size)
             new_Y_train = new_Y_train.T
             for i in range(epochs):
                 model.train_graph_one_epoch(new_X_train, new_Y_train, 
-                                            train_batch, session)
+                                            train_batch_size, session)
                 print(i, end=', ')
 
             test_acc += [NNAL_tools.batch_accuracy(
                     model, X_test, Y_test, 
-                    eval_batch, session, col=False)]
+                    eval_batch_size, session, col=False)]
             print()
             print('Test accuracy: %g' %test_acc[t+1])
             t += 1
