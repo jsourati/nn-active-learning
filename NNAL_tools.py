@@ -372,7 +372,8 @@ def Alex_features_MNIST(bulk_size):
     return train_features, test_features
 
 
-def batch_posteriors(model, X, batch_size, session):
+def batch_posteriors(model, X, batch_size, session, 
+                     col=True, extra_feed_dict={}):
     """Computing posterior probability of a large set of samples
     after dividing them into batches so that computations can be
     done with a limited amount of memory
@@ -386,9 +387,14 @@ def batch_posteriors(model, X, batch_size, session):
     """
     
     n = X.shape[0]
-    c = model.output.get_shape()[0].value
+
+    if col:
+        c = model.output.get_shape()[0].value
+    else:
+        c = model.output.get_shape()[1].value
+        
     posteriors = np.zeros((c, n))
-    
+        
     # batch-wise computations
     quot, rem = np.divmod(n, batch_size)
     for i in range(quot):
@@ -398,8 +404,20 @@ def batch_posteriors(model, X, batch_size, session):
             inds = np.arange(i*batch_size, n)
             
         iter_X = X[inds,:,:,:]
-        posteriors[:,inds] = session.run(
-            model.posteriors, feed_dict={model.x:iter_X})
+        
+        # add any extra dictionary to the main feed_dict,
+        # which is dictionary related to the inputs. 
+        # E.g., dictionaries including dropout probabilities
+        feed_dict = {model.x: iter_X}
+        feed_dict.update(extra_feed_dict)
+        if col:
+            posteriors[:,inds] = session.run(
+                model.posteriors, 
+                feed_dict=feed_dict)
+        else:
+            posteriors[:, inds] = session.run(
+                model.posteriors, 
+                feed_dict=feed_dict).T
         
     return posteriors
 

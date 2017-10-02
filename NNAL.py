@@ -184,7 +184,7 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
     return accs, batch_of_data, batch_of_labels
 
 def CNN_query(model, k, B, pool_X, method, session, 
-              batch_size=None, shrink_method=None):
+              batch_size=None, col=True, extra_feed_dict={}):
     """Querying a number of unlabeled samples from a given pool
     
     :Parameters:
@@ -224,10 +224,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         print("Uncertainty filtering...")
         if batch_size:
             posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session)
+                model, pool_X, batch_size, session, col, extra_feed_dict)
         else:
+            feed_dict = {model.x:pool_X}
+            feed_dict.update(extra_feed_dict)
             posteriors = session.run(
-                model.posteriors, feed_dict={model.x:pool_X})
+                model.posteriors, feed_dict=feed_dict)
+            if not(col):
+                posteriors = posteriors.T
             
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -239,7 +243,7 @@ def CNN_query(model, k, B, pool_X, method, session,
 
         # EGL scoring
         print("Computing the scores..")
-        c = model.output.get_shape()[0].value
+        c = posteriors.shape[0]
         scores = np.zeros(B)
         for i in range(B):
             # gradients of samples one-by-one
@@ -266,10 +270,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         # computing the posteriors
         if batch_size:
             posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session)
+                model, pool_X, batch_size, session, col, extra_feed_dict)
         else:
+            feed_dict = {model.x: pool_X}
+            feed_dict.update(extra_feed_dict)
             posteriors = session.run(
-                model.posteriors, feed_dict={model.x:pool_X})
+                model.posteriors, feed_dict=feed_dict)
+            if not(col):
+                posteriors = posteriors.T
             
         entropies = NNAL_tools.compute_entropy(posteriors)
         Q_inds = np.argsort(-entropies)[:k]
@@ -279,10 +287,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         print("Uncertainty filtering...")
         if batch_size:
             posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session)
+                model, pool_X, batch_size, session, col, extra_feed_dict)
         else:
+            feed_dict = {model.x:pool_X}
+            feed_dict.update(extra_feed_dict)
             posteriors = session.run(
-                model.posteriors, feed_dict={model.x:pool_X})
+                model.posteriors, feed_dict=feed_dict)
+            if not(col):
+                posteriors = posteriors.T
         
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -294,7 +306,7 @@ def CNN_query(model, k, B, pool_X, method, session,
             
         # forming A-matrices
         layer_num = len(model.var_dict)
-        c = model.output.get_shape()[0].value
+        c = posteriors.shape[0]
         A = []
         for i in range(B):
             # gradients of samples one-by-one
@@ -326,10 +338,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         print("Uncertainty filtering...")
         if batch_size:
             posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session)
+                model, pool_X, batch_size, session, col, extra_feed_dict)
         else:
+            feed_dict = {model.x:pool_X}
+            feed_dict.update(extra_feed_dict)
             posteriors = session.run(
-                model.posteriors, feed_dict={model.x:pool_X})
+                model.posteriors, feed_dict=feed_dict)
+            if not(col):
+                posteriors = posteriors.T
         
         #B = 16
         sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -501,8 +517,10 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         t = 0
         while sum(query_num) < max_queries:
             print("Iteration %d: "% t)
+            extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
             Q_inds = CNN_query(model, k, B, new_X_pool, 
-                               method, session, eval_batch_size)
+                               method, session, eval_batch_size, 
+                               False, extra_feed_dict)
             query_num += [len(Q_inds)]
             print('Query index: '+' '.join(str(q) for q in Q_inds))
             # prepare data for another training
