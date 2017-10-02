@@ -247,10 +247,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         scores = np.zeros(B)
         for i in range(B):
             # gradients of samples one-by-one
+            feed_dict = {
+                model.x:np.expand_dims(
+                    pool_X[sel_inds[i],:,:,:], axis=0)
+                }
+            feed_dict.update(extra_feed_dict)
             grads = session.run(
                 model.grad_log_posts, 
-                feed_dict={model.x:np.expand_dims(
-                        pool_X[sel_inds[i],:,:,:], axis=0)})
+                feed_dict=feed_dict)
 
             T = len(grads['0'])
             for j in range(c):
@@ -258,6 +262,8 @@ def CNN_query(model, k, B, pool_X, method, session,
                 for t in range(T):
                     class_score += np.sum(grads[str(j)][t]**2)
                 scores[i] += class_score*sel_posteriors[j,i]
+                
+            print(i, end=',')
 
         # select the highest k scores
         Q_inds = sel_inds[np.argsort(-scores)[:k]]
@@ -310,18 +316,24 @@ def CNN_query(model, k, B, pool_X, method, session,
         A = []
         for i in range(B):
             # gradients of samples one-by-one
-            grads = session.run(
-                model.grad_log_posts, 
-                feed_dict={model.x:np.expand_dims(
-                        pool_X[sel_inds[i],:,:,:], axis=0)})
+            feed_dict = {
+                model.x:np.expand_dims(
+                    pool_X[sel_inds[i],:,:,:], axis=0)
+                }
+            feed_dict.update(extra_feed_dict)
+            grads = session.run(model.grad_log_posts, 
+                                feed_dict=feed_dict)
 
             Ai = np.zeros((layer_num, layer_num))
             for j in range(c):
                 shrunk_grad = NNAL_tools.shrink_gradient(
                     grads[str(j)], 'sum')
                 Ai += sel_posteriors[j,i]*np.outer(
-                    shrunk_grad,shrunk_grad) + np.eye(
-                    layer_num)*1e-5
+                    shrunk_grad, 
+                    shrunk_grad) + np.eye(layer_num)*1e-5
+            
+            print(i, end=',')
+            
             A += [Ai]
         # SDP
         print('Solving SDP..')
@@ -498,6 +510,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             model.initialize_graph(
                 session, addr=save_path)
         
+        model.get_gradients()
+        session.graph.finalize()
         test_acc += [NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
                 eval_batch_size, session, col=False)]
@@ -508,7 +522,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         new_X_train = np.zeros((0,)+X_pool.shape[1:])
         new_Y_train = np.zeros((0,c))
         new_X_pool, new_Y_pool = X_pool, Y_pool
-        model.get_gradients()
+        
         # number of selected in each iteration is useful
         # when samling from a distribution and repeated
         # queries might be present
