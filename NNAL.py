@@ -222,16 +222,8 @@ def CNN_query(model, k, B, pool_X, method, session,
     if method=='egl':
         # uncertainty filtering
         print("Uncertainty filtering...")
-        if batch_size:
-            posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session, col, extra_feed_dict)
-        else:
-            feed_dict = {model.x:pool_X}
-            feed_dict.update(extra_feed_dict)
-            posteriors = session.run(
-                model.posteriors, feed_dict=feed_dict)
-            if not(col):
-                posteriors = posteriors.T
+        posteriors = NNAL_tools.batch_posteriors(
+            model, pool_X, batch_size, session, col, extra_feed_dict)
             
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -274,33 +266,17 @@ def CNN_query(model, k, B, pool_X, method, session,
         
     elif method=='entropy':
         # computing the posteriors
-        if batch_size:
-            posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session, col, extra_feed_dict)
-        else:
-            feed_dict = {model.x: pool_X}
-            feed_dict.update(extra_feed_dict)
-            posteriors = session.run(
-                model.posteriors, feed_dict=feed_dict)
-            if not(col):
-                posteriors = posteriors.T
-            
+        posteriors = NNAL_tools.batch_posteriors(
+            model, pool_X, batch_size, session, col, extra_feed_dict)
+        # entropies    
         entropies = NNAL_tools.compute_entropy(posteriors)
         Q_inds = np.argsort(-entropies)[:k]
         
     elif method=='fi':
         # uncertainty filtering
         print("Uncertainty filtering...")
-        if batch_size:
-            posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session, col, extra_feed_dict)
-        else:
-            feed_dict = {model.x:pool_X}
-            feed_dict.update(extra_feed_dict)
-            posteriors = session.run(
-                model.posteriors, feed_dict=feed_dict)
-            if not(col):
-                posteriors = posteriors.T
+        posteriors = NNAL_tools.batch_posteriors(
+            model, pool_X, batch_size, session, col, extra_feed_dict)
         
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -311,7 +287,7 @@ def CNN_query(model, k, B, pool_X, method, session,
             sel_inds = np.arange(B)
             
         # forming A-matrices
-        layer_num = len(model.var_dict)
+        layer_num = int(len(model.pars) / 2)
         c = posteriors.shape[0]
         A = []
         for i in range(B):
@@ -348,16 +324,8 @@ def CNN_query(model, k, B, pool_X, method, session,
     elif method=='rep-entropy':
         # uncertainty filtering
         print("Uncertainty filtering...")
-        if batch_size:
-            posteriors = NNAL_tools.batch_posteriors(
-                model, pool_X, batch_size, session, col, extra_feed_dict)
-        else:
-            feed_dict = {model.x:pool_X}
-            feed_dict.update(extra_feed_dict)
-            posteriors = session.run(
-                model.posteriors, feed_dict=feed_dict)
-            if not(col):
-                posteriors = posteriors.T
+        posteriors = NNAL_tools.batch_posteriors(
+            model, pool_X, batch_size, session, col, extra_feed_dict)
         
         #B = 16
         sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)

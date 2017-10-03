@@ -6,7 +6,7 @@ solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
-#import cv2
+import cv2
 import os
 import NN
 
@@ -373,7 +373,7 @@ def Alex_features_MNIST(bulk_size):
 
 
 def batch_posteriors(model, X, batch_size, session, 
-                     col=True, extra_feed_dict={}):
+                     col, extra_feed_dict={}):
     """Computing posterior probability of a large set of samples
     after dividing them into batches so that computations can be
     done with a limited amount of memory
@@ -384,40 +384,83 @@ def batch_posteriors(model, X, batch_size, session,
     probabilities of given inputs. Also, note that input `X`
     is assumed to be a tensor of format [batch, width, height,
     channels].
+    
+    Another point is that the model might output the posteriors
+    in a column-wise (with shape `[n_features, n_samples]`) or
+    row-wise (with shape `[n_samples, n_features]`). But we 
+    always want the function to return in the former format.
+    Hence, we get a flag `col` to identify if the model outputs
+    the posteriors columnwise (`col=True`) or not (`col=False`).
+    In case of the latter, we transpose the output posteriors.
+    
+    :Parameters:
+    
+      **model** : CNN or AlexNet_CNN class object
+        the (convolutional) neural network that has a property
+        called `posteriors` which outputs class posterior
+        probabilities for a given set of samples
+        
+      **X** : array
+        data array with shape [batch, height, width, n_channels]
+        
+      **batch_size** : positive integer
+        size of batches for batch-computation of the
+        posteriors
+        
+      **session** : tf.Session()
+        the tensorflow session operating on the model
+        
+      **col** : logical flag (True or False)
+        a flag identifying if the `model` outputs the 
+        posteriors column-wise (`True`) or row-wise 
+        (`False`)
+        
+      **extra_feed_dict** : dictionary
+        any extra dictionary needed to be fed to the mdel
+        other than the input data, e.g. the dropout
+        rate, if needed
     """
     
     n = X.shape[0]
-
-    if col:
-        c = model.output.get_shape()[0].value
-    else:
-        c = model.output.get_shape()[1].value
-        
-    posteriors = np.zeros((c, n))
-        
-    # batch-wise computations
-    quot, rem = np.divmod(n, batch_size)
-    for i in range(quot):
-        if i<quot-1:
-            inds = np.arange(i*batch_size, (i+1)*batch_size)
-        else:
-            inds = np.arange(i*batch_size, n)
-            
-        iter_X = X[inds,:,:,:]
-        
-        # add any extra dictionary to the main feed_dict,
-        # which is dictionary related to the inputs. 
-        # E.g., dictionaries including dropout probabilities
-        feed_dict = {model.x: iter_X}
-        feed_dict.update(extra_feed_dict)
+    
+    if batch_size: 
         if col:
-            posteriors[:,inds] = session.run(
-                model.posteriors, 
-                feed_dict=feed_dict)
+            c = model.output.get_shape()[0].value
         else:
-            posteriors[:, inds] = session.run(
-                model.posteriors, 
-                feed_dict=feed_dict).T
+            c = model.output.get_shape()[1].value
+
+        posteriors = np.zeros((c, n))
+
+        # batch-wise computations
+        quot, rem = np.divmod(n, batch_size)
+        for i in range(quot):
+            if i<quot-1:
+                inds = np.arange(i*batch_size, (i+1)*batch_size)
+            else:
+                inds = np.arange(i*batch_size, n)
+
+            iter_X = X[inds,:,:,:]
+
+            # add any extra dictionary to the main feed_dict,
+            # which is dictionary related to the inputs. 
+            # E.g., dictionaries including dropout probabilities
+            feed_dict = {model.x: iter_X}
+            feed_dict.update(extra_feed_dict)
+            if col:
+                posteriors[:,inds] = session.run(
+                    model.posteriors, 
+                    feed_dict=feed_dict)
+            else:
+                posteriors[:, inds] = session.run(
+                    model.posteriors, 
+                    feed_dict=feed_dict).T
+    else:
+        feed_dict = {model.x: X}
+        feed_dict.update(extra_feed_dict)
+        posteriors = session.run(
+            model.posteriors, feed_dict=feed_dict)
+        if not(col):
+            posteriors = posteriors.T
         
     return posteriors
 
