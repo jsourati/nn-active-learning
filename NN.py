@@ -425,7 +425,7 @@ class AlexNet_CNN(AlexNet):
         self.accuracy = tf.reduce_mean(
             tf.cast(correct_pred, tf.float32))
         
-    def get_gradients(self):
+    def get_gradients(self, start_layer=0):
         """Forming gradients of the log-posteriors
         """
         
@@ -434,7 +434,7 @@ class AlexNet_CNN(AlexNet):
         for j in range(c):
             self.grad_log_posts.update(
                 {str(j): tf.gradients(tf.log(self.posteriors)[0, j], 
-                                      self.pars)})
+                                      self.pars[start_layer*2:])})
 
         
     def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):

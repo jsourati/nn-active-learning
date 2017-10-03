@@ -287,7 +287,12 @@ def CNN_query(model, k, B, pool_X, method, session,
             sel_inds = np.arange(B)
             
         # forming A-matrices
-        layer_num = int(len(model.pars) / 2)
+        # division by two in computing size of A is because 
+        # in each layer we have gradients with respect to
+        # weights and bias terms --> number of layers that
+        # are considered is obtained after dividing by 2
+        A_size = int(
+            len(model.grad_log_posts['0'])/2)
         c = posteriors.shape[0]
         A = []
         for i in range(B):
@@ -300,13 +305,13 @@ def CNN_query(model, k, B, pool_X, method, session,
             grads = session.run(model.grad_log_posts, 
                                 feed_dict=feed_dict)
 
-            Ai = np.zeros((layer_num, layer_num))
+            Ai = np.zeros((A_size, A_size))
             for j in range(c):
                 shrunk_grad = NNAL_tools.shrink_gradient(
                     grads[str(j)], 'sum')
                 Ai += sel_posteriors[j,i]*np.outer(
                     shrunk_grad, 
-                    shrunk_grad) + np.eye(layer_num)*1e-5
+                    shrunk_grad) + np.eye(A_size)*1e-5
             
             print(i, end=',')
             
@@ -478,7 +483,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             model.initialize_graph(
                 session, addr=save_path)
         
-        model.get_gradients()
+        model.get_gradients(2)
         session.graph.finalize()
         test_acc += [NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
