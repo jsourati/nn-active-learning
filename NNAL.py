@@ -4,7 +4,9 @@ import pdb
 import sys
 import pickle
 import warnings
+import time
 import os
+
 import NN
 import NNAL_tools
 from cvxopt import matrix, solvers
@@ -237,23 +239,39 @@ def CNN_query(model, k, B, pool_X, method, session,
         print("Computing the scores..")
         c = posteriors.shape[0]
         scores = np.zeros(B)
+        T = len(model.grad_log_posts['0'])
         for i in range(B):
             # gradients of samples one-by-one
-            feed_dict = {
-                model.x:np.expand_dims(
-                    pool_X[sel_inds[i],:,:,:], axis=0)
-                }
+            feed_dict = {model.x:np.expand_dims(
+                    pool_X[sel_inds[i],:,:,:], 
+                    axis=0)}
             feed_dict.update(extra_feed_dict)
-            grads = session.run(
-                model.grad_log_posts, 
-                feed_dict=feed_dict)
-
-            T = len(grads['0'])
-            for j in range(c):
-                class_score = 0.
+            
+            if c < 20:
+                grads = session.run(
+                    model.grad_log_posts, 
+                    feed_dict=feed_dict)
+                sel_classes = np.arange(c)
+            else:
+                # if the number of classes is large,
+                # compute gradients of the largest twenty
+                # posteriors
+                sel_classes = np.argsort(
+                    -sel_posteriors[:,i])[:10]
+                sel_classes_grads = {
+                    str(cc): model.grad_log_posts[str(cc)]
+                    for cc in sel_classes
+                    }
+                grads = session.run(sel_classes_grads, 
+                                    feed_dict=feed_dict)
+                
+            for j in range(len(sel_classes)):
+                class_score = 0.        
                 for t in range(T):
-                    class_score += np.sum(grads[str(j)][t]**2)
-                scores[i] += class_score*sel_posteriors[j,i]
+                    class_score += np.sum(
+                        grads[str(sel_classes[j])][t]**2)
+                    scores[i] += class_score*sel_posteriors[
+                        sel_classes[j],i]
                 
             print(i, end=',')
 
@@ -302,18 +320,40 @@ def CNN_query(model, k, B, pool_X, method, session,
                     pool_X[sel_inds[i],:,:,:], axis=0)
                 }
             feed_dict.update(extra_feed_dict)
-            grads = session.run(model.grad_log_posts, 
-                                feed_dict=feed_dict)
+
+            if c < 20:
+                grads = session.run(model.grad_log_posts, 
+                                    feed_dict=feed_dict)
+                sel_classes = np.arange(c)
+                new_posts = sel_posteriors[:,i]
+            else:
+                # if the number of classes is large,
+                # compute gradients of the largest twenty
+                # posteriors
+                sel_classes = np.argsort(
+                    -sel_posteriors[:,i])[:10]
+                sel_classes_grads = {
+                    str(cc): model.grad_log_posts[str(cc)]
+                    for cc in sel_classes
+                    }
+                # normalizing posteriors of the selected classes
+                new_posts = sel_posteriors[sel_classes, i]
+                new_posts /= np.sum(new_posts)
+                # gradients for the selected classes
+                grads = session.run(sel_classes_grads, 
+                                    feed_dict=feed_dict)
 
             Ai = np.zeros((A_size, A_size))
-            for j in range(c):
+            
+            for j in range(len(sel_classes)):
                 shrunk_grad = NNAL_tools.shrink_gradient(
-                    grads[str(j)], 'sum')
-                Ai += sel_posteriors[j,i]*np.outer(
+                    grads[str(sel_classes[j])], 'sum')
+                Ai += new_posts[j]*np.outer(
                     shrunk_grad, 
                     shrunk_grad) + np.eye(A_size)*1e-5
             
-            print(i, end=',')
+            if not(i%10):
+                print(i, end=',')
             
             A += [Ai]
         # SDP
@@ -423,7 +463,7 @@ def run_CNNAL(A, init_X_train, init_Y_train,
                 A.train_graph_one_epoch(new_X_train, new_Y_train, 
                                         train_batch, session)
                 print(i, end=', ')
-
+            
             test_acc += [A.accuracy.eval(
                     feed_dict={A.x: X_test, A.y_:Y_test})]
             print()
@@ -432,7 +472,6 @@ def run_CNNAL(A, init_X_train, init_Y_train,
             
     return np.array(test_acc), np.append(0, np.array(query_num))
             
-
 
 def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                    learning_rate, dropout_rate, epochs, 
@@ -483,7 +522,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             model.initialize_graph(
                 session, addr=save_path)
         
-        model.get_gradients(2)
+        model.get_gradients(3)
         session.graph.finalize()
         test_acc += [NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
@@ -503,6 +542,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         print(20*'-' + '  Querying  ' +20*"-")
         t = 0
         while sum(query_num) < max_queries:
+            T1 = time.time()
             print("Iteration %d: "% t)
             extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
             Q_inds = CNN_query(model, k, B, new_X_pool, 
@@ -526,12 +566,18 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 model.train_graph_one_epoch(new_X_train, new_Y_train, 
                                             train_batch_size, session)
                 print(i, end=', ')
-
+                
+            print()
+            T2 = time.time()
+            dT = (T2 - T1) / 60
+            print("This iteration took %f m"% dT)
+            
             test_acc += [NNAL_tools.batch_accuracy(
                     model, X_test, Y_test, 
                     eval_batch_size, session, col=False)]
-            print()
+            #print()
             print('Test accuracy: %g' %test_acc[t+1])
             t += 1
             
     return np.array(test_acc), np.append(0, np.array(query_num))
+
