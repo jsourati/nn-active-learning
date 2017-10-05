@@ -272,8 +272,8 @@ def CNN_query(model, k, B, pool_X, method, session,
                         grads[str(sel_classes[j])][t]**2)
                     scores[i] += class_score*sel_posteriors[
                         sel_classes[j],i]
-                
-            print(i, end=',')
+            if not(i%10):
+                print(i, end=',')
 
         # select the highest k scores
         Q_inds = sel_inds[np.argsort(-scores)[:k]]
@@ -475,9 +475,10 @@ def run_CNNAL(A, init_X_train, init_Y_train,
 
 def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                    learning_rate, dropout_rate, epochs, 
-                   k, B, method, max_queries, 
-                   train_batch_size=50, eval_batch_size=None, 
-                   save_path=None):
+                   k, B, methods, max_queries, 
+                   train_batch_size, model_save_path,
+                   results_save_path,
+                   eval_batch_size=None):
     """Running active learning algorithms on a
     pre-trained AlexNet
     
@@ -491,7 +492,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     
     Hence, we are using a publicly available piece of code,
     which is written by Frederik Kratzert in his blog 
-    https://kratzert.github.io/2017/02/24/finetuning-alexnet-with-tensorflow.html
+    https://kratzert.github.io/2017/02/24/finetuning-alexnet-
+    with-tensorflow.html
     for fine-tuning pre-trained AlexNet in TensorFlow given 
     any labeled data set.
     """
@@ -506,78 +508,105 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     # -------------------------
     # preparing variables
     c = Y_pool.shape[1]
-    x = tf.placeholder(tf.float32, [None, 227, 227, 3])
     
+    accs = {method:[] for method in methods}
+    fi_queries = []
+
+    tf.reset_default_graph()
+    x = tf.placeholder(tf.float32, 
+                       [None, 227, 227, 3])
     # creating the model
     model = NN.AlexNet_CNN(
         x, dropout_rate, c, skip_layer, weights_path)
     model.get_optimizer(learning_rate)
-    
-    test_acc = []
+    # getting the gradient operations
+    model.get_gradients()
     saver = tf.train.Saver()
     with tf.Session() as session:
-        if os.path.isfile(save_path+'.index'):
-            saver.restore(session, save_path)
+        if os.path.isfile(model_save_path+'.index'):
+            # load the graph
+            saver.restore(session, model_save_path)
         else:
-            model.initialize_graph(
-                session, addr=save_path)
-        
-        model.get_gradients(3)
+            # initialization
+            model.initialize_graph(session)
+            # save the graph
+            saver.save(session, model_save_path)
+            
         session.graph.finalize()
-        test_acc += [NNAL_tools.batch_accuracy(
+        init_acc = NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
-                eval_batch_size, session, col=False)]
+                eval_batch_size, session, col=False)
         print()
-        print('Test accuracy: %g' %test_acc[0])
-
-        # start querying
-        new_X_train = np.zeros((0,)+X_pool.shape[1:])
-        new_Y_train = np.zeros((0,c))
-        new_X_pool, new_Y_pool = X_pool, Y_pool
+        print('Test accuracy: %g' %init_acc)
         
-        # number of selected in each iteration is useful
-        # when samling from a distribution and repeated
-        # queries might be present
-        query_num = []
-        print(20*'-' + '  Querying  ' +20*"-")
-        t = 0
-        while sum(query_num) < max_queries:
-            T1 = time.time()
-            print("Iteration %d: "% t)
-            extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
-            Q_inds = CNN_query(model, k, B, new_X_pool, 
-                               method, session, eval_batch_size, 
-                               False, extra_feed_dict)
-            query_num += [len(Q_inds)]
-            print('Query index: '+' '.join(str(q) for q in Q_inds))
-            # prepare data for another training
-            Q = new_X_pool[Q_inds,:,:,:]
-            #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
-            Y_Q = new_Y_pool[Q_inds,:]
-            # remove the selected queries from the pool
-            new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
-            new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=0)
-            # update the model
-            print("Updating the model: ", end='')
-            new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
-                new_X_train, new_Y_train.T, Q, Y_Q.T, 200+t, train_batch_size)
-            new_Y_train = new_Y_train.T
-            for i in range(epochs):
-                model.train_graph_one_epoch(new_X_train, new_Y_train, 
-                                            train_batch_size, session)
-                print(i, end=', ')
+        for M in methods:
+            if M=='fi':
+                accs[M] += [init_acc]
+            else:
+                accs[M] = np.zeros(int(max_queries/k)+1)
+                accs[M][0] = init_acc
                 
-            print()
-            T2 = time.time()
-            dT = (T2 - T1) / 60
-            print("This iteration took %f m"% dT)
-            
-            test_acc += [NNAL_tools.batch_accuracy(
-                    model, X_test, Y_test, 
-                    eval_batch_size, session, col=False)]
-            #print()
-            print('Test accuracy: %g' %test_acc[t+1])
-            t += 1
-            
-    return np.array(test_acc), np.append(0, np.array(query_num))
+            if not(M==methods[0]):
+                saver.restore(session, model_save_path)
+                
+            # start querying
+            new_X_train = np.zeros((0,)+X_pool.shape[1:])
+            new_Y_train = np.zeros((0,c))
+            new_X_pool, new_Y_pool = X_pool, Y_pool
 
+            # number of selected in each iteration is useful
+            # when samling from a distribution and repeated
+            # queries might be present
+            query_num = [0]
+            fi_query_num = [0]
+            print(20*'-' + '  Querying  ' +20*"-")
+            t = 0
+            while sum(query_num) < max_queries:
+                #T1 = time.time()
+                print("Iteration %d: "% t)
+                extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
+                Q_inds = CNN_query(model, k, B, new_X_pool, 
+                                   M, session, eval_batch_size, 
+                                   False, extra_feed_dict)
+                query_num += [len(Q_inds)]
+                print('Query index: '+' '.join(str(q) for q in Q_inds))
+                # prepare data for another training
+                Q = new_X_pool[Q_inds,:,:,:]
+                #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
+                Y_Q = new_Y_pool[Q_inds,:]
+                # remove the selected queries from the pool
+                new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
+                new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=0)
+                # update the model
+                print("Updating the model: ", end='')
+                new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
+                    new_X_train, new_Y_train.T, 
+                    Q, Y_Q.T, 200+t, train_batch_size)
+                new_Y_train = new_Y_train.T
+                for i in range(epochs):
+                    model.train_graph_one_epoch(new_X_train, new_Y_train, 
+                                                train_batch_size, session)
+                    print(i, end=', ')
+
+                print()
+                #T2 = time.time()
+                #dT = (T2 - T1) / 60
+                #print("This iteration took %f m"% dT)
+                
+                iter_acc = NNAL_tools.batch_accuracy(
+                    model, X_test, Y_test, 
+                    eval_batch_size, session, col=False)
+                
+                t += 1
+                if M=='fi':
+                    accs[M] += [iter_acc]
+                    fi_query_num += [len(Q_inds)]
+                else:
+                    accs[M][t] = iter_acc
+                    
+                #print()
+                print('Test accuracy: %g' % iter_acc)
+            pickle.dump([accs, fi_query_num], 
+                        open(results_save_path, 'wb'))
+
+    return accs, fi_query_num
