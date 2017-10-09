@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 
 import NNAL
+import pdb
 from NNAL_tools import test_training_part
 
 #data_path = sys.argv[1]
@@ -45,7 +46,7 @@ runs = 10
 max_queries = 100
 
 
-methods = ['random', 'entropy', 'egl', 'rep-entropy', 'fi']
+methods = ['random', 'entropy',  'rep-entropy', 'fi']
 accs = {}
 fi_queries = []
 for i in range(len(methods)):
@@ -59,43 +60,10 @@ for i in range(len(methods)):
 for t in range(runs):
     print(20*'-' + '  Run number %d  '% t +20*"-")
     
-    accs_t, fi_queries_t = NNAL.run_AlexNet_AL(
-        train_CalDat, train_CalLabels, test_CalDat, test_CalLabels, 
-        learning_rate, dropout_rate, epochs, k, B, methods, 
-        max_queries, train_batch_size, 
-        '%s_init_%d.ckpt'% (model_save_path, t),
-        '%s_%d.dat'% (results_save_path, t),
-        eval_batch_size)
-
-    # learning parameters
-epochs = 10
-learning_rate = 1e-3
-dropout_rate = 0.5
-train_batch_size = 50
-eval_batch_size = 100
-
-# querying parameters
-k = 10
-B = 150
-runs = 1
-max_queries = 100
-
-methods = ['random', 'entropy', 'egl', 'rep-entropy', 'fi']
-accs = {}
-fi_queries = []
-for i in range(len(methods)):
-    if methods[i]=='fi':
-        accs.update({methods[i]: []})
-    else:
-        accs.update({methods[i]: 
-                     np.zeros((runs, int(max_queries/k)+1))})
-
-accs,fi_queries = pickle.load(open('%s_accs_%d.dat'% (results_savt_path, t), 'rb'))
-    
-# querying
-# -----------------
-for t in range(runs):
-    print(20*'-' + '  Run number %d  '% t +20*"-")
+    # get some initial data set
+    init_size = 400
+    rand_inds = np.random.permutation(train_CalDat.shape[0])[:init_size]
+    init_train_dat = [train_CalDat[rand_inds,:,:], train_CalLabels[rand_inds,:]]
     
     accs_t, fi_queries_t = NNAL.run_AlexNet_AL(
         train_CalDat, train_CalLabels, test_CalDat, test_CalLabels, 
@@ -103,14 +71,7 @@ for t in range(runs):
         max_queries, train_batch_size, 
         '%s_init_%d.ckpt'% (model_save_path, t),
         '%s_%d.dat'% (results_save_path, t),
-        eval_batch_size)
-    
-    for M in methods:
-        if M=='fi':
-            accs[M] += [accs_t[M]]
-            fi_queries += [fi_queries_t]
-        else:
-            accs[M][t,:] = accs_t[M]
-            
+        eval_batch_size, init_train_dat)
+
     pickle.dump([accs, fi_queries], 
-                open('%s_accs_%d.dat'% (results_savt_path, t), 'wb'))
+                open('%s_accs_%d.dat'% (results_save_path, t), 'wb'))
