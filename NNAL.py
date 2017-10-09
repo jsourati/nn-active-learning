@@ -512,46 +512,50 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     
     accs = {method:[] for method in methods}
     fi_queries = []
+    
+    with tf.device('/gpu:0'):
+        tf.reset_default_graph()
+        x = tf.placeholder(tf.float32, 
+                           [None, 227, 227, 3])
+        # creating the model
+        model = NN.AlexNet_CNN(
+            x, dropout_rate, c, skip_layer, weights_path)
+        model.get_optimizer(learning_rate)
+        # getting the gradient operations
+        model.get_gradients(3)
+        saver = tf.train.Saver()
 
-    tf.reset_default_graph()
-    x = tf.placeholder(tf.float32, 
-                       [None, 227, 227, 3])
-    # creating the model
-    model = NN.AlexNet_CNN(
-        x, dropout_rate, c, skip_layer, weights_path)
-    model.get_optimizer(learning_rate)
-    # getting the gradient operations
-    model.get_gradients(6)
-    saver = tf.train.Saver()
     with tf.Session() as session:
-        if os.path.isfile(model_save_path+'.index'):
-            # load the graph
-            saver.restore(session, model_save_path)
-        else:
-            # initialization
-            model.initialize_graph(session)
-            # save the graph
-            saver.save(session, model_save_path)
-            
-        session.graph.finalize()
+
+        # initialization
+        model.initialize_graph(session)
         
         # if an initial training data is given..
         if init_train_dat:
+            print("Initializing the model")
             init_X_train = init_train_dat[0]
             init_Y_train = init_train_dat[1]
             for i in range(epochs):
                 model.train_graph_one_epoch(
                     init_X_train, init_Y_train, 
                     train_batch_size, session)
+                
+        if os.path.isfile(model_save_path+'.index'):
+            # load the graph
+            saver.restore(session, model_save_path)
+        else:
+            # save the graph
+            saver.save(session, model_save_path)
             
+        session.graph.finalize()
             
         init_acc = NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
                 eval_batch_size, session, col=False)
-        print()
-        print('Test accuracy: %g' %init_acc)
         
         for M in methods:
+            print('Test accuracy: %g' %init_acc)
+
             if M=='fi':
                 accs[M] += [init_acc]
             else:
