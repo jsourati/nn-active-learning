@@ -361,7 +361,8 @@ def CNN_query(model, k, B, pool_X, method, session,
         soln = NNAL_tools.SDP_query_distribution(A, k)
         print('status: %s'% (soln['status']))
         q_opt = np.array(soln['x'][:B])
-
+        
+        # sampling from the optimal solution
         Q_inds = NNAL_tools.sample_query_dstr(
             q_opt, k, replacement=True)
         Q_inds = sel_inds[Q_inds]
@@ -477,8 +478,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                    learning_rate, dropout_rate, epochs, 
                    k, B, methods, max_queries, 
                    train_batch_size, model_save_path,
-                   results_save_path,
-                   eval_batch_size=None):
+                   results_save_path, eval_batch_size=None,
+                   init_train_dat=None):
     """Running active learning algorithms on a
     pre-trained AlexNet
     
@@ -520,7 +521,7 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         x, dropout_rate, c, skip_layer, weights_path)
     model.get_optimizer(learning_rate)
     # getting the gradient operations
-    model.get_gradients()
+    model.get_gradients(6)
     saver = tf.train.Saver()
     with tf.Session() as session:
         if os.path.isfile(model_save_path+'.index'):
@@ -533,6 +534,17 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             saver.save(session, model_save_path)
             
         session.graph.finalize()
+        
+        # if an initial training data is given..
+        if init_train_dat:
+            init_X_train = init_train_dat[0]
+            init_Y_train = init_train_dat[1]
+            for i in range(epochs):
+                model.train_graph_one_epoch(
+                    init_X_train, init_Y_train, 
+                    train_batch_size, session)
+            
+            
         init_acc = NNAL_tools.batch_accuracy(
                 model, X_test, Y_test, 
                 eval_batch_size, session, col=False)
@@ -550,9 +562,12 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 saver.restore(session, model_save_path)
                 
             # start querying
-            new_X_train = np.zeros((0,)+X_pool.shape[1:])
-            new_Y_train = np.zeros((0,c))
-            new_X_pool, new_Y_pool = X_pool, Y_pool
+            if init_train_dat:
+                X_train = init_X_train
+                Y_train = init_Y_train
+            else:
+                X_train = np.zeros((0,)+X_pool.shape[1:])
+                Y_train = np.zeros((0,c))
 
             # number of selected in each iteration is useful
             # when samling from a distribution and repeated
@@ -565,27 +580,28 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 #T1 = time.time()
                 print("Iteration %d: "% t)
                 extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
-                Q_inds = CNN_query(model, k, B, new_X_pool, 
+                Q_inds = CNN_query(model, k, B, X_pool, 
                                    M, session, eval_batch_size, 
                                    False, extra_feed_dict)
                 query_num += [len(Q_inds)]
                 print('Query index: '+' '.join(str(q) for q in Q_inds))
                 # prepare data for another training
-                Q = new_X_pool[Q_inds,:,:,:]
+                Q = X_pool[Q_inds,:,:,:]
                 #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
-                Y_Q = new_Y_pool[Q_inds,:]
+                Y_Q = Y_pool[Q_inds,:]
                 # remove the selected queries from the pool
-                new_X_pool = np.delete(new_X_pool, Q_inds, axis=0)
-                new_Y_pool = np.delete(new_Y_pool, Q_inds, axis=0)
+                X_pool = np.delete(X_pool, Q_inds, axis=0)
+                Y_pool = np.delete(Y_pool, Q_inds, axis=0)
                 # update the model
                 print("Updating the model: ", end='')
-                new_X_train, new_Y_train = NNAL_tools.prepare_finetuning_data(
-                    new_X_train, new_Y_train.T, 
+                X_train, Y_train = NNAL_tools.prepare_finetuning_data(
+                    X_train, Y_train.T, 
                     Q, Y_Q.T, 200+t, train_batch_size)
-                new_Y_train = new_Y_train.T
+                Y_train = Y_train.T
                 for i in range(epochs):
-                    model.train_graph_one_epoch(new_X_train, new_Y_train, 
-                                                train_batch_size, session)
+                    model.train_graph_one_epoch(
+                        X_train, Y_train, 
+                        train_batch_size, session)
                     print(i, end=', ')
 
                 print()
@@ -604,8 +620,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 else:
                     accs[M][t] = iter_acc
                     
-                #print()
                 print('Test accuracy: %g' % iter_acc)
+
             pickle.dump([accs, fi_query_num], 
                         open(results_save_path, 'wb'))
 
