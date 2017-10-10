@@ -369,6 +369,8 @@ class AlexNet_CNN(AlexNet):
         """
         
         n = X.shape[0]
+        # do not drop-out any nodes when extracting features
+        
         if batch_size:
             d = self.feature_layer.shape[1].value
             features = np.zeros((d, n))
@@ -383,14 +385,14 @@ class AlexNet_CNN(AlexNet):
                 features[:,inds] = session.run(
                     self.feature_layer, 
                     feed_dict={self.x:iter_X, 
-                               self.KEEP_PROB:self.dropout_rate}
+                               self.KEEP_PROB:1.}
                     ).T
                 
         else:
             features = session.run(
                 self.feature_layer, 
                 feed_dict={self.x:X,
-                           self.KEEP_PROB:self.dropout_rate}
+                           self.KEEP_PROB: 1.}
                 ).T
             
         return features
