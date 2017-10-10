@@ -6,7 +6,7 @@ solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
-import cv2
+#import cv2
 import os
 import NN
 
@@ -500,27 +500,34 @@ def batch_accuracy(model, X, Y, batch_size, session, col=True):
         
     return acc/n
     
-def SDP_query_distribution(A, k):
+def SDP_query_distribution(A, X_pool, lambda_, k):
     """Solving SDP problem in FIR-based active learning
     to obtain the query distribution
     """
     
     n = len(A)
-    d = A[0].shape[0]
+    d = X_pool.shape[0]
+    tau = A[0].shape[0]
+    
+    pool_norms = np.sum(X_pool**2, axis=0)
     
     """Preparing the variables"""
     # vector c (in the objective)
     cvec = matrix(
-            np.concatenate((np.zeros(n), 
-                            np.ones(d)))
+            np.concatenate((-lambda_*pool_norms, 
+                            np.ones(tau)))
             )
     # matrix inequality constraints
     G, h = inequality_cvx_matrix(A)
     # equality constraint (for having probabilities)
+    left_A = np.concatenate((X_pool, np.ones((1, n))), axis=0)
     A_eq = matrix(
-            np.concatenate((np.ones(n), 
-                            np.zeros(d)))).trans()
-    b_eq = matrix(1.)
+        np.concatenate((left_A, np.zeros((d+1, tau))), axis=1))
+    
+    b_eq = np.zeros(d+1)
+    b_eq[-1] = 1.
+    b_eq = matrix(b_eq)
+    pdb.set_trace()
     
     """Solving SDP"""
     soln = solvers.sdp(cvec, Gs=G, hs=h, A=A_eq, b=b_eq)

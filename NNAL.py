@@ -311,7 +311,8 @@ def CNN_query(model, k, B, pool_X, method, session,
         # are considered is obtained after dividing by 2
         A_size = int(
             len(model.grad_log_posts['0'])/2)
-        c = posteriors.shape[0]
+        c,n = posteriors.shape
+
         A = []
         for i in range(B):
             # gradients of samples one-by-one
@@ -356,9 +357,16 @@ def CNN_query(model, k, B, pool_X, method, session,
                 print(i, end=',')
             
             A += [Ai]
+            
+        # extracting features for pool samples
+        pdb.set_trace()
+        F = model.extract_features(pool_X, session, batch_size)
+        F -= np.repeat(
+            np.expand_dims(np.mean(F, axis=1), axis=1), 
+            n, axis=1)
         # SDP
         print('Solving SDP..')
-        soln = NNAL_tools.SDP_query_distribution(A, k)
+        soln = NNAL_tools.SDP_query_distribution(A, F, 1., k)
         print('status: %s'% (soln['status']))
         q_opt = np.array(soln['x'][:B])
         
