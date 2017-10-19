@@ -295,26 +295,28 @@ class CNN(object):
                 logits=tf.transpose(self.output)))
         
         # optimizer
-        self.train_step = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+        self.train_step = tf.train.AdamOptimizer(
+            learning_rate).minimize(loss)
         
         # define the accuracy
         correct_prediction = tf.equal(tf.argmax(self.output, 0), 
                                       tf.argmax(self.y_, 0))
-        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, 
+                                               tf.float32))
         
-    def get_gradients(self):
+    def get_gradients(self, start_layer=0):
         """Forming gradients of the log-posteriors
         """
         
         # collect all the trainable variabels
-        Theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 
-                                  scope=self.name)
+        gpars = tf.trainable_variables()[start_layer*2:]
         
         self.grad_log_posts = {}
         c = self.output.get_shape()[0].value
         for j in range(c):
             self.grad_log_posts.update(
-                {str(j): tf.gradients(tf.log(self.posteriors)[j, 0], Theta)})
+                {str(j): tf.gradients(tf.log(self.posteriors)[j, 0], 
+                                      gpars)})
 
         
     def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
@@ -326,17 +328,19 @@ class CNN(object):
         
         # random partitioning into batches
         train_size = X_train.shape[0]
-        batch_inds = prep_dat.gen_batch_inds(train_size, batch_size)
-        batch_of_data = prep_dat.gen_batch_tensors(X_train, batch_inds)
-        batch_of_labels = prep_dat.gen_batch_matrices(Y_train, batch_inds)
+        if train_size > batch_size:
+            batch_inds = prep_dat.gen_batch_inds(
+                train_size, batch_size)
+            batch_of_data = prep_dat.gen_batch_tensors(
+                X_train, batch_inds)
+            batch_of_labels = prep_dat.gen_batch_matrices(
+                Y_train, batch_inds, col=False)
+        else:
+            batch_of_data = [X_train]
+            batch_of_labels = [Y_train]
         
         # completing an epoch
         for j in range(len(batch_of_data)):
-            #if False:
-            #    acc = self.accuracy.eval(feed_dict={
-            #            self.x: batch_of_data[j], 
-            #            self.y_: batch_of_labels[j]})
-            
             session.run(self.train_step, 
                         feed_dict={self.x: batch_of_data[j], 
                                    self.y_: batch_of_labels[j]})
