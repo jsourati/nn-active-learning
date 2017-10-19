@@ -311,7 +311,8 @@ def CNN_query(model, k, B, pool_X, method, session,
         # are considered is obtained after dividing by 2
         A_size = int(
             len(model.grad_log_posts['0'])/2)
-        c = posteriors.shape[0]
+        c,n = posteriors.shape
+
         A = []
         for i in range(B):
             # gradients of samples one-by-one
@@ -356,9 +357,33 @@ def CNN_query(model, k, B, pool_X, method, session,
                 print(i, end=',')
             
             A += [Ai]
+            
+        # extracting features for pool samples
+        # using only few indices of the features
+        F = model.extract_features(
+            pool_X[sel_inds,:,:,:], session)
+        # selecting from those features that have the most
+        # non-zero values among the selected samples
+        nnz_feats = np.sum(F>0, axis=1)
+        feat_inds = np.argsort(-nnz_feats)[:B-1]
+        F_sel = F[feat_inds,:]
+        while np.linalg.matrix_rank(F_sel)<len(feat_inds):
+            # if the matrix is not full row-rank, discard
+            # the last selected index (worst among all)
+            feat_inds = feat_inds[:-1]
+            F_sel = F[feat_inds,:]
+            if len(feat_inds) < 10:
+                warnings.warn(
+                    "Few features (%d) are selected"% (
+                        len(feat_inds)))
+            
+        F_sel -= np.repeat(
+            np.expand_dims(np.mean(F_sel, axis=1), axis=1),
+            B, axis=1)
+        
         # SDP
         print('Solving SDP..')
-        soln = NNAL_tools.SDP_query_distribution(A, k)
+        soln = NNAL_tools.SDP_query_distribution(A, F_sel, 1., k)
         print('status: %s'% (soln['status']))
         q_opt = np.array(soln['x'][:B])
         
