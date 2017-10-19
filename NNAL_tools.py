@@ -6,9 +6,11 @@ solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
+import h5py
 #import cv2
 import os
 import NN
+import pickle
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -527,7 +529,6 @@ def SDP_query_distribution(A, X_pool, lambda_, k):
     b_eq = np.zeros(d+1)
     b_eq[-1] = 1.
     b_eq = matrix(b_eq)
-    pdb.set_trace()
     
     """Solving SDP"""
     soln = solvers.sdp(cvec, Gs=G, hs=h, A=A_eq, b=b_eq)
@@ -740,3 +741,122 @@ def resize_images(imgs, target_shape):
         resized_imgs[i,:,:,:] = resized
         
     return resized_imgs
+
+def filter_classes(categories_path, full_data_path, target_classes_path):
+    """Filering a data set to a specific subset of classes
+    
+    The main assumtion is that the `categories_folder` contains only
+    folders corresponding to different classes.
+    """
+    
+    full_data = pickle.load(open(full_data_path,'rb'))
+    full_labels = full_data[1]
+    
+    # get the list of all classes indices that correspond 
+    # to the same indexing within the loaded full data
+    #
+    # E.g., if the first folder is "airplanes", the index
+    # "0" in the `full_labels` should also correspond to
+    # "airplanes" class too.
+    #
+    # Note that in `prepare_data_4Alex()`, when reading data
+    # from all classes, the categories are read in an 
+    # order consistent with `os.listdir(categories_path)`,
+    # hence here we use the same function to list the
+    # categories.
+    class_names = os.listdir(categories_path)
+ 
+    # get the target classes
+    with open(target_classes_path, 'rb') as fname:
+        rows = fname.readlines()
+        
+    target_classes = [
+        row.strip().decode("utf-8") for row in rows]
+    
+    # filter these classes
+    new_images = np.empty((0,)+full_data[0][0,:,:,:].shape)
+    new_labels = []
+    for i, C in enumerate(target_classes):
+        class_idx = np.where(
+            np.array(class_names)==C)[0][0]
+        dat_idx = np.where(
+            np.array(full_labels)==class_idx)[0]
+        # adding data and labels
+        new_images = np.concatenate(
+            (new_images, full_data[0][dat_idx,:,:,:]), 
+            axis=0)
+        new_labels += len(dat_idx)*[i]
+        
+    return new_images, new_labels
+
+def read_pretrained_VGG19(weights_path):
+    """Reading weights of a pre-trained VGG-19
+    """
+    
+    W = h5py.File(weights_path)
+
+    # layers that inlcude trainable parameters in 
+    # the Keras model for which the weights are saved
+    related_layers = [1,3,6,8,11,13,15,17,20,22,24,26,
+                      29,31,33,35,38,40,42]
+
+    # extract the weights from the HDF5 file
+    pretrained_pars = []
+    for i in range(len(related_layers)):
+        pretrained_pars += [
+            [np.array(W['layer_'+str(related_layers[i])]['param_0']),
+             np.array(W['layer_'+str(related_layers[i])]['param_1'])]
+        ]
+        
+    return pretrained_pars
+
+def load_weights_VGG19(model, weights_path, session):
+    """Loading pre-trained weights to a given VGG model
+    """
+    
+    # reading the weights
+    pretrained_pars = read_pretrained_VGG19(weights_path)
+    
+    # network TF variable names
+    TF_var_names = list(model.var_dict.keys())
+    n_conv = 16
+    
+    # convolution layers
+    for i in range(n_conv):
+        # filters
+        # --------
+        # shape of the saved filters is of format:
+        # [out_channels, in_channels ,height, width]
+        # but our filters are in created in form of
+        # [height, width, in_channles, out_channels]
+        filter_tensor = pretrained_pars[i][0]
+        # swapping axes of the saved tensor
+        # in_channels <-> height
+        swapped_filter = np.swapaxes(filter_tensor, 1, 2)
+        # out_channles <-> height
+        swapped_filter = np.swapaxes(swapped_filter, 0, 1)
+        # out_channels <-> width
+        swapped_filter = np.swapaxes(swapped_filter, 1, 3)
+        
+        var = model.var_dict[TF_var_names[i]][0]
+        session.run(var.assign(swapped_filter))
+            
+        # biases
+        # -------
+        # these are easy to assign, since they are 1D 
+        # arrays and there is no flipping mismatches
+        var = model.var_dict[TF_var_names[i]][1]
+        session.run(var.assign(pretrained_pars[i][1]))
+
+    # FC layers
+    for i in range(n_conv, len(pretrained_pars)-1):
+        # matrix weight
+        # ------------
+        # again the matrices are transpose of each other
+        var = model.var_dict[TF_var_names[i]][0]
+        session.run(var.assign(pretrained_pars[i][0].T))
+        
+        # biases
+        # ------
+        var = model.var_dict[TF_var_names[i]][1]
+        session.run(var.assign(pretrained_pars[i][1]))
