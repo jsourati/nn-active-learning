@@ -502,8 +502,11 @@ def run_CNNAL(A, init_X_train, init_Y_train,
 def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                    learning_rate, dropout_rate, epochs, 
                    k, B, methods, max_queries, 
-                   train_batch_size, model_save_path,
-                   results_save_path, eval_batch_size=None,
+                   train_batch_size, 
+                   model_save_path,
+                   results_save_path, 
+                   index_save_path=None,
+                   eval_batch_size=None,
                    init_train_dat=None):
     """Running active learning algorithms on a
     pre-trained AlexNet
@@ -613,6 +616,17 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                                    M, session, eval_batch_size, 
                                    False, extra_feed_dict)
                 query_num += [len(Q_inds)]
+                # save the queries if necessary:
+                if index_save_path:
+                    # create the path if necessary
+                    if not(os.path.exists('%s/%s'% (index_save_path, M))):
+                        os.mkdir('%s/%s'% (index_save_path, M))
+                    # the query indices are based on rows of
+                    # pool_inds.txt
+                    np.savetxt(
+                        '%s/%s/Q-%d.txt'% (index_save_path, M, t), 
+                        Q_inds, fmt='%d')
+                
                 print('Query index: '+' '.join(str(q) for q in Q_inds))
                 # prepare data for another training
                 Q = X_pool[Q_inds,:,:,:]
