@@ -859,4 +859,5 @@ def load_weights_VGG19(model, weights_path, session):
         # biases
         # ------
         var = model.var_dict[TF_var_names[i]][1]
-        session.run(var.assign(pretrained_pars[i][1]))
+        session.run(var.assign(np.expand_dims(
+                    pretrained_pars[i][1], axis=1)))
