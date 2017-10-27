@@ -373,8 +373,8 @@ class AlexNet_CNN(AlexNet):
         """
         
         n = X.shape[0]
+
         # do not drop-out any nodes when extracting features
-        
         if batch_size:
             d = self.feature_layer.shape[1].value
             features = np.zeros((d, n))
@@ -437,10 +437,18 @@ class AlexNet_CNN(AlexNet):
         
         self.grad_log_posts = {}
         c = self.output.get_shape()[1].value
+        
+        # ys
+        gpars = self.pars[start_layer*2:]
+
         for j in range(c):
             self.grad_log_posts.update(
-                {str(j): tf.gradients(tf.log(self.posteriors)[0, j], 
-                                      self.pars[start_layer*2:])})
+                {str(j): tf.gradients(
+                        ys=tf.log(self.posteriors)[0, j], 
+                        xs=gpars,
+                        grad_ys=1.)
+                 }
+                )
 
         
     def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
