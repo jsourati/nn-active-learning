@@ -538,8 +538,13 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
     # preparing variables
     c = Y_pool.shape[1]
     
-    accs = {method:[] for method in methods}
-    fi_queries = []
+    if os.path.isfile('%s/results.dat'% index_save_path):
+        print('Some results already exist..')
+        accs, fi_queries = pickle.load(
+            '%s/results.dat'% index_save_path)
+    else:
+        accs = {method:[] for method in methods}
+        fi_query_num = [0]
     
     with tf.device('/gpu:0'):
         tf.reset_default_graph()
@@ -581,9 +586,13 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 model, X_test, Y_test, 
                 eval_batch_size, session, col=False)
         
+        extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
         for M in methods:
             print('Test accuracy: %g' %init_acc)
-
+            
+            if os.path.exists('%s/%s'% (index_save_path, M)):
+                continue
+            
             if M=='fi':
                 accs[M] += [init_acc]
             else:
@@ -604,18 +613,16 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
             # number of selected in each iteration is useful
             # when samling from a distribution and repeated
             # queries might be present
-            query_num = [0]
-            fi_query_num = [0]
+            query_num = 0
             print(20*'-' + '  Querying  ' +20*"-")
             t = 0
-            while sum(query_num) < max_queries:
+            while query_num < max_queries:
                 #T1 = time.time()
                 print("Iteration %d: "% t)
-                extra_feed_dict = {model.KEEP_PROB: model.dropout_rate}
                 Q_inds = CNN_query(model, k, B, X_pool, 
                                    M, session, eval_batch_size, 
                                    False, extra_feed_dict)
-                query_num += [len(Q_inds)]
+                query_num += len(Q_inds)
                 # save the queries if necessary:
                 if index_save_path:
                     # create the path if necessary
@@ -664,7 +671,8 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                     accs[M][t] = iter_acc
                     
                 print('Test accuracy: %g' % iter_acc)
-
+                
+            #pdb.set_trace()
             pickle.dump([accs, fi_query_num], 
                         open(results_save_path, 'wb'))
 
