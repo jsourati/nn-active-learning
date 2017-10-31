@@ -6,7 +6,7 @@ import pdb
 import os
 
 import tensorflow as tf
-
+import NNAL_tools
 
 class Experiment(object):
     """class of an active learning experiments
@@ -31,7 +31,7 @@ class Experiment(object):
         
         self.root_dir = root_dir
         # create the directory if not existed
-        if os.path.exists(root_dir):
+        if not(os.path.exists(root_dir)):
             os.mkdir(root_dir)
         
         img_path_list_f = os.path.join(
@@ -41,35 +41,38 @@ class Experiment(object):
         
         if os.path.isfile(img_path_list_f):
             # load the data and ignore the input
-            f = open(img_path_list_f, 'rb')
-            self.img_path_list = f.readlines()
-            f.close()
+            with open(img_path_list_f, 'r') as f:
+                self.img_path_list = f.readlines()
         else:
             self.img_path_list = img_path_list
-            f = open(img_path_list_f, 'wb')
-            # writing paths into a file
-            for path in img_path_list:
-                f.write('%s\n'% path)
-            f.close()
+            with open(img_path_list_f, 'a') as f:
+                # writing paths into a file
+                for path in img_path_list:
+                    f.write('%s\n'% path)
         
         if os.path.isfile(labels_f):
-            self.labels = np.int32(np.loadtxt(labels_f))
+            labels = np.int32(np.loadtxt(labels_f))
+            if labels.ndim>1:
+                self.labels=labels
+                return
+
+        # if labels are not in a hot-one form
+        # transform it
+        if np.array(labels).ndim==1:
+            symbols = np.unique(labels)
+            c = len(symbols)
+            hot_labels = np.zeros((c, len(labels)))
+            for i in range(len(labels)):
+                label_ind = np.where(
+                    symbols==labels[i])[0]
+                hot_labels[label_ind,i] = 1.
+
+            self.labels = hot_labels
         else:
-            # if labels are not in a hot-one form
-            # transform it
-            if np.array(labels).ndim==1:
-                symbols = np.unique(labels)
-                c = len(symbols)
-                hot_labels = np.zeros((c, len(labels)))
-                for i in range(len(labels)):
-                    label_ind = np.where(
-                        symbols==labels[i])[0]
-                    hot_labels[label_ind,i] = 1.
-                self.labels = hot_labels
-            else:
-                self.labels = labels
-            # writing the labels into a file
-            np.savetxt(labels_f, labels, fmt='%d')
+            self.labels = labels
+                
+        # writing the labels into a file
+        np.savetxt(labels_f, self.labels, fmt='%d')
         
         # if there are parameter given, write them
         # into a text file to be used later
@@ -112,7 +115,11 @@ class Experiment(object):
         
         # assuming that the root directory has only 
         # folders of the runs
-        return os.listdir(self.root_dir)
+        return [
+            d for d in os.listdir(self.root_dir) 
+            if os.path.isdir(
+                os.path.join(self.root_dir,d))
+            ]
         
     def remove_run(self, run):
         """Removing a given run by deleting the folder,
@@ -155,7 +162,7 @@ class Experiment(object):
         saver = tf.train.Saver()
         saver.restore(sess, model_path)
         
-    def add_run(self, init_size):
+    def add_run(self):
         """Adding a run to this experiment
         
         Each run will have its own random partitioning
@@ -176,14 +183,16 @@ class Experiment(object):
         # preparing the indices
         # -----------------------
         # test-training partitioning
-        train_inds, test_inds = test_training_part(
-            self.hot_labels.T, self.pars['test_ratio'])
+        train_inds, test_inds = NNAL_tools.test_training_part(
+            self.labels, self.pars['test_ratio'])
         
         # getting the initial and pool indices
         ntrain = len(train_inds)
         rand_inds = np.random.permutation(ntrain)
-        init_train_inds = train_inds[rand_inds[:init_size]]
-        pool_inds = train_inds[rand_inds[init_size:]]
+        init_train_inds = train_inds[
+            rand_inds[:self.pars['init_size']]]
+        pool_inds = train_inds[
+            rand_inds[self.pars['init_size']:]]
         
         # saving indices into the run's folder
         np.savetxt('%s/train_inds.txt'% run_path, 
@@ -197,19 +206,21 @@ class Experiment(object):
         
         # creating an initial initial model
         # -------------------------
+        print('Initializing a model for this run..')
         # create the NN model
         nclass = self.labels.shape[0]
         model = NN.create_Alex(
             self.pars['dropout_rate'], 
             nclass, 
-            self.pars['pre_weights_path'], 
+            self.pars['learning_rate'], 
             self.pars['starting_layer'])
 
         saver = tf.train.Saver()
         # start a session to do the training
         with tf.Session() as sess:
             # training from initial training data
-            model.initialize_graph(sess)
+            model.initialize_graph(
+                sess, self.pars['pre_weights_path'])
             model.train_graph_one_epoch(
                 self, 
                 init_train_inds, 
