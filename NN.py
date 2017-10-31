@@ -344,24 +344,27 @@ class CNN(object):
             session.run(self.train_step, 
                         feed_dict={self.x: batch_of_data[j], 
                                    self.y_: batch_of_labels[j]})
+        
+        
     
 class AlexNet_CNN(AlexNet):
     """
     """
     
-    def __init__(self, x, dropout_rate, c, skip_layer, weights_path):
+    def __init__(self, x, dropout_rate, c, skip_layer):
         self.x = x
         self.dropout_rate = dropout_rate
         keep_prob = tf.placeholder(tf.float32)
         AlexNet.__init__(self, self.x, keep_prob, c, 
-                         skip_layer, weights_path)
+                         skip_layer)
         self.output = self.fc8
         self.posteriors = tf.nn.softmax(self.output)
-        self.weights_path = weights_path
         
         
-    def initialize_graph(self, session, addr=None):
+    def initialize_graph(self, session,
+                         weights_path, addr=None):
         session.run(tf.global_variables_initializer())
+        self.WEIGHTS_PATH=weights_path
         self.load_initial_weights(session)
         if addr:
             saver = tf.train.Saver()
@@ -449,39 +452,77 @@ class AlexNet_CNN(AlexNet):
                         grad_ys=1.)
                  }
                 )
-
         
-    def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
-        """Randomly partition the data into batches and complete one
-        epoch of training
+    def train_graph_one_epoch(self, expr, train_inds, 
+                              batch_size, session):
+        """Randomly partition the data into batches 
+        and complete one epoch of training
         
-        Input feature vectors, `X_train` and labels, 
+        Input feature vectors, `X_train`, and labels, 
         `Y_train` are columnwise
         """
         
         # random partitioning into batches
-        train_size = X_train.shape[0]
+        train_size = len(train_inds)
         if train_size > batch_size:
             batch_inds = prep_dat.gen_batch_inds(
                 train_size, batch_size)
-            batch_of_data = prep_dat.gen_batch_tensors(
-                X_train, batch_inds)
-            batch_of_labels = prep_dat.gen_batch_matrices(
-                Y_train, batch_inds, col=False)
         else:
-            batch_of_data = [X_train]
-            batch_of_labels = [Y_train]
+            batch_inds = [train_inds]
         
         # completing an epoch
-        for j in range(len(batch_of_data)):
-            
+        for j in range(len(batch_inds)):
+            # create the 4D array of batch images
+            iter_inds = train_inds[batch_inds[j]]
+            batch_of_imgs, batch_of_labels = load_4D_batch(
+                expr.img_path_list, expr.labels, iter_inds)
             session.run(
                 self.train_step, 
-                feed_dict={self.x: batch_of_data[j], 
-                           self.y_: batch_of_labels[j],
+                feed_dict={self.x: batch_of_imgs, 
+                           self.y_: batch_of_labels,
                            self.KEEP_PROB: self.dropout_rate}
                 )
+            
+    def evaluate(self, expr, test_inds, 
+                 batch_size, session):
+        """Evaluating the model based on test indices
+        of a given exeriment
+        """
+        
+        test_size = len(test_inds)
+        if test_size > batch_size:
+            batch_inds = prep_dat.gen_batch_inds(
+                test_size, batch_size)
+        else:
+            batch_inds = [test_inds]
+            
+        for j in range(len(batch_inds)):
+            # create the 4D array of batch images
+            iter_inds = test_inds[batch_inds[j]]
+            batch_of_imgs, batch_of_labels = load_4D_batch(
+                expr.img_path_list, expr.labels, iter_inds)
+            session.run(
+                self.accuracy, 
+                feed_dict={self.x: batch_of_imgs, 
+                           self.y_: batch_of_labels,
+                           self.KEEP_PROB: 1.}
+                )
 
+def create_Alex(dropout_rate, c, learning_rate, starting_gr_layer):
+    """Creating an AlexNet model using `AlexNet_CNN` class
+    """
+    
+    x = tf.placeholder(tf.float32, [None, 227, 227, 3])
+    skip_layer = ['fc8']
+    model = AlexNet_CNN(
+        x, dropout_rate, c, skip_layer)
+    
+    model.get_optimizer(learning_rate)
+    
+    # getting the gradient operations
+    model.get_gradients(starting_gr_layer)
+    
+    return model
 
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
@@ -626,7 +667,30 @@ def bias_variable(shape, name=None):
     
 def max_pool(x, w_size, stride):
     return tf.nn.max_pool(x, ksize=[1, w_size, w_size, 1],
-                          strides=[1, stride, stride, 1], padding='SAME')
+                          strides=[1, stride, stride, 1], 
+                          padding='SAME')
     
 
     
+def load_4D_batch(imgs_path_list, hot_labels, train_inds):
+    """Creating a 4D array that contains a number of 3D
+    images 
+    """
+    
+    # load the first image 
+    # (to get common shape of the images)
+    img = cv2.imread(imgs_path_list[train_inds[0]])
+    ntrain = len(train_inds)
+    # if there is only on training image
+    if ntrain==1:
+        batch_of_data = np.expand_dims(img, axis=0)
+        return batch_of_data, hot_labels[:,train_inds]
+    else:
+        # if there are more than one
+        batch_of_data = np.zeros(
+            (ntrain,)+img.shape)
+        for i in range(1, ntrain):
+            img = cv2.imread(imgs_path_list[train_inds[i]])
+            batch_of_data[i,:,:,:] = img
+            
+        return batch_of_data, hot_labels[:,train_inds]
