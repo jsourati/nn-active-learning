@@ -153,16 +153,17 @@ class Experiment(object):
             self.load_parameters()
 
         # create a model if nothing already exists
-        tf_vars = tf.trainable_variables()        
-        if len(tf_vars)<self.nvars:
-            model = NN.create_Alex(
-                self.pars['dropout_rate'], 
-                nclass, 
-                self.pars['learning_rate'], 
-                self.pars['starting_layer'])
+        nclass = self.labels.shape[0]
+        model = NN.create_Alex(
+            self.pars['dropout_rate'], 
+            nclass, 
+            self.pars['learning_rate'], 
+            self.pars['starting_layer'])
 
         saver = tf.train.Saver()
         saver.restore(sess, model_path)
+
+        return model
         
     def add_run(self):
         """Adding a run to this experiment
@@ -215,6 +216,7 @@ class Experiment(object):
                                   'saved_model'))
         # create the NN model
         nclass = self.labels.shape[0]
+        tf.reset_default_graph()
         model = NN.create_Alex(
             self.pars['dropout_rate'], 
             nclass, 
@@ -272,11 +274,11 @@ class Experiment(object):
         # saved_model/    -->   curr_model/
         method_path = os.path.join(run_path, method_name)
 
-        shutil.copyfile(
+        shutil.copy(
             os.path.join(run_path,'init_inds.txt'),
             os.path.join(method_path,'curr_train.txt')
             )
-        shutil.copyfile(
+        shutil.copy(
             os.path.join(run_path,'pool_inds.txt'),
             os.path.join(method_path,'curr_pool.txt')
             )
@@ -314,19 +316,24 @@ class Experiment(object):
         test_inds = np.loadtxt(os.path.join(
                 run_path, 'test_inds.txt'))
         curr_train = np.loadtxt(os.path.join(
-                run_path, 'curr_train.txt'))
+                method_path, 'curr_train.txt'))
         curr_pool = np.loadtxt(os.path.join(
-                run_path, 'curr_pool.txt'))
+                method_path, 'curr_pool.txt'))
         
-        if hasattr(self, 'pars'):
+        if not(hasattr(self, 'pars')):
             self.load_parameters()
-        
+
         # load the stored model before the iterations
+        tf.reset_default_graph()
         with tf.Session() as sess:
-            self.load_model(sess, 
-                            os.path.join(method_path,
-                                         'curr_model.ckpt'))
-        
+            print("Loading the current model..")
+            model = self.load_model(
+                sess, os.path.join(
+                    method_path,
+                    'curr_model',
+                    'model.ckpt')
+            )
+
             # starting the iterations
             print("Starting the iterations for %s"%
                   method_name)

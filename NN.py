@@ -516,7 +516,7 @@ class AlexNet_CNN(AlexNet):
 def create_Alex(dropout_rate, c, learning_rate, starting_gr_layer):
     """Creating an AlexNet model using `AlexNet_CNN` class
     """
-    tf.reset_default_graph()
+
     x = tf.placeholder(tf.float32, [None, 227, 227, 3])
     skip_layer = ['fc8']
     model = AlexNet_CNN(
