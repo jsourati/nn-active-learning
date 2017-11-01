@@ -4,7 +4,7 @@ from tensorflow.examples.tutorials.mnist import input_data
 import copy
 import pdb
 import sys
-#import cv2
+import cv2
 import NNAL_tools
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
@@ -479,7 +479,7 @@ class AlexNet_CNN(AlexNet):
             session.run(
                 self.train_step, 
                 feed_dict={self.x: batch_of_imgs, 
-                           self.y_: batch_of_labels,
+                           self.y_: batch_of_labels.T,
                            self.KEEP_PROB: self.dropout_rate}
                 )
             
@@ -496,17 +496,22 @@ class AlexNet_CNN(AlexNet):
         else:
             batch_inds = [test_inds]
             
+        n = len(test_inds)
+        accs = 0.
         for j in range(len(batch_inds)):
             # create the 4D array of batch images
             iter_inds = test_inds[batch_inds[j]]
             batch_of_imgs, batch_of_labels = load_4D_batch(
                 expr.img_path_list, expr.labels, iter_inds)
-            session.run(
+            batch_acc = session.run(
                 self.accuracy, 
                 feed_dict={self.x: batch_of_imgs, 
-                           self.y_: batch_of_labels,
+                           self.y_: batch_of_labels.T,
                            self.KEEP_PROB: 1.}
                 )
+            accs += batch_acc*len(batch_inds[j])
+
+        return accs/n
 
 def create_Alex(dropout_rate, c, learning_rate, starting_gr_layer):
     """Creating an AlexNet model using `AlexNet_CNN` class

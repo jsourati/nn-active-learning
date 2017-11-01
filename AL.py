@@ -7,6 +7,8 @@ import os
 
 import tensorflow as tf
 import NNAL_tools
+import NNAL
+import NN
 
 class Experiment(object):
     """class of an active learning experiments
@@ -42,7 +44,7 @@ class Experiment(object):
         if os.path.isfile(img_path_list_f):
             # load the data and ignore the input
             with open(img_path_list_f, 'r') as f:
-                self.img_path_list = f.readlines()
+                self.img_path_list = f.read().splitlines()
         else:
             self.img_path_list = img_path_list
             with open(img_path_list_f, 'a') as f:
@@ -189,7 +191,7 @@ class Experiment(object):
         # getting the initial and pool indices
         ntrain = len(train_inds)
         rand_inds = np.random.permutation(ntrain)
-        init_train_inds = train_inds[
+        init_inds = train_inds[
             rand_inds[:self.pars['init_size']]]
         pool_inds = train_inds[
             rand_inds[self.pars['init_size']:]]
@@ -200,13 +202,17 @@ class Experiment(object):
         np.savetxt('%s/test_inds.txt'% run_path, 
                    test_inds, fmt='%d')
         np.savetxt('%s/init_inds.txt'% run_path, 
-                   train_inds, fmt='%d')
+                   init_inds, fmt='%d')
         np.savetxt('%s/pool_inds.txt'% run_path, 
                    pool_inds, fmt='%d')
         
         # creating an initial initial model
         # -------------------------
         print('Initializing a model for this run..')
+        if not(os.path.exists(os.path.join(
+                run_path,'saved_model'))):
+            os.mkdir(os.path.join(run_path, 
+                                  'saved_model'))
         # create the NN model
         nclass = self.labels.shape[0]
         model = NN.create_Alex(
@@ -223,7 +229,7 @@ class Experiment(object):
                 sess, self.pars['pre_weights_path'])
             model.train_graph_one_epoch(
                 self, 
-                init_train_inds, 
+                init_inds, 
                 self.pars['batch_size'], 
                 sess)
             
@@ -231,41 +237,39 @@ class Experiment(object):
             init_acc = model.evaluate(
                 self, test_inds, 
                 self.pars['batch_size'], sess)
+
             np.savetxt(os.path.join(
-                    run_path,'init_acc.txt'),init_acc)
+                    run_path,'init_acc.txt'),[init_acc])
             # save the initial model into the run's folder
             saver.save(sess, 
-                       os.path.join(run_path, 'init_model.ckpt'))
+                       os.path.join(run_path, 
+                                    'saved_model',
+                                    'model.ckpt'))
             
     def add_method(self, method_name, run):
         """Adding a method to a given run of the experiment
         """
         
         # check if the method already exists in this run
-        if os.path.exists(os.path.join(self.root_dir, 
-                                       str(run), 
+        run_path = os.path.join(self.root_dir, str(run))
+        if os.path.exists(os.path.join(run_path, 
                                        method_name)):
             print("This method already exists in run %s"% run)
-            print("Nothing more to do..")
+            print("Nothing else to do..")
             return
         
         # create a directory for the method
-        os.mkdir(os.path.exists(
-                os.path.join(self.root_dir, 
-                             str(run), 
-                             method_name)))
+        os.mkdir(os.path.join(run_path,
+                              method_name))
         # create a directory for the queries
-        os.mkdir(os.path.exists(
-                os.path.join(self.root_dir, 
-                             str(run), 
-                             method_name,
-                             'queries')))
+        os.mkdir(os.path.join(run_path,
+                              method_name,
+                              'queries'))
 
         # copying the following files:
         # init_train_inds -->   curr_train
         # pool_inds       -->   curr_pool
-        # init_model      -->   curr_model
-        run_path = os.path.join(self.root_dir, str(run))
+        # saved_model/    -->   curr_model/
         method_path = os.path.join(run_path, method_name)
 
         shutil.copyfile(
@@ -276,9 +280,14 @@ class Experiment(object):
             os.path.join(run_path,'pool_inds.txt'),
             os.path.join(method_path,'curr_pool.txt')
             )
-        shutil.copyfile(
-            os.path.join(run_path,'init_model.ckpt'),
-            os.path.join(method_path,'curr_model.ckpt')
+        # copying the directory with shutil.copyfile()
+        # shutil.copyfile() gave strange errors
+        os.mkdir(os.path.join(method_path, 'curr_model'))
+        for item in os.listdir(os.path.join(
+                run_path,'saved_model')):
+            shutil.copy2(
+                    os.path.join(run_path,'saved_model',item),
+                    os.path.join(method_path,'curr_model')
             )
         
         # create results.txt and put the initial accuracy
@@ -286,7 +295,7 @@ class Experiment(object):
         init_acc = np.loadtxt(os.path.join(
                 run_path, 'init_acc.txt'))
         np.savetxt(os.path.join(
-                method_path, 'accs.txt'),init_acc)
+                 method_path, 'accs.txt'),[init_acc])
         
     def run_method(self, method_name, run, max_queries):
         """Running a querying method in a run until a 
@@ -325,7 +334,7 @@ class Experiment(object):
             iter_cnt = 0
             while nqueries < max_queries:
                 # do the querying
-                #Q_inds = ...
+                 
                 # save the queries
                 np.savetxt(os.path.join(
                         method_path, 
