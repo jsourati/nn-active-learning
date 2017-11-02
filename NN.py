@@ -371,39 +371,35 @@ class AlexNet_CNN(AlexNet):
             saver.save(session, addr)
 
     
-    def extract_features(self, X, session, batch_size=None):
+    def extract_features(self, inds, 
+                         img_path_list,
+                         session, batch_size=None):
         """Extracting features
         """
         
-        n = X.shape[0]
-
-        # do not drop-out any nodes when extracting features
-        if batch_size:
-            d = self.feature_layer.shape[1].value
-            features = np.zeros((d, n))
-            quot, rem = np.divmod(n, batch_size)
-            for i in range(quot):
-                if i<quot-1:
-                    inds = np.arange(i*batch_size, (i+1)*batch_size)
-                else:
-                    inds = slice(i*batch_size, n)
-                    
-                iter_X = X[inds,:,:,:]
-                features[:,inds] = session.run(
-                    self.feature_layer, 
-                    feed_dict={self.x:iter_X, 
-                               self.KEEP_PROB:1.}
-                    ).T
-                
+        n = len(inds)
+        d = self.feature_layer.shape[1].value
+        features = np.zeros((d,n))
+        # preparing batch_of_inds, whose
+        # indices are in terms of "inds"
+        if not(batch_size): 
+            batch_of_inds = [np.arange(
+                n).tolist()]
         else:
-            features = session.run(
+            batch_of_inds = prep_dat.gen_batch_inds(
+                n, batch_size)
+
+        # extracting the features
+        for inner_inds in batch_of_inds:
+            # loading the data for this patch
+            X = load_winds(inds[inner_inds],
+                              img_path_list)
+            features[:,inner_inds] = session.run(
                 self.feature_layer, 
-                feed_dict={self.x:X,
-                           self.KEEP_PROB: 1.}
-                ).T
-            
+                feed_dict={self.x: X, 
+                           self.KEEP_PROB:1.}).T
+                
         return features
-        
         
     def get_optimizer(self, learning_rate):
         """Making the optimizer operation for the graph
@@ -465,17 +461,17 @@ class AlexNet_CNN(AlexNet):
         # random partitioning into batches
         train_size = len(train_inds)
         if train_size > batch_size:
-            batch_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = prep_dat.gen_batch_inds(
                 train_size, batch_size)
         else:
-            batch_inds = [train_inds]
+            batch_of_inds = [train_inds]
         
         # completing an epoch
-        for j in range(len(batch_inds)):
+        for j in range(len(batch_of_inds)):
             # create the 4D array of batch images
-            iter_inds = train_inds[batch_inds[j]]
-            batch_of_imgs, batch_of_labels = load_4D_batch(
-                expr.img_path_list, expr.labels, iter_inds)
+            iter_inds = train_inds[batch_of_inds[j]]
+            batch_of_imgs, batch_of_labels = load_winds(
+                iter_inds, expr.img_path_list, expr.labels)
             session.run(
                 self.train_step, 
                 feed_dict={self.x: batch_of_imgs, 
@@ -501,8 +497,8 @@ class AlexNet_CNN(AlexNet):
         for j in range(len(batch_inds)):
             # create the 4D array of batch images
             iter_inds = test_inds[batch_inds[j]]
-            batch_of_imgs, batch_of_labels = load_4D_batch(
-                expr.img_path_list, expr.labels, iter_inds)
+            batch_of_imgs, batch_of_labels = load_winds(
+                iter_inds, expr.img_path_list, expr.labels)
             batch_acc = session.run(
                 self.accuracy, 
                 feed_dict={self.x: batch_of_imgs, 
@@ -513,8 +509,11 @@ class AlexNet_CNN(AlexNet):
 
         return accs/n
 
-def create_Alex(dropout_rate, c, learning_rate, starting_gr_layer):
-    """Creating an AlexNet model using `AlexNet_CNN` class
+def create_Alex(dropout_rate, c, 
+                learning_rate, 
+                starting_gr_layer):
+    """Creating an AlexNet model 
+    using `AlexNet_CNN` class
     """
 
     x = tf.placeholder(tf.float32, [None, 227, 227, 3])
@@ -658,9 +657,11 @@ def CNN_variables(kernel_dims, layer_list):
 
 
 def weight_variable(shape, name=None):
-    """Creating a kernel tensor with specified shape
+    """Creating a kernel tensor 
+    with specified shape
     """
-    initial = tf.truncated_normal(shape, stddev=0.1)
+    initial = tf.truncated_normal(
+        shape, stddev=0.1)
     return tf.Variable(initial, name=name)
 
 def bias_variable(shape, name=None):
@@ -671,31 +672,32 @@ def bias_variable(shape, name=None):
 
     
 def max_pool(x, w_size, stride):
-    return tf.nn.max_pool(x, ksize=[1, w_size, w_size, 1],
-                          strides=[1, stride, stride, 1], 
-                          padding='SAME')
+    return tf.nn.max_pool(
+        x, ksize=[1, w_size, w_size, 1],
+        strides=[1, stride, stride, 1], 
+        padding='SAME')
     
-
-    
-def load_4D_batch(imgs_path_list, hot_labels, train_inds):
-    """Creating a 4D array that contains a number of 3D
-    images 
+def load_winds(train_inds, 
+               imgs_path_list,
+               hot_labels=[]):
+    """Creating a 4D array that contains a
+    number of 3D images 
     """
     
     # load the first image 
-    # (to get common shape of the images)
+    # (to get the common shape of all images)
     img = cv2.imread(imgs_path_list[train_inds[0]])
     ntrain = len(train_inds)
-    # if there is only on training image
-    if ntrain==1:
-        batch_of_data = np.expand_dims(img, axis=0)
-        return batch_of_data, hot_labels[:,train_inds]
-    else:
-        # if there are more than one
-        batch_of_data = np.zeros(
-            (ntrain,)+img.shape)
-        for i in range(1, ntrain):
-            img = cv2.imread(imgs_path_list[train_inds[i]])
-            batch_of_data[i,:,:,:] = img
+    batch_of_data = np.zeros((ntrain,)+img.shape)
+    batch_of_data[0,:,:,:] = img
+    # read the rest of the images
+    for i in range(1, ntrain):
+        img = cv2.imread(
+            imgs_path_list[train_inds[i]])
+        batch_of_data[i,:,:,:] = img
             
-        return batch_of_data, hot_labels[:,train_inds]
+    if len(hot_labels)>0:
+        return (batch_of_data, 
+                hot_labels[:,train_inds])
+    else:
+        return batch_of_data

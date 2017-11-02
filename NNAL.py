@@ -185,8 +185,15 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
     
     return accs, batch_of_data, batch_of_labels
 
-def CNN_query(model, k, B, pool_X, method, session, 
-              batch_size=None, col=True, extra_feed_dict={}):
+def CNN_query(model,
+              img_path_list,
+              pool_inds,
+              k, B, lambda_,
+              method_name,
+              session,
+              batch_size=None,
+              col=True,
+              extra_feed_dict={}):
     """Querying a number of unlabeled samples from a given pool
     
     :Parameters:
@@ -221,11 +228,14 @@ def CNN_query(model, k, B, pool_X, method, session,
         are being used
     """
 
-    if method=='egl':
+    if method_name=='egl':
         # uncertainty filtering
         print("Uncertainty filtering...")
         posteriors = NNAL_tools.batch_posteriors(
-            model, pool_X, batch_size, session, col, extra_feed_dict)
+            model, pool_inds, 
+            img_path_list, 
+            batch_size, 
+            session, col, extra_feed_dict)
             
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
@@ -278,26 +288,33 @@ def CNN_query(model, k, B, pool_X, method, session,
         # select the highest k scores
         Q_inds = sel_inds[np.argsort(-scores)[:k]]
 
-    elif method=='random':
-        n = pool_X.shape[0]
+    elif method_name=='random':
+        n = len(pool_inds)
         Q_inds = np.random.permutation(n)[:k]
         
-    elif method=='entropy':
+    elif method_name=='entropy':
         # computing the posteriors
-        posteriors = NNAL_tools.batch_posteriors(
-            model, pool_X, batch_size, session, col, extra_feed_dict)
+        posteriors = NNAL_tools.idxBatch_posteriors(
+            model, pool_inds, 
+            img_path_list, batch_size, 
+            session, col, extra_feed_dict)
+        
         # entropies    
         entropies = NNAL_tools.compute_entropy(posteriors)
         Q_inds = np.argsort(-entropies)[:k]
         
-    elif method=='fi':
+    elif method_name=='fi':
         # uncertainty filtering
-        print("Uncertainty filtering...")
-        posteriors = NNAL_tools.batch_posteriors(
-            model, pool_X, batch_size, session, col, extra_feed_dict)
+        print("Uncertainty filtering...", end='\n\t')
+
+        posteriors = NNAL_tools.idxBatch_posteriors(
+            model, pool_inds, 
+            img_path_list, batch_size, 
+            session, col, extra_feed_dict)
         
         if B < posteriors.shape[1]:
-            sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
+            sel_inds = NNAL_tools.uncertainty_filtering(
+                posteriors, B)
             sel_posteriors = posteriors[:, sel_inds]
         else:
             B = posteriors.shape[1]
@@ -314,14 +331,27 @@ def CNN_query(model, k, B, pool_X, method, session,
         c,n = posteriors.shape
 
         A = []
+        # load an images
+        # indices: sel_inds --> pool_inds
+        sel_X = NN.load_winds(pool_inds[sel_inds],
+                              img_path_list)
         for i in range(B):
-            # gradients of samples one-by-one
+            X_i = sel_X[i,:,:,:]
             feed_dict = {
-                model.x:np.expand_dims(
-                    pool_X[sel_inds[i],:,:,:], axis=0)
-                }
+                model.x:np.expand_dims(X_i, axis=0)}
             feed_dict.update(extra_feed_dict)
 
+            # computing the gradients
+            # grads={ '0': dP(y=0|x)/dtheta, 
+            #         '1': dP(y=1|x)/dtheta, 
+            #         etc }
+            # if there are too many classes, 
+            # grads={ 'c0': dP(y=c0|x)/dtheta, 
+            #         'c1': dP(y=c1|x)/dtheta, 
+            #         etc }
+            # where {c0,c1,etc} are classes with largest
+            # posteriors for x.
+            # 
             if c < 20:
                 grads = session.run(model.grad_log_posts, 
                                     feed_dict=feed_dict)
@@ -329,8 +359,8 @@ def CNN_query(model, k, B, pool_X, method, session,
                 new_posts = sel_posteriors[:,i]
             else:
                 # if the number of classes is large,
-                # compute gradients of the largest twenty
-                # posteriors
+                # compute gradients of few classes with 
+                # largest  posteriors only
                 sel_classes = np.argsort(
                     -sel_posteriors[:,i])[:10]
                 sel_classes_grads = {
@@ -352,7 +382,7 @@ def CNN_query(model, k, B, pool_X, method, session,
                 Ai += new_posts[j]*np.outer(
                     shrunk_grad, 
                     shrunk_grad) + np.eye(A_size)*1e-5
-            
+
             if not(i%10):
                 print(i, end=',')
             
@@ -360,8 +390,9 @@ def CNN_query(model, k, B, pool_X, method, session,
             
         # extracting features for pool samples
         # using only few indices of the features
-        F = model.extract_features(
-            pool_X[sel_inds,:,:,:], session)
+        F = model.extract_features(pool_inds[sel_inds], 
+                                   img_path_list,
+                                   session)
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
@@ -376,15 +407,18 @@ def CNN_query(model, k, B, pool_X, method, session,
                 warnings.warn(
                     "Few features (%d) are selected"% (
                         len(feat_inds)))
-            
-        F_sel -= np.repeat(
-            np.expand_dims(np.mean(F_sel, axis=1), axis=1),
-            B, axis=1)
+
+        # subtracting the mean
+        F_sel -= np.repeat(np.expand_dims(
+            np.mean(F_sel, axis=1),
+            axis=1), B, axis=1)
         
         # SDP
-        print('Solving SDP..')
-        soln = NNAL_tools.SDP_query_distribution(A, F_sel, 1., k)
-        print('status: %s'% (soln['status']))
+        print('\n\t',end='')
+        print('Solving SDP..',end='\n\t')
+        soln = NNAL_tools.SDP_query_distribution(
+            A, F_sel, lambda_, k)
+        print('status: %s'% (soln['status']), end='\n\t')
         q_opt = np.array(soln['x'][:B])
         
         # sampling from the optimal solution
@@ -392,48 +426,58 @@ def CNN_query(model, k, B, pool_X, method, session,
             q_opt, k, replacement=True)
         Q_inds = sel_inds[Q_inds]
         
-    elif method=='rep-entropy':
+    elif method_name=='rep-entropy':
         # uncertainty filtering
         print("Uncertainty filtering...")
-        posteriors = NNAL_tools.batch_posteriors(
-            model, pool_X, batch_size, session, col, extra_feed_dict)
+        posteriors = NNAL_tools.idxBatch_posteriors(
+            model, pool_inds, 
+            img_path_list, batch_size, 
+            session, col, extra_feed_dict)
         
-        #B = 16
-        sel_inds = NNAL_tools.uncertainty_filtering(posteriors, B)
-        sel_posteriors = posteriors[:, sel_inds]
-        n = pool_X.shape[0]
-        nsel_inds = list(set(np.arange(n)) - set(sel_inds))
+        if B < posteriors.shape[1]:
+            sel_inds = NNAL_tools.uncertainty_filtering(
+                posteriors, B)
+            sel_posteriors = posteriors[:, sel_inds]
+        else:
+            B = posteriors.shape[1]
+            sel_posteriors = posteriors
+            sel_inds = np.arange(B)
+            
+        n = len(pool_inds)
+        rem_inds = list(set(np.arange(n)) - set(sel_inds))
         
-        print("Finding Similarities..")
-        # extract the features
-        F = model.extract_features(pool_X, session, batch_size)
+        print("\t Finding Similarities..", end='\n\t')
+        # extract the features for all the pool
+        # sel_inds, rem_inds  -->  pool_inds
+        F = model.extract_features(pool_inds, img_path_list,
+                                   session, batch_size)
         F_uncertain = F[:, sel_inds]
         norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
-        F_rest_pool = F[:, nsel_inds]
-        norms_rest = np.sqrt(np.sum(F_rest_pool**2, axis=0))
+        F_rem_pool = F[:, rem_inds]
+        norms_rem = np.sqrt(np.sum(F_rem_pool**2, axis=0))
         
         # compute cos-similarities between filtered images
         # and the rest of the unlabeled samples
-        dots = np.dot(F_rest_pool.T, F_uncertain)
-        norms_outer = np.outer(norms_rest, norms_uncertain)
+        dots = np.dot(F_rem_pool.T, F_uncertain)
+        norms_outer = np.outer(norms_rem, norms_uncertain)
         sims = dots / norms_outer
             
-        print("Greedy optimization..")
+        print("Greedy optimization..", end='\n\t')
         # start from empty set
         Q_inds = []
-        rem_inds = np.arange(B)
+        nQ_inds = np.arange(B)
         # add most representative samples one by one
         for i in range(k):
             rep_scores = np.zeros(B-i)
             for j in range(B-i):
-                cand_Q = Q_inds + [rem_inds[j]]
+                cand_Q = Q_inds + [nQ_inds[j]]
                 rep_scores[j] = np.sum(
                     np.max(sims[:, cand_Q], axis=1))
-            iter_sel = rem_inds[np.argmax(rep_scores)]
+            iter_sel = nQ_inds[np.argmax(rep_scores)]
             # update the iterating sets
             Q_inds += [iter_sel]
-            rem_inds = np.delete(
-                rem_inds, np.argmax(rep_scores))
+            nQ_inds = np.delete(
+                nQ_inds, np.argmax(rep_scores))
             
         Q_inds = sel_inds[Q_inds]
 
@@ -546,17 +590,16 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
         accs = {method:[] for method in methods}
         fi_query_num = [0]
     
-    with tf.device('/gpu:0'):
-        tf.reset_default_graph()
-        x = tf.placeholder(tf.float32, 
-                           [None, 227, 227, 3])
-        # creating the model
-        model = NN.AlexNet_CNN(
-            x, dropout_rate, c, skip_layer, weights_path)
-        model.get_optimizer(learning_rate)
-        # getting the gradient operations
-        model.get_gradients(3)
-        saver = tf.train.Saver()
+    tf.reset_default_graph()
+    x = tf.placeholder(tf.float32, 
+                       [None, 227, 227, 3])
+    # creating the model
+    model = NN.AlexNet_CNN(
+        x, dropout_rate, c, skip_layer, weights_path)
+    model.get_optimizer(learning_rate)
+    # getting the gradient operations
+    model.get_gradients(5)
+    saver = tf.train.Saver()
 
     with tf.Session() as session:
 
@@ -637,7 +680,6 @@ def run_AlexNet_AL(X_pool, Y_pool, X_test, Y_test,
                 print('Query index: '+' '.join(str(q) for q in Q_inds))
                 # prepare data for another training
                 Q = X_pool[Q_inds,:,:,:]
-                #pickle.dump(Q, open('results/%s/%d.p'% (method,t),'wb'))
                 Y_Q = Y_pool[Q_inds,:]
                 # remove the selected queries from the pool
                 X_pool = np.delete(X_pool, Q_inds, axis=0)

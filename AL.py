@@ -139,17 +139,17 @@ class Experiment(object):
         it much easier to add a new run.
         """
         
-        run_dirs = np.sort(os.listdir(self.root_dir))
-        for name,i in enumerate(run_dirs):
+        run_dirs = self.get_runs()
+        for i,name in enumerate(run_dirs):
             if not(i==int(name)):
                 os.rename(os.path.join(self.root_dir, name),
                           os.path.join(self.root_dir, str(i)))
                 
-    def load_model(self, sess, model_path):
+    def load_model(self, model_path):
         """Loading a network model that is already saved
         """
         
-        if hasattr(self, 'pars'):
+        if not(hasattr(self, sess, 'pars')):
             self.load_parameters()
 
         # create a model if nothing already exists
@@ -162,8 +162,15 @@ class Experiment(object):
 
         saver = tf.train.Saver()
         saver.restore(sess, model_path)
-
+        
         return model
+        
+    def save_model(self, sess, model_path):
+        """Saving the current model into a path
+        """
+        
+        saver=tf.train.Saver()
+        saver.save(sess, model_path)
         
     def add_run(self):
         """Adding a run to this experiment
@@ -180,7 +187,7 @@ class Experiment(object):
         run_path = os.path.join(self.root_dir, str(n))
         os.mkdir(run_path)
         
-        if hasattr(self, 'pars'):
+        if not(hasattr(self, 'pars')):
             self.load_parameters()
         
         # preparing the indices
@@ -229,11 +236,13 @@ class Experiment(object):
             # training from initial training data
             model.initialize_graph(
                 sess, self.pars['pre_weights_path'])
-            model.train_graph_one_epoch(
-                self, 
-                init_inds, 
-                self.pars['batch_size'], 
-                sess)
+            for i in range(self.pars['epochs']):
+                model.train_graph_one_epoch(
+                    self, 
+                    init_inds, 
+                    self.pars['batch_size'], 
+                    sess)
+                print('%d'% i, end=',')
             
             # compute the initial accuracy and store it
             init_acc = model.evaluate(
@@ -313,26 +322,62 @@ class Experiment(object):
             os.path.join(method_path, 'queries')))
         
         # preparing the indices
-        test_inds = np.loadtxt(os.path.join(
-                run_path, 'test_inds.txt'))
-        curr_train = np.loadtxt(os.path.join(
-                method_path, 'curr_train.txt'))
-        curr_pool = np.loadtxt(os.path.join(
-                method_path, 'curr_pool.txt'))
+        test_inds = np.int32(
+            np.loadtxt(os.path.join(
+                run_path, 'test_inds.txt')
+                   ))
+        curr_train = np.int32(
+            np.loadtxt(os.path.join(
+                method_path, 'curr_train.txt')
+                   ))
+        curr_pool = np.int32(
+            np.loadtxt(os.path.join(
+                method_path, 'curr_pool.txt')
+                   ))
+
+        tf.reset_default_graph()
         
         if not(hasattr(self, 'pars')):
             self.load_parameters()
 
-        # load the stored model before the iterations
-        tf.reset_default_graph()
+        
+        """ Loading the model """
+        print("Loading the current model..")
+        # create a model-holder
+        nclass = self.labels.shape[0]
+        model = NN.create_Alex(
+            self.pars['dropout_rate'], 
+            nclass, 
+            self.pars['learning_rate'], 
+            self.pars['starting_layer'])
+        saver = tf.train.Saver()
+        
+        # printing the accuracies so far:
+        curr_accs = np.loadtxt(os.path.join(
+            method_path, 'accs.txt'))
+        if curr_accs.size==1:
+            curr_accs = [curr_accs]
+        print("Current accuracies: ", end='')
+        print(*curr_accs, sep=', ')
+        
         with tf.Session() as sess:
-            print("Loading the current model..")
-            model = self.load_model(
+            sess.graph.finalize()
+            # load the stored model into
+            # the holder of variables
+            saver.restore(
                 sess, os.path.join(
                     method_path,
                     'curr_model',
-                    'model.ckpt')
-            )
+                    'model.ckpt'))
+
+            if hasattr(model, 'KEEP_PROB'):
+                # when computing posteriors or 
+                # gradients in the querying methods
+                # we should not use drop-out
+                extra_feed_dict = {model.KEEP_PROB: 
+                                   1.0}
+            else:
+                extra_feed_dict = {}
 
             # starting the iterations
             print("Starting the iterations for %s"%
@@ -340,21 +385,104 @@ class Experiment(object):
             nqueries = 0
             iter_cnt = 0
             while nqueries < max_queries:
-                # do the querying
-                 
+                print("Iter. %d: "% iter_cnt,
+                      end='\n\t')
+                """ querying """
+                Q_inds = NNAL.CNN_query(
+                    model, 
+                    self.img_path_list,
+                    curr_pool,
+                    self.pars['k'],
+                    self.pars['B'],
+                    self.pars['lambda_'],
+                    method_name,
+                    sess, 
+                    self.pars['batch_size'],
+                    False,
+                    extra_feed_dict
+                )
+
                 # save the queries
                 np.savetxt(os.path.join(
                         method_path, 
                         'queries',
                         'Q_%d.txt'% (
                             n_oldqueries+iter_cnt)
-                        ), Q_inds)
+                        ), curr_pool[Q_inds])
                 
+                # preparing the updating training
+                # samples
+                nold_train = 200 + iter_cnt
+                rand_inds = np.random.permutation(
+                    len(curr_train))[:nold_train]
+                old_train = curr_train[rand_inds]
+                update_inds = np.append(
+                    old_train, curr_pool[Q_inds])
+
                 # update the indices
+                curr_train = np.append(
+                    curr_train, curr_pool[Q_inds])
+                curr_pool = np.delete(
+                    curr_pool, Q_inds)
+                
+                """ updating the model """
+                for i in range(self.pars['epochs']):
+                    model.train_graph_one_epoch(
+                        self,
+                        update_inds,
+                        self.pars['batch_size'],
+                        sess)
+                    print('%d'% i, end=',')
+                    
+                """ evluating the updated model """
+                acc = model.evaluate(
+                    self, test_inds, 
+                    self.pars['batch_size'], sess)
+                with open(os.path.join(
+                        method_path, 
+                        'accs.txt'), 'a') as f:
+                    f.write('%f\n'% acc)
                 
                 # update the loop variables
                 nqueries += len(Q_inds)
                 iter_cnt += 1
+                
+                print('\n\t', end='')
+                print("Total queries: %d"% 
+                      nqueries, end='\n\t')
+                print("Accuracy: %.2f"% acc)
+                
+            # when querying is done..
+            # save the current training and pool
+            np.savetxt(os.path.join(
+                method_path, 'curr_pool'), 
+                       curr_pool,
+                       fmt='%d')
+            np.savetxt(os.path.join(
+                method_path, 'curr_train'), 
+                       curr_train,
+                       fmt='%d')
+            # save the current model
+            saver.save(sess, 
+                       os.path.join(
+                           method_path,
+                           'curr_model',
+                           'model.ckpt'))
+            
+    def reset_method(self, method_name, run):
+        """ Resetting a given run/method, 
+        by deleting its folder and add
+        another method with the same name
+        """
+        
+        run_path = os.path.join(self.root_dir, 
+                                str(run))
+        method_path = os.path.join(run_path,
+                                   method_name)
+        shutil.rmtree(method_path)
+        
+        # re-add the same method
+        self.add_method(method_name, run)
         
 
 def paths_n_labels(path, label_name):
@@ -373,17 +501,6 @@ def paths_n_labels(path, label_name):
     
     return files, labels
     
-def create_hot_labels(path):
-    """Given the path of a data set where each category (class)
-    has its own separate folder, a hot-label vector will be created
-    accordingly
-
-    We assume here that the only existing directories in the given
-    path are the categories, each of which only has data files,
-    just as in the folder of Caltech-101 data set.
-    """
-    
-    classes = os.listdir(path)
     
         
         
