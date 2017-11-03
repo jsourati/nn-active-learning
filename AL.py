@@ -14,8 +14,11 @@ class Experiment(object):
     """class of an active learning experiments
     """
     
-    def __init__(self, root_dir, img_path_list, 
-                 labels, pars={}):
+    def __init__(self, 
+                 root_dir,
+                 img_path_list=None,
+                 labels=None,
+                 pars={}):
         """Constructor
         
         It needs the root directory of the experiment, 
@@ -26,65 +29,53 @@ class Experiment(object):
         of the experiments into test, training and 
         unlabeled pool samples.
         
+        If the experiment does not exist, variables
+        `img_path_list` and `labels` have to be given.
+         
         If a set of parameters are given, they will
         be saved in the root. Otherwise, we just leave
         it there.
         """
         
         self.root_dir = root_dir
-        # create the directory if not existed
-        if not(os.path.exists(root_dir)):
-            os.mkdir(root_dir)
         
         img_path_list_f = os.path.join(
             root_dir,'img_path_list.txt')
         labels_f = os.path.join(
             root_dir,'labels.txt')
-        
-        if os.path.isfile(img_path_list_f):
-            # load the data and ignore the input
+
+        # if a path exists, don't need to do much
+        if os.path.exists(root_dir):
+            # loading the image paths
             with open(img_path_list_f, 'r') as f:
                 self.img_path_list = f.read().splitlines()
+            # loading the labels
+            self.labels = np.int32(np.loadtxt(labels_f))
+
         else:
+            os.mkdir(root_dir)
             self.img_path_list = img_path_list
             with open(img_path_list_f, 'a') as f:
                 # writing paths into a file
                 for path in img_path_list:
                     f.write('%s\n'% path)
-        
-        if os.path.isfile(labels_f):
-            labels = np.int32(np.loadtxt(labels_f))
-            if labels.ndim>1:
-                self.labels=labels
-                return
-
-        # if labels are not in a hot-one form
-        # transform it
-        if np.array(labels).ndim==1:
-            symbols = np.unique(labels)
-            c = len(symbols)
-            hot_labels = np.zeros((c, len(labels)))
-            for i in range(len(labels)):
-                label_ind = np.where(
-                    symbols==labels[i])[0]
-                hot_labels[label_ind,i] = 1.
-
-            self.labels = hot_labels
-        else:
+            
+            # if labels are not in a one-hot
+            # form, transform them
+            if np.array(labels).ndim==1:
+                labels = make_onehot(labels)
+            #
             self.labels = labels
-                
-        # writing the labels into a file
-        np.savetxt(labels_f, self.labels, fmt='%d')
+
+            # storing the labels
+            np.savetxt(labels_f, 
+                       labels, fmt='%d')
         
         # if there are parameter given, write them
         # into a text file to be used later
         if len(pars)>0:
             self.save_parameters(pars)
-        else:
-            print("No parameters have been saved..")
-            print("Save some by calling " + 
-                  "save_parameters() before continuing")
-
+        
     def save_parameters(self, pars):
         """Saving a given dictionary of parameters
         into a text file in the root folder of the
@@ -501,7 +492,20 @@ def paths_n_labels(path, label_name):
     
     return files, labels
     
-    
+def make_onehot(labels):
+    """Make a one-hot label matrix out of
+    a 1D array of labels
+    """
+
+    symbols = np.unique(labels)
+    c = len(symbols)
+    one_hot = np.zeros((c, len(labels)))
+    for i in range(len(labels)):
+        label_ind = np.where(
+            symbols==labels[i])[0]
+        one_hot[label_ind,i] = 1.
+        
+    return one_hot
         
         
     
