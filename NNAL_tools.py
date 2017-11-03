@@ -7,7 +7,7 @@ import pdb
 import sys
 import copy
 import h5py
-#import cv2
+import cv2
 import os
 import NN
 import pickle
@@ -372,6 +372,70 @@ def Alex_features_MNIST(bulk_size):
         print("%d / %d" % (t, len(divisions)-1))
     
     return train_features, test_features
+
+
+def idxBatch_posteriors(model, inds,
+                        img_path_list,
+                        batch_size,
+                        session, col,
+                        extra_feed_dict={}):
+    """A function similar to `batch_posteriors()`
+    but working with indices and image-paths 
+    rather than a 4D array that is already loaded
+    by the data
+    
+    Similar to `batch_posteriors()` this 
+    function also gives a column-wise array 
+    of posteriors no matter if the given network
+    is column-wise or row-wise. Columns in the
+    output array are ordered such that the `i`-th
+    column includes the posteriors of the image
+    with global index `inds[i]` (i.e., that image
+    can be access by its path 
+    `image_path_list[ inds[i] ]`
+    """
+    
+    n = len(inds)
+    if col:
+        c = model.output.get_shape()[0].value
+    else:
+        c = model.output.get_shape()[1].value
+    posteriors = np.zeros((c, n))
+        
+    # preparing batches
+    # each batch has indices (batch_of_inds)
+    # that are in terms of the input variable
+    # "inds"
+    if not(batch_size): 
+        batch_of_inds = np.arange(
+            len(inds)).tolist()
+    else:
+        batch_of_inds = prep_dat.gen_batch_inds(
+            n, batch_size)
+    
+    # computing the posteriors
+    for inner_inds in batch_of_inds:
+        # load the data
+        X = NN.load_winds(inds[inner_inds],
+                          img_path_list)
+        # preparing the feed-dictionary for 
+        # the network
+        feed_dict = {model.x: X}
+        feed_dict.update(extra_feed_dict)
+        
+        # load the array noticing if the network
+        # gives column-wise or row-wise 
+        # array of posteriors
+        if col:
+            posteriors[:,inner_inds] = session.run(
+                model.posteriors, 
+                feed_dict=feed_dict)
+        else:
+            posteriors[:, inner_inds] = session.run(
+                model.posteriors, 
+                feed_dict=feed_dict).T
+        
+    return posteriors
 
 
 def batch_posteriors(model, X, batch_size, session, 
