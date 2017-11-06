@@ -1,43 +1,63 @@
-# assigning the experiment a random ID
-exp_id=1000
-while [ -d $exp_id ]
-do
-    exp_id=$(($exp_id+1))
-done
-mkdir $exp_id
-
 # getting all the parameters
-runs=$1
-data_path=$2
-target_classes_path=$3
-k=$4
-max_queries=$5
-init_size=$6
+root_dir=$1
+par_temp=$2
+data_dir=$3
+target_classes=$4
+run_id=$5
+run_num=$6
+nqueries=$7
+chunk=$8
+optpars=$9
 
-# creating a text file containing the parameters
-touch "$exp_id/parameters.txt"
-echo "runs=$runs" >> "$exp_id/parameters.txt"
-echo "data_path=$data_path" >> "$exp_id/parameters.txt"
-echo "target_classes_path=$target_classes_path" >> "$exp_id/parameters.txt"
-echo "k=$k" >> "$exp_id/parameters.txt"
-echo "max_queries=$max_queries" >> "$exp_id/parameters.txt"
-echo "init_size=$init_size" >> "$exp_id/parameters.txt"
+echo "Input Directories"
+echo "================================="
+echo "Root dir: $root_dir"
+echo "Par. template: $par_temp"
+echo "Data dir: $data_dir"
+echo "Target classes: $target_classes"
+echo "Input Parameters"
+echo "================================="
+echo "Run ID: $run_id"
+echo "# Runs: $run_num"
+echo "# queries: $nqueries"
+echo "Iter-chunk: $chunk"
+echo "Parameters: $optpars"
+echo "================================="
 
-mkdir "$exp_id/saved_models"
+# if this experiment does not exist, 
+# create one and set the parameters
+if [ ! -d $root_dir ]; then
 
-# in the following "i" is index of each run (run_id)
-for ((i=1;i<=$runs;i++))
-do
-    mkdir "$exp_id/$i"
-    run_model_path="$exp_id/saved_models/init-$i.ckpt"
+    echo "Creating experiment in:"
+    echo $root_dir
+
+    # creating the experiment
+    python -c "from expr_handler import create_expr; create_expr('$root_dir', '$data_dir', '$target_classes')"
+
     
-    python run_querying_scr.py \
-	$exp_id \
-	$i \
-	$data_path \
-	$target_classes_path \
-	$run_model_path \
-	$k \
-	$max_queries \
-	$init_size
+    # setting up the parameters
+    python -c "from expr_handler import set_parameters; set_parameters('$par_temp', '$root_dir', '$optpars')"
+fi
+
+for ((i=1;i<=$run_num;i++))
+do
+    # and now run the experiment
+    Q=0
+    M=(fi random entropy rep-entropy)
+    while [ $Q -lt $(($nqueries+$chunk)) ]
+    do
+	# do the querying
+	for method in ${M[@]}
+	do
+	    echo "Running method $method"
+	    python expr_handler.py \
+		$root_dir \
+		$run_id \
+		$method \
+		$chunk
+	done
+	
+	# update the counter
+	Q=$(($Q+$chunk))
+    done
 done
