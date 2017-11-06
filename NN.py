@@ -464,7 +464,8 @@ class AlexNet_CNN(AlexNet):
             batch_of_inds = prep_dat.gen_batch_inds(
                 train_size, batch_size)
         else:
-            batch_of_inds = [train_inds]
+            batch_of_inds = [np.arange(
+                train_size).tolist()]
         
         # completing an epoch
         for j in range(len(batch_of_inds)):
