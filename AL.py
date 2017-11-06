@@ -309,8 +309,13 @@ class Experiment(object):
         
         # count how many queries have been 
         # selected before
-        n_oldqueries = len(os.listdir(
-            os.path.join(method_path, 'queries')))
+        n_oldqueries = 0
+        Q_path = os.path.join(method_path,'queries')
+        Q_files = os.listdir(Q_path)
+        for f in Q_files:
+            Qs = np.loadtxt(os.path.join(
+                Q_path, f))
+            n_oldqueries += len(Qs)
         
         # preparing the indices
         test_inds = np.int32(
@@ -440,7 +445,8 @@ class Experiment(object):
                 
                 print('\n\t', end='')
                 print("Total queries: %d"% 
-                      nqueries, end='\n\t')
+                      (nqueries + n_oldqueries),
+                      end='\n\t')
                 print("Accuracy: %.2f"% acc)
                 
             # when querying is done..

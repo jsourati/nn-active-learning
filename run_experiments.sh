@@ -39,15 +39,36 @@ if [ ! -d $root_dir ]; then
     python -c "from expr_handler import set_parameters; set_parameters('$par_temp', '$root_dir', '$optpars')"
 fi
 
+# checking if the given run-ID is a number
+# or a plust ('+') as a sign to add a run
+re='^[0-9]+$'
+if [[ $run_id =~ $re ]]; then
+    # if so, do not run more tan once
+    run_num=1
+fi
+
 for ((i=1;i<=$run_num;i++))
 do
     # and now run the experiment
-    Q=0
     M=(fi random entropy rep-entropy)
-    while [ $Q -lt $(($nqueries+$chunk)) ]
+    
+    # if it's a new run create it
+    if ! [[ $run_id =~ $re ]]; then
+	# creating the new run in the experiment
+	python -c "from expr_handler import create_run; create_run('$root_dir')"
+	
+	# assiginig the run ID 
+	run_id=`python -c "import AL;E=AL.Experiment('$root_dir');print(len(E.get_runs())-1)"`
+	echo ""
+	echo "This new run's ID is $run_id"
+    fi
+
+    # for each method run the querying iterations
+    # chunk-by-chunk
+    for method in ${M[@]}
     do
-	# do the querying
-	for method in ${M[@]}
+	Q=0
+	while [ $Q -lt $(($nqueries)) ]
 	do
 	    echo "Running method $method"
 	    python expr_handler.py \
@@ -55,9 +76,12 @@ do
 		$run_id \
 		$method \
 		$chunk
+	    
+	    # update the counter
+	    Q=$(($Q+$chunk))
 	done
-	
-	# update the counter
-	Q=$(($Q+$chunk))
     done
+    # if the iteration is supposed to repeat
+    # turn "run_id" back to '+' symbol
+    run_id=+
 done
