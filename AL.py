@@ -1,6 +1,8 @@
+from matplotlib import pyplot as plt
 import numpy as np
 import shutil
 import pickle
+import scipy
 import yaml
 import pdb
 import os
@@ -310,12 +312,14 @@ class Experiment(object):
         # count how many queries have been 
         # selected before
         n_oldqueries = 0
+        iter_cnt = 0
         Q_path = os.path.join(method_path,'queries')
         Q_files = os.listdir(Q_path)
         for f in Q_files:
             Qs = np.loadtxt(os.path.join(
                 Q_path, f))
             n_oldqueries += len(Qs)
+            iter_cnt += 1
         
         # preparing the indices
         test_inds = np.int32(
@@ -379,7 +383,7 @@ class Experiment(object):
             print("Starting the iterations for %s"%
                   method_name)
             nqueries = 0
-            iter_cnt = 0
+            #iter_cnt = 0
             while nqueries < max_queries:
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
@@ -402,8 +406,8 @@ class Experiment(object):
                 np.savetxt(os.path.join(
                         method_path, 
                         'queries',
-                        'Q_%d.txt'% (
-                            n_oldqueries+iter_cnt)
+                        '%d.txt'% (
+                            iter_cnt)
                         ), curr_pool[Q_inds])
                 
                 # preparing the updating training
@@ -481,6 +485,103 @@ class Experiment(object):
         # re-add the same method
         self.add_method(method_name, run)
         
+    def read_queries(self, method_name, run):
+        """Reading queries of a method in the experiment's
+        run
+        """
+        
+        run_path = os.path.join(self.root_dir, str(run))
+        method_path = os.path.join(run_path, method_name)
+        
+        queries = []
+        Q_files = os.listdir(os.path.join(
+            method_path,'queries'))
+        for f in Q_files:
+            file_path = os.path.join(
+                method_path,'queries',f)
+            queries += [len(np.loadtxt(file_path))]
+            
+        return queries
+        
+    def read_run(self, run):
+        """Reading results of different methods
+        in a given run of the experiment
+        """
+        
+        # methods that exist in this run
+        run_path = os.path.join(self.root_dir,
+                                str(run))
+        dirs = [dir for dir in os.listdir(run_path)
+                if os.path.isdir(os.path.join(
+                        run_path,dir))]
+        # throw away folder of 'saved_models'
+        dirs.remove('saved_model')
+        
+        # dictionary of accuracies
+        accs = {}
+        for method in dirs:
+            method_path = os.path.join(run_path,
+                                       method)
+            accs.update({method: np.loadtxt(
+                os.path.join(method_path,'accs.txt'))})
+            
+        # also returning the number of queries for
+        # FI-sum algorithm
+        fi_queries = []
+        if 'fi' in dirs:
+            Q_files = os.listdir(os.path.join(
+                run_path,'fi','queries'))
+            for f in Q_files:
+                file_path = os.path.join(
+                    run_path,'fi','queries',f)
+                fi_queries += [len(np.loadtxt(file_path))]
+
+        return accs, fi_queries
+        
+    def visualize(self, run, interp=True):
+        """Visualizing results of a specific run in the
+        experiment
+        """
+        
+        # first read the results
+        accs, fi_queries = self.read_run(run)
+        
+        # load parameters
+        if not(hasattr(self, 'pars')):
+            self.load_parameters()
+            
+        max_queries = np.sum(
+            self.read_queries('random',run))
+        xq = np.arange(0,max_queries+self.pars['k'],
+                       self.pars['k'])
+        if 'fi' in accs:
+            if interp:
+                interp_fi_accs = np.zeros(len(xq))
+                f = scipy.interpolate.interp1d(
+                    np.cumsum([0]+fi_queries), 
+                    accs['fi'], kind='nearest')
+                accs['fi'] = f(xq)
+
+        for method_name in accs:
+            if (method_name=='fi' and not(interp)):
+                fi_xq = np.cumsum(fi_queries)
+                plt.plot(fi_xq, 
+                         accs[method_name],
+                         label=method_name,
+                         marker='*')
+            else:
+                plt.plot(xq, 
+                         accs[method_name], 
+                         label=method_name,
+                         marker='*')
+            
+        plt.xlabel('# Queries', fontsize=15)
+        plt.ylabel('Accuracy', fontsize=15)
+        plt.legend(fontsize=15)
+        #plt.xticks(np.arange(
+        #    0,max_queries+1,k))
+        plt.xlim([-1,max_queries+5])
+        plt.grid()
 
 def paths_n_labels(path, label_name):
     """Preparing a list containing the path to all individual
