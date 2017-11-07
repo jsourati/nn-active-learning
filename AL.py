@@ -564,7 +564,7 @@ class Experiment(object):
 
         for method_name in accs:
             if (method_name=='fi' and not(interp)):
-                fi_xq = np.cumsum(fi_queries)
+                fi_xq = np.cumsum([0] + fi_queries)
                 plt.plot(fi_xq, 
                          accs[method_name],
                          label=method_name,
