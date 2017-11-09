@@ -51,18 +51,27 @@ class CNN(object):
     """Class of CNN models
     """
     
-    def __init__(self, x, layer_dict, name, feature_layer=None):
+    def __init__(self, 
+                 x, 
+                 layer_dict, 
+                 name,
+                 feature_layer=None,
+                 dropout=None):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
         key is a 2-element list inlcuding  depth of this layer and its type,
         and a name which will be assigned to the scope name of the variabels
         
-        Type of each layer is either 'fc' (for fully connected) and 'conv' 
-        for convolutional layers. Moreover, depth of each layer will be
-        equal to the number of nodes (in fully-connected layers) and 
-        number of filters (in convolutional layers). This list for 
-        convolutional layers should have three elements, where the last
-        element specifies the kernel size of that layer.
+        The constructor goes through all the layers one-by-one in the same
+        order as the items of `layer_dict` dictionary, and add each layer
+        over the previous one. Each time the layers is added the output of
+        the model (stored in `self.output`) will be updated to be the output
+        of the last layer. Hence, when we added a layer with an index equal
+        to the given `feature_layer`, the marker `self.features` will be 
+        make equal to the output of this layer. Moreover, if the dropout
+        is supposed to be applied on this layer, the output of this layer
+        will be dropped-out with the given probability, at the time of 
+        training.
         
         The assumption is that at least the first layer is a CNN, hence
         depth of the input layer is the number of channels of the input.
@@ -71,11 +80,49 @@ class CNN(object):
         
         Also, there is the option of specifying a layer whose output
         could be used extracted feature vectors of the input samples.
+        
+        :Parameters:
+        
+            *x*:  Tensorflow placeholder in format [n_batch, (H, W), n_channel]
+                Input to the network 
+        
+            *layer_dict*: dictionary
+                Information about all layers of the network in format 
+            
+                    {layer_name: layer_characteristic}
+
+                Layer's characteristic, in turn, contains two or three 
+                items dependending on the type of the layer. At this time
+                this class supports only three types of layers:
+               
+                - Convolutional:   [# output channel, 'conv', kernel size]
+                - Fully-connected: [# output channel, 'fc']
+                - max-pooling:     [pool size, 'pool']
+                
+                 Note that "kernel size" and "pool size" are a list with 
+                 two elements.
+        
+            *name*: string
+                Name of Tensorflow scope of all the variables defined in
+                this class.
+        
+            *feature_layer*: int (default: None)
+                If given, is the index of the layer whose output will be 
+                marked as the features extracted from the network; this 
+                index should be given in terms of the order of layers in
+                `layer_dict`
         """
         
         self.x = x
         self.layer_type = []
         self.name = name
+        
+        if dropout:
+            self.dropout_layers = dropout[0]
+            self.dropout = dropout[1]
+            self.keep_prob = tf.placeholder(tf.float32)
+        else:
+            self.dropout_layers = []
         
         # creating the network's variables
         self.var_dict = {}
@@ -92,6 +139,12 @@ class CNN(object):
                     layer_dict[layer_names[i]], 
                     layer_names[i],
                     layer_dict[layer_names[i+1]][1])
+                
+                # dropping out the output layers if the layer
+                # is in the list of dropped-out layers
+                if i in self.dropout_layers:
+                    self.output = tf.nn.dropout(
+                        self.output, self.keep_prob)
                 
                 # set the output of the layer one before last as 
                 # the features that the network will extract
