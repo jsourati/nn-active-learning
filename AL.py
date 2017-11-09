@@ -561,8 +561,13 @@ class Experiment(object):
                     np.cumsum([0]+fi_queries), 
                     accs['fi'], kind='nearest')
                 accs['fi'] = f(xq)
-
-        for method_name in accs:
+        # make sure the order will be the same
+        all_methods = ['fi','random',
+                       'entropy','rep-entropy']
+        for method_name in all_methods:
+            if not(method_name in accs):
+                continue
+                
             if (method_name=='fi' and not(interp)):
                 fi_xq = np.cumsum([0] + fi_queries)
                 plt.plot(fi_xq, 
