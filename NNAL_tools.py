@@ -679,8 +679,23 @@ def shrink_gradient(grad, method, args=None):
             grad_size = np.prod(grW.shape)+len(grb)
             shrunk_grad[t] = (np.sum(
                 grW) + np.sum(grb))/grad_size
+            
+    elif method=='max':
+
+        layer_num = int(len(grad) / 2)
+        shrunk_grad = np.zeros(layer_num)
+
+        for t in range(layer_num):
+            grW = grad[2*t]
+            grb = grad[2*t+1]
+            # Taking the gradient with maximum
+            # magnitude
+            grW_max = max(grW.flatten(), key=abs)
+            grb_max = max(grb, key=abs)
+            shrunk_grad[t] = max(grW_max, grb_max)
                 
     elif method=='rand':
+
         # layers to sample from
         layer_inds = args['layer_inds']
         
