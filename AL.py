@@ -515,7 +515,8 @@ class Experiment(object):
                 if os.path.isdir(os.path.join(
                         run_path,dir))]
         # throw away folder of 'saved_models'
-        dirs.remove('saved_model')
+        if 'saved_model' in dirs:
+            dirs.remove('saved_model')
         
         # dictionary of accuracies
         accs = {}
@@ -538,7 +539,7 @@ class Experiment(object):
 
         return accs, fi_queries
         
-    def visualize(self, run, interp=True):
+    def visualize_run(self, run, interp=True):
         """Visualizing results of a specific run in the
         experiment
         """
@@ -550,6 +551,7 @@ class Experiment(object):
         if not(hasattr(self, 'pars')):
             self.load_parameters()
             
+        # compute the common maximum queries
         max_queries = np.sum(
             self.read_queries('random',run))
         xq = np.arange(0,max_queries+self.pars['k'],
@@ -585,8 +587,68 @@ class Experiment(object):
         plt.legend(fontsize=15)
         #plt.xticks(np.arange(
         #    0,max_queries+1,k))
-        plt.xlim([-1,max_queries+5])
+        plt.xlim([-5,max_queries+5])
         plt.grid()
+        
+    def summarize_all(self, viz=True, std=False):
+        """Visualizing the average results of 
+        all existing runs (assuming that they
+        all have same number of queries)
+        """
+        
+        # list the runs
+        runs = self.get_runs()
+        
+        # load parameters
+        if not(hasattr(self, 'pars')):
+            self.load_parameters()
+        
+        # read the first run to compute the 
+        # common maximum queries
+        max_queries = np.sum(
+            self.read_queries('random',runs[0]))
+        xq = np.arange(0,max_queries+self.pars['k'],
+                       self.pars['k'])
+        
+        # reading everything 1-by-1
+        all_methods = ['fi','random',
+                       'entropy','rep-entropy']
+
+        total_accs = {method: 
+                      np.zeros((len(runs), len(xq))) 
+                      for method in all_methods}
+
+        for i in range(len(runs)):
+            accs, fi_queries = self.read_run(runs[i])
+            
+            # interpolation
+            interp_fi_accs = np.zeros(len(xq))
+            f = scipy.interpolate.interp1d(
+                np.cumsum([0]+fi_queries), 
+                accs['fi'], kind='nearest')
+            accs['fi'] = f(xq)
+                
+            for method in all_methods:
+                total_accs[method][i,:] = accs[method]
+                
+        # visualizing the mean/std, if necessary
+        if std:
+            for method in all_methods:
+                plt.errorbar(
+                    xq, np.mean(total_accs[method], axis=0), 
+                    yerr=np.std(total_accs[method], axis=0), 
+                    label=method, marker='*')
+        else:
+            for method in all_methods:
+                plt.plot(
+                    xq, np.mean(total_accs[method], axis=0),
+                    label=method, marker='*')
+        plt.xlabel('# Queries', fontsize=15)
+        plt.ylabel('Accuracy', fontsize=15)
+        plt.legend(fontsize=15)
+        plt.grid()
+        return total_accs
+        
 
 def paths_n_labels(path, label_name):
     """Preparing a list containing the path to all individual
