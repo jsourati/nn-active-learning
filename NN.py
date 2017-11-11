@@ -5,7 +5,9 @@ import copy
 import pdb
 import sys
 import cv2
+
 import NNAL_tools
+#from NNAL_tools import load_weights_VGG19
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -83,10 +85,10 @@ class CNN(object):
         
         :Parameters:
         
-            *x*:  Tensorflow placeholder in format [n_batch, (H, W), n_channel]
+            **x** : Tensorflow placeholder in format [n_batch, (H, W), n_channel]
                 Input to the network 
         
-            *layer_dict*: dictionary
+            **layer_dict** : dictionary
                 Information about all layers of the network in format 
             
                     {layer_name: layer_characteristic}
@@ -102,27 +104,33 @@ class CNN(object):
                  Note that "kernel size" and "pool size" are a list with 
                  two elements.
         
-            *name*: string
+            **name**: string
                 Name of Tensorflow scope of all the variables defined in
                 this class.
         
-            *feature_layer*: int (default: None)
+            **feature_layer** : int (default: None)
                 If given, is the index of the layer whose output will be 
                 marked as the features extracted from the network; this 
                 index should be given in terms of the order of layers in
                 `layer_dict`
+        
+            **dropout** : list of two elements (default: None)
+                If any layer should be dropped out during the training,
+                this list contains the layers that need to be dropped out
+                (first item) and the drop-out rate (second item).
         """
         
         self.x = x
         self.layer_type = []
         self.name = name
         
+        self.keep_prob = tf.placeholder(tf.float32)
         if dropout:
             self.dropout_layers = dropout[0]
-            self.dropout = dropout[1]
-            self.keep_prob = tf.placeholder(tf.float32)
+            self.dropout_rate = dropout[1]
         else:
             self.dropout_layers = []
+            self.dropout_rate = 1.
         
         # creating the network's variables
         self.var_dict = {}
@@ -279,27 +287,34 @@ class CNN(object):
         """
         pool_size = layer_specs[0]
             
-    def initialize_graph(self, init_X_train, init_Y_train, 
-                         train_batch, epochs,  addr=None):
-        """Initializing a graph given an initial training data set 
-        and saving the results if necessary
-        """
-        init = tf.global_variables_initializer()        
-        with tf.Session() as sess:
-            sess.run(init)
-            
-            print(20*'-' + '  Initialization  ' +20*"-")
-            print("Epochs: ", end='')
-            for i in range(epochs):    
-                self.train_graph_one_epoch(
-                    init_X_train, 
-                    init_Y_train, 
-                    train_batch, sess)
-
-                print(i, end=', ')
-            if addr:
-                self.save_model(addr, sess)
+    def initialize_graph(self, 
+                         session,
+                         pretr_name=None,
+                         path=None):
+        """Initializing the graph, and if given loading
+        a set of pre-trained weights into the model
         
+        :Parameters:
+        
+            **session** : Tensorflow session
+                The active session in which the model is
+                running
+        
+            **pretr_name** : string (default: None)
+                Name of the model that has pre-trained
+                weights. It will be `None` if no pre-
+                trained weights are given
+        
+            **path** : string (default: None)
+                Path to the pre-trained weights, if the
+                the given model has one
+        """
+        session.run(tf.global_variables_initializer())
+        
+        if pretr_name=="VGG19":
+            load_weights_VGG19(self, path, session)
+            
+
     def save_model(self, addr, session):
         """Saving the current model
         """
@@ -372,31 +387,36 @@ class CNN(object):
                                       gpars)})
 
         
-    def train_graph_one_epoch(self, X_train, Y_train, batch_size, session):
-        """Randomly partition the data into batches and complete one
-        epoch of training
+    def train_graph_one_epoch(self, expr, 
+                              train_inds, 
+                              batch_size, 
+                              session):
+        """Randomly partition the data into 
+        batches and complete one epoch of training
         
-        Input feature vectors, `X_train` and labels, `Y_train` are columnwise
         """
         
         # random partitioning into batches
-        train_size = X_train.shape[0]
+        train_size = len(train_inds)
         if train_size > batch_size:
-            batch_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = prep_dat.gen_batch_inds(
                 train_size, batch_size)
-            batch_of_data = prep_dat.gen_batch_tensors(
-                X_train, batch_inds)
-            batch_of_labels = prep_dat.gen_batch_matrices(
-                Y_train, batch_inds, col=False)
         else:
-            batch_of_data = [X_train]
-            batch_of_labels = [Y_train]
+            batch_of_inds = [np.arange(
+                train_size).tolist()]
         
         # completing an epoch
-        for j in range(len(batch_of_data)):
-            session.run(self.train_step, 
-                        feed_dict={self.x: batch_of_data[j], 
-                                   self.y_: batch_of_labels[j]})
+        for j in range(len(batch_of_inds)):
+            # create the 4D array of batch images
+            iter_inds = train_inds[batch_of_inds[j]]
+            batch_of_imgs, batch_of_labels = load_winds(
+                iter_inds, expr.img_path_list, expr.labels)
+            session.run(
+                self.train_step, 
+                feed_dict={self.x: batch_of_imgs, 
+                           self.y_: batch_of_labels.T,
+                           self.keep_prob: self.dropout_rate}
+                )
         
         
     
@@ -478,8 +498,9 @@ class AlexNet_CNN(AlexNet):
             grads_and_vars=gradients)
         
         # also define the accuracy operation
+        self.prediction = tf.argmax(self.posteriors, 1)
         correct_pred = tf.equal(
-            tf.argmax(self.output, 1), tf.argmax(self.y_, 1))
+            self.prediction, tf.argmax(self.y_, 1))
         self.accuracy = tf.reduce_mean(
             tf.cast(correct_pred, tf.float32))
         
@@ -507,8 +528,27 @@ class AlexNet_CNN(AlexNet):
         """Randomly partition the data into batches 
         and complete one epoch of training
         
-        Input feature vectors, `X_train`, and labels, 
-        `Y_train` are columnwise
+        :Parameters:
+        
+            **expr** : object of class AL.Experiment
+                An active learning experiment class that
+                has access to the the data path so that
+                the input `train_inds` can be translated
+                into real images
+
+            **train_inds** : 1D array of integer indices
+                List of indices tha can be used to access
+                the training images through the `expr`.
+                The indices are stored with respect to
+                the path list `expr.im_path_list`, and
+                equivalently their labels `expr.labels`.
+
+            **batch_size** : int
+                Size of the training mini-batches
+        
+            **session** : Tensorflow session
+                An active tensorflow session within 
+                which the model is running
         """
         
         # random partitioning into batches
@@ -532,6 +572,41 @@ class AlexNet_CNN(AlexNet):
                            self.y_: batch_of_labels.T,
                            self.KEEP_PROB: self.dropout_rate}
                 )
+            
+    def predict(self, expr, test_inds, 
+                batch_size, session):
+        """Generate a set of predictions for a set of
+        data points
+        
+        The predictions will be in form of class labels
+        for test samples whose indices are saved in
+        text.txt of the given experiment.
+        """
+        
+        test_size = len(test_inds)
+        if test_size > batch_size:
+            batch_inds = prep_dat.gen_batch_inds(
+                test_size, batch_size)
+        else:
+            batch_inds = [np.arange(
+                test_inds).tolist()]
+            
+        n = len(test_inds)
+        predicts = np.zeros(n)
+        for j in range(len(batch_inds)):
+            # create the 4D array of the current batch
+            iter_inds = test_inds[batch_inds[j]]
+            batch_of_imgs = load_winds(
+                iter_inds, expr.img_path_list)
+            
+            predicts[batch_inds[j]] = session.run(
+                self.prediction, 
+                feed_dict={self.x: batch_of_imgs, 
+                           self.KEEP_PROB: 1.})
+
+        return predicts
+            
+        
             
     def evaluate(self, expr, test_inds, 
                  batch_size, session):

@@ -32,7 +32,7 @@ if [ ! -d $root_dir ]; then
     echo $root_dir
 
     # creating the experiment
-    python -c "from expr_handler import create_expr; create_expr('$root_dir', '$data_dir', '$target_classes')"
+    python -c "from expr_handler import create_expr; create_expr('$root_dir','$data_dir','$target_classes')"
 
     
     # setting up the parameters
@@ -51,6 +51,9 @@ for ((i=1;i<=$run_num;i++))
 do
     # and now run the experiment
     M=(fi random entropy rep-entropy)
+    
+    # print the parameters
+    python -c "import expr_handler; import AL; E=AL.Experiment('$root_dir'); expr_handler.print_parameters(E)"
     
     # if it's a new run create it
     if ! [[ $run_id =~ $re ]]; then

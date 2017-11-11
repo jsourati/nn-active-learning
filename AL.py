@@ -237,14 +237,18 @@ class Experiment(object):
                     sess)
                 print('%d'% i, end=',')
             
-            # compute the initial accuracy and store it
-            init_acc = model.evaluate(
-                self, test_inds, 
-                self.pars['batch_size'], sess)
-
+            # get a prediction of the test samples
+            predicts = model.predict(
+                self, 
+                test_inds, 
+                self.pars['batch_size'],
+                sess)
+                
+            # save the predictions 
             np.savetxt(os.path.join(
-                    run_path,'init_acc.txt'),[init_acc])
-            # save the initial model into the run's folder
+                run_path, 'init_predicts.txt'), 
+                       predicts)
+            # save the initial model
             saver.save(sess, 
                        os.path.join(run_path, 
                                     'saved_model',
@@ -273,6 +277,7 @@ class Experiment(object):
         # copying the following files:
         # init_train_inds -->   curr_train
         # pool_inds       -->   curr_pool
+        # init_predicts   -->   predicts
         # saved_model/    -->   curr_model/
         method_path = os.path.join(run_path, method_name)
 
@@ -284,6 +289,10 @@ class Experiment(object):
             os.path.join(run_path,'pool_inds.txt'),
             os.path.join(method_path,'curr_pool.txt')
             )
+        shutil.copy(
+            os.path.join(run_path,'init_predicts.txt'),
+            os.path.join(method_path,'predicts.txt')
+            )
         # copying the directory with shutil.copyfile()
         # shutil.copyfile() gave strange errors
         os.mkdir(os.path.join(method_path, 'curr_model'))
@@ -294,12 +303,17 @@ class Experiment(object):
                     os.path.join(method_path,'curr_model')
             )
         
-        # create results.txt and put the initial accuracy
-        # as the first value in it
-        init_acc = np.loadtxt(os.path.join(
-                run_path, 'init_acc.txt'))
-        np.savetxt(os.path.join(
-                 method_path, 'accs.txt'),[init_acc])
+        # also, computing the first accuracy for the 
+        # method
+        test_inds = np.int32(np.loadtxt(
+            os.path.join(run_path, 'test_inds.txt')))
+        predicts = np.loadtxt(
+            os.path.join(method_path,'predicts.txt'))
+        init_acc = get_accuracy(
+            predicts, self.labels[:,test_inds])
+        np.savetxt(
+            os.path.join(method_path,'accs.txt'),
+            [init_acc])
         
     def run_method(self, method_name, run, max_queries):
         """Running a querying method in a run until a 
@@ -435,9 +449,30 @@ class Experiment(object):
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
-                acc = model.evaluate(
+                predicts = model.predict(
                     self, test_inds, 
                     self.pars['batch_size'], sess)
+                # loading the previous predictions,
+                # appending the new ones to them,
+                # and save them back
+                curr_predicts = np.loadtxt(
+                    os.path.join(method_path, 
+                                 'predicts.txt'))
+                if curr_predicts.ndim<2:
+                    curr_predicts = np.expand_dims(
+                        curr_predicts, axis=0)
+                new_predicts = np.append(
+                    curr_predicts, 
+                    np.expand_dims(predicts, axis=0),
+                    axis=0)
+                np.savetxt(os.path.join(
+                    method_path, 
+                    'predicts.txt'), new_predicts)
+
+                # computing the accuracies
+                acc = get_accuracy(
+                    predicts, self.labels[:,test_inds])
+                                   
                 with open(os.path.join(
                         method_path, 
                         'accs.txt'), 'a') as f:
@@ -649,6 +684,17 @@ class Experiment(object):
         plt.grid()
         return total_accs
         
+def evaluate_PrecRec(preds, labels):
+    """Compute precision-recall criteria for a given set
+    of predictions versus groud-truth labels
+    
+    This function is an example-based method explained
+    in http://ieeexplore.ieee.org/document/6471714/
+    """
+    
+    pass
+    
+    
 
 def paths_n_labels(path, label_name):
     """Preparing a list containing the path to all individual
@@ -682,4 +728,23 @@ def make_onehot(labels):
     return one_hot
         
         
+def get_accuracy(predicts, labels, hot=True):
+    """Computing accuracy of a set of predictions
+    based on a given ground-truth labels
     
+    The predictions should be in form
+    of integers, where each integer represents a
+    class label.
+    """
+    
+    n = len(labels)
+    
+    # if labels are in one-hot vector format
+    if hot:
+        labels = np.where(labels>0)[0]
+        
+    # now compare the integer class labels
+    acc = np.sum(predicts==labels) / float(n)
+    
+    return acc
+        
