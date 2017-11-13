@@ -299,8 +299,8 @@ class Experiment(object):
         for item in os.listdir(os.path.join(
                 run_path,'saved_model')):
             shutil.copy2(
-                    os.path.join(run_path,'saved_model',item),
-                    os.path.join(method_path,'curr_model')
+                os.path.join(run_path,'saved_model',item),
+                os.path.join(method_path,'curr_model')
             )
         
         # also, computing the first accuracy for the 
@@ -538,7 +538,7 @@ class Experiment(object):
             
         return queries
         
-    def eval_run(self, run):
+    def eval_run(self, run, eval_method, save=True):
         """Evaluating methods of a given run by
         comparing the predictions in different iterations
         with the ground-truth labels
@@ -558,15 +558,35 @@ class Experiment(object):
         if "saved_model" in subdirs:
             subdirs.remove('saved_model')
             
+        """Computing the evaluation metrics"""
+        """ ------------------------------ """
         eval_dict={method:[] for method in subdirs}
         for method in subdirs:
             # load all the predictions
             Yhat = np.loadtxt(os.path.join(
                 run_path, method, 'predicts.txt'))
-            eval_crit = np.zeros(Yhat.shape[0])
-            for i in range(Yhat.shape[0]):
-                eval_crit[i] = get_accuracy(
-                    Yhat[i,:], test_labels)
+
+            if eval_method=='accuracy':
+                eval_crit = np.zeros(Yhat.shape[0])
+                for i in range(Yhat.shape[0]):
+                    eval_crit[i] = get_accuracy(
+                        Yhat[i,:], test_labels)
+                if save:
+                    np.savetxt(os.path.join(
+                        run_path, method, 
+                        'accs.txt'), eval_crit)
+
+            elif eval_method=='PR':
+                eval_crit = np.zeros((2,Yhat.shape[0]))
+                for i in range(Yhat.shape[0]):
+                    P,R = get_multi_PR(
+                        Yhat[i,:], test_labels)
+                    eval_crit[0,i] = P
+                    eval_crit[1,i] = R
+                if save:
+                    np.savetxt(os.path.join(
+                        run_path, method, 
+                        'accs.txt'), eval_crit)
             
             eval_dict[method] = eval_crit
             
@@ -784,3 +804,47 @@ def get_accuracy(predicts, labels, hot=True):
     return acc
     
 
+def get_multi_PR(predicts, labels, hot=True):
+    """Computing Precision-Recall of a multiclass
+    predictions and ground-truth
+    """
+    
+    n=len(predicts)
+
+    # if labels are in one-hot vector format
+    if hot:
+        labels = np.where(labels>0)[0]
+    
+    # number of classes:
+    C = len(np.unique(labels))
+    PRs = np.zeros((2,C))
+    for i in range(C):
+        # compute PR for this class versus rest
+        bin_predicts = predicts==i
+        bin_labels = labels==i
+        if all(~bin_predicts):
+            continue
+        
+        (P,R) = get_PR(bin_predicts, bin_labels)
+        PRs[0,i] = P
+        PRs[1,i] = R
+    
+    return np.mean(PRs, axis=1)
+
+
+def get_PR(bin_predicts, bin_labels):
+    """Computing Precision-Recall metric for a given
+    set of binary predictions and ground-truth
+    """
+    
+    TP = np.logical_and(bin_predicts, bin_labels)
+    FP = np.logical_and(bin_predicts, ~bin_labels)
+    FN = np.logical_and(~bin_predicts, bin_labels)
+    
+    # precision = TP / (TP+FP)
+    P = float(np.sum(TP)) / float(np.sum(TP) + np.sum(FP))
+        
+    # recall = TP / (TP+FN)
+    R = float(np.sum(TP)) / float(np.sum(TP) + np.sum(FN))
+    
+    return (P,R)
