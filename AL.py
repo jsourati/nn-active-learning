@@ -538,6 +538,41 @@ class Experiment(object):
             
         return queries
         
+    def eval_run(self, run):
+        """Evaluating methods of a given run by
+        comparing the predictions in different iterations
+        with the ground-truth labels
+        """
+        
+        run_path = os.path.join(
+            self.root_dir, str(run))
+        
+        test_inds = np.int32(np.loadtxt(os.path.join(
+            run_path, 'test_inds.txt')))
+        test_labels = self.labels[:,test_inds]
+        # existing methods in the run    
+        subdirs = [subdir for subdir in 
+                   os.listdir(run_path) 
+                   if os.path.isdir(os.path.join(
+                           run_path,subdir))]
+        if "saved_model" in subdirs:
+            subdirs.remove('saved_model')
+            
+        eval_dict={method:[] for method in subdirs}
+        for method in subdirs:
+            # load all the predictions
+            Yhat = np.loadtxt(os.path.join(
+                run_path, method, 'predicts.txt'))
+            eval_crit = np.zeros(Yhat.shape[0])
+            for i in range(Yhat.shape[0]):
+                eval_crit[i] = get_accuracy(
+                    Yhat[i,:], test_labels)
+            
+            eval_dict[method] = eval_crit
+            
+        return eval_dict
+            
+        
     def read_run(self, run):
         """Reading results of different methods
         in a given run of the experiment
@@ -737,7 +772,7 @@ def get_accuracy(predicts, labels, hot=True):
     class label.
     """
     
-    n = len(labels)
+    n = len(predicts)
     
     # if labels are in one-hot vector format
     if hot:
@@ -747,4 +782,5 @@ def get_accuracy(predicts, labels, hot=True):
     acc = np.sum(predicts==labels) / float(n)
     
     return acc
-        
+    
+

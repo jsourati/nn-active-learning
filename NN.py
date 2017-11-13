@@ -604,7 +604,7 @@ class AlexNet_CNN(AlexNet):
                 feed_dict={self.x: batch_of_imgs, 
                            self.KEEP_PROB: 1.})
 
-        return predicts
+            return predicts
             
         
             
