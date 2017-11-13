@@ -588,8 +588,8 @@ class AlexNet_CNN(AlexNet):
             batch_inds = prep_dat.gen_batch_inds(
                 test_size, batch_size)
         else:
-            batch_inds = [np.arange(
-                test_inds).tolist()]
+            batch_inds = [np.arange(len(
+                test_inds)).tolist()]
             
         n = len(test_inds)
         predicts = np.zeros(n)
@@ -604,7 +604,7 @@ class AlexNet_CNN(AlexNet):
                 feed_dict={self.x: batch_of_imgs, 
                            self.KEEP_PROB: 1.})
 
-            return predicts
+        return predicts
             
         
             
