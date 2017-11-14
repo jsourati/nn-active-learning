@@ -7,7 +7,6 @@ import sys
 import cv2
 
 import NNAL_tools
-#from NNAL_tools import load_weights_VGG19
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -289,7 +288,6 @@ class CNN(object):
             
     def initialize_graph(self, 
                          session,
-                         pretr_name=None,
                          path=None):
         """Initializing the graph, and if given loading
         a set of pre-trained weights into the model
@@ -311,8 +309,9 @@ class CNN(object):
         """
         session.run(tf.global_variables_initializer())
         
-        if pretr_name=="VGG19":
-            load_weights_VGG19(self, path, session)
+        if self.name=="VGG19":
+            NNAL_tools.load_weights_VGG19(
+                self, path, session)
             
 
     def save_model(self, addr, session):
@@ -322,28 +321,34 @@ class CNN(object):
         saver.save(session, addr)
         self.save_path = addr
         
-    def extract_features(self, X, session, batch_size=None):
+    def extract_features(self, inds, 
+                         img_path_list, 
+                         session, 
+                         batch_size):
         """Extracting features
         """
         
-        n = X.shape[0]
-        if batch_size:
-            d = self.features.get_shape()[0].value
-            features = np.zeros((d, n))
-            quot, rem = np.divmod(n, batch_size)
-            for i in range(quot):
-                if i<quot-1:
-                    inds = np.arange(i*batch_size, (i+1)*batch_size)
-                else:
-                    inds = slice(i*batch_size, n)
-                    
-                iter_X = X[inds,:,:,:]
-                features[:,inds] = session.run(
-                    self.features, feed_dict={self.x:iter_X})
-                
+        n = len(inds)
+        d = self.features.get_shape()[0].value
+        features = np.zeros((d, n))
+        # preparing batch_of_inds, whose
+        # indices are in terms of "inds"
+        if batch_size<n: 
+            batch_of_inds = [np.arange(
+                n).tolist()]
         else:
-            features = session.run(
-                self.features, feed_dict={self.x:X})
+            batch_of_inds = prep_dat.gen_batch_inds(
+                n, batch_size)
+
+        # extracting the features
+        for inner_inds in batch_of_inds:
+            # loading the data for this patch
+            X = load_winds(inds[inner_inds],
+                           img_path_list)
+            features[:,inner_inds] = session.run(
+                self.feature_layer, 
+                feed_dict={self.x: X, 
+                           self.keep_prob:1.}).T
             
         return features
                     
@@ -367,10 +372,11 @@ class CNN(object):
             learning_rate).minimize(loss)
         
         # define the accuracy
-        correct_prediction = tf.equal(tf.argmax(self.output, 0), 
-                                      tf.argmax(self.y_, 0))
-        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, 
-                                               tf.float32))
+        self.prediction = tf.argmax(self.posteriors, 0)
+        correct_pred = tf.equal(self.prediction, 
+                                tf.argmax(self.y_, 0))
+        self.accuracy = tf.reduce_mean(
+            tf.cast(correct_pred, tf.float32))
         
     def get_gradients(self, start_layer=0):
         """Forming gradients of the log-posteriors
@@ -383,8 +389,11 @@ class CNN(object):
         c = self.output.get_shape()[0].value
         for j in range(c):
             self.grad_log_posts.update(
-                {str(j): tf.gradients(tf.log(self.posteriors)[j, 0], 
-                                      gpars)})
+                {str(j): tf.gradients(
+                    tf.log(self.posteriors)[j, 0], 
+                    gpars)
+             }
+            )
 
         
     def train_graph_one_epoch(self, expr, 
@@ -419,6 +428,39 @@ class CNN(object):
                 )
         
         
+    def predict(self, expr, test_inds, 
+                batch_size, session):
+        """Generate a set of predictions for a set of
+        data points
+        
+        The predictions will be in form of class labels
+        for test samples whose indices are saved in
+        text.txt of the given experiment.
+        """
+        
+        test_size = len(test_inds)
+        if test_size > batch_size:
+            batch_inds = prep_dat.gen_batch_inds(
+                test_size, batch_size)
+        else:
+            batch_inds = [np.arange(len(
+                test_inds)).tolist()]
+            
+        n = len(test_inds)
+        predicts = np.zeros(n)
+        for j in range(len(batch_inds)):
+            # create the 4D array of the current batch
+            iter_inds = test_inds[batch_inds[j]]
+            batch_of_imgs = load_winds(
+                iter_inds, expr.img_path_list)
+            
+            predicts[batch_inds[j]] = session.run(
+                self.prediction, 
+                feed_dict={self.x: batch_of_imgs, 
+                           self.keep_prob: 1.})
+
+        return predicts
+
     
 class AlexNet_CNN(AlexNet):
     """
@@ -435,14 +477,10 @@ class AlexNet_CNN(AlexNet):
         
         
     def initialize_graph(self, session,
-                         weights_path, addr=None):
+                         weights_path):
         session.run(tf.global_variables_initializer())
         self.WEIGHTS_PATH=weights_path
         self.load_initial_weights(session)
-        if addr:
-            saver = tf.train.Saver()
-            saver.save(session, addr)
-
     
     def extract_features(self, inds, 
                          img_path_list,
@@ -466,7 +504,7 @@ class AlexNet_CNN(AlexNet):
         for inner_inds in batch_of_inds:
             # loading the data for this patch
             X = load_winds(inds[inner_inds],
-                              img_path_list)
+                           img_path_list)
             features[:,inner_inds] = session.run(
                 self.feature_layer, 
                 feed_dict={self.x: X, 
@@ -605,56 +643,87 @@ class AlexNet_CNN(AlexNet):
                            self.KEEP_PROB: 1.})
 
         return predicts
-            
-        
-            
-    def evaluate(self, expr, test_inds, 
-                 batch_size, session):
-        """Evaluating the model based on test indices
-        of a given exeriment
-        """
-        
-        test_size = len(test_inds)
-        if test_size > batch_size:
-            batch_inds = prep_dat.gen_batch_inds(
-                test_size, batch_size)
-        else:
-            batch_inds = [test_inds]
-            
-        n = len(test_inds)
-        accs = 0.
-        for j in range(len(batch_inds)):
-            # create the 4D array of batch images
-            iter_inds = test_inds[batch_inds[j]]
-            batch_of_imgs, batch_of_labels = load_winds(
-                iter_inds, expr.img_path_list, expr.labels)
-            batch_acc = session.run(
-                self.accuracy, 
-                feed_dict={self.x: batch_of_imgs, 
-                           self.y_: batch_of_labels.T,
-                           self.KEEP_PROB: 1.}
-                )
-            accs += batch_acc*len(batch_inds[j])
 
-        return accs/n
+def create_model(model_name,
+                 dropout_rate, 
+                 n_class,
+                 learning_rate, 
+                 starting_layer):
+    
+    if model_name=='Alex':
+        model = create_Alex(dropout_rate, 
+                            n_class,
+                            learning_rate, 
+                            starting_layer)
+    elif model_name=='VGG19':
+        model = create_VGG19(dropout_rate, 
+                             learning_rate,
+                             n_class, 
+                             starting_layer)
+        
+    return model
 
-def create_Alex(dropout_rate, c, 
+def create_Alex(dropout_rate, 
+                n_class,
                 learning_rate, 
-                starting_gr_layer):
+                starting_layer):
     """Creating an AlexNet model 
     using `AlexNet_CNN` class
     """
 
-    x = tf.placeholder(tf.float32, [None, 227, 227, 3])
+    x = tf.placeholder(tf.float32, 
+                       [None, 227, 227, 3])
     skip_layer = ['fc8']
     model = AlexNet_CNN(
-        x, dropout_rate, c, skip_layer)
+        x, dropout_rate, n_class, skip_layer)
     
     model.get_optimizer(learning_rate)
     
     # getting the gradient operations
-    model.get_gradients(starting_gr_layer)
+    model.get_gradients(starting_layer)
     
+    return model
+
+def create_VGG19(dropout_rate, learning_rate,
+                 n_class, starting_layer):
+    """Creating a VGG19 model using CNN class
+    """
+    
+    # architechture dictionary
+    CNN_dict = {'conv1':[64, 'conv', [3,3]],
+                'conv2':[64, 'conv', [3,3]],
+                'max1': [[2,2], 'pool'],
+                'conv3':[128, 'conv', [3,3]],
+                'conv4':[128, 'conv', [3,3]],
+                'max2' :[[2,2], 'pool'],
+                'conv5':[256, 'conv', [3,3]],
+                'conv6':[256, 'conv', [3,3]],
+                'conv7':[256, 'conv', [3,3]],
+                'conv8':[256, 'conv', [3,3]],
+                'max3': [[2,2], 'pool'],
+                'conv9': [512, 'conv', [3,3]],
+                'conv10':[512, 'conv', [3,3]],
+                'conv11':[512, 'conv', [3,3]],
+                'conv12':[512, 'conv', [3,3]],
+                'max4': [[2,2], 'pool'],
+                'conv13':[512, 'conv', [3,3]],
+                'conv14':[512, 'conv', [3,3]],
+                'conv15':[512, 'conv', [3,3]],
+                'conv16':[512, 'conv', [3,3]],
+                'max5':[[2,2], 'pool'],
+                'fc1':[4096,'fc'],
+                'fc2':[4096,'fc'],
+                'fc3':[n_class,'fc']}
+
+
+    dropout = [[21,22], dropout_rate]
+    x = tf.placeholder(tf.float32,[None, 224, 224, 3])
+    feature_layer = 23
+    model = CNN(x, CNN_dict, 'VGG-19', 
+                feature_layer, dropout)
+    model.get_optimizer(learning_rate)
+    model.get_gradients(starting_layer)
+
     return model
 
 def train_CNN_MNIST(epochs, batch_size):

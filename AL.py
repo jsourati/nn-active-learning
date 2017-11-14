@@ -217,7 +217,8 @@ class Experiment(object):
         # create the NN model
         nclass = self.labels.shape[0]
         tf.reset_default_graph()
-        model = NN.create_Alex(
+        model = NN.create_model(
+            self.pars['model_name'],
             self.pars['dropout_rate'], 
             nclass, 
             self.pars['learning_rate'], 
@@ -353,18 +354,26 @@ class Experiment(object):
         
         if not(hasattr(self, 'pars')):
             self.load_parameters()
-
+            
         
         """ Loading the model """
         print("Loading the current model..")
         # create a model-holder
         nclass = self.labels.shape[0]
-        model = NN.create_Alex(
+        model = NN.create_model(
+            self.pars['model_name'],
             self.pars['dropout_rate'], 
             nclass, 
             self.pars['learning_rate'], 
             self.pars['starting_layer'])
         saver = tf.train.Saver()
+        
+        if self.pars['model_name']=='Alex':
+            extra_feed_dict = {
+                model.KEEP_PROB: 1.}
+        else:
+            extra_feed_dict = {
+                model.keep_prob: 1.}
         
         # printing the accuracies so far:
         curr_accs = np.loadtxt(os.path.join(
@@ -383,15 +392,6 @@ class Experiment(object):
                     method_path,
                     'curr_model',
                     'model.ckpt'))
-
-            if hasattr(model, 'KEEP_PROB'):
-                # when computing posteriors or 
-                # gradients in the querying methods
-                # we should not use drop-out
-                extra_feed_dict = {model.KEEP_PROB: 
-                                   1.0}
-            else:
-                extra_feed_dict = {}
 
             # starting the iterations
             print("Starting the iterations for %s"%
