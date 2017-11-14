@@ -120,7 +120,21 @@ def set_parameters(par_temp, root_dir, optpars):
         with open(os.path.join(
                 root_dir, 'parameters.txt'),'w') as f:
             yaml.dump(pars, f)
+            
+def print_parameters(expr):
+    path = os.path.join(expr.root_dir,
+                        'parameters.txt')
+    with open(path,'r') as f:
+        pars = yaml.load(f)
         
+    # print the parameters
+    print("="*30)
+    print("This experiment's parameters:")
+    for item in pars:
+        print('%s: '% item, end='')
+        print(pars[item])
+    print("="*30)
+
 
 if __name__=="__main__":
     do_expr(sys.argv[1],
