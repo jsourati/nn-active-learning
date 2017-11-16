@@ -337,7 +337,7 @@ class CNN(object):
             batch_of_inds = [np.arange(
                 n).tolist()]
         else:
-            batch_of_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = gen_batch_inds(
                 n, batch_size)
 
         # extracting the features
@@ -408,7 +408,7 @@ class CNN(object):
         # random partitioning into batches
         train_size = len(train_inds)
         if train_size > batch_size:
-            batch_of_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = gen_batch_inds(
                 train_size, batch_size)
         else:
             batch_of_inds = [np.arange(
@@ -440,7 +440,7 @@ class CNN(object):
         
         test_size = len(test_inds)
         if test_size > batch_size:
-            batch_inds = prep_dat.gen_batch_inds(
+            batch_inds = gen_batch_inds(
                 test_size, batch_size)
         else:
             batch_inds = [np.arange(len(
@@ -499,7 +499,7 @@ class AlexNet_CNN(AlexNet):
             batch_of_inds = [np.arange(
                 n).tolist()]
         else:
-            batch_of_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = gen_batch_inds(
                 n, batch_size)
 
         # extracting the features
@@ -594,7 +594,7 @@ class AlexNet_CNN(AlexNet):
         # random partitioning into batches
         train_size = len(train_inds)
         if train_size > batch_size:
-            batch_of_inds = prep_dat.gen_batch_inds(
+            batch_of_inds = gen_batch_inds(
                 train_size, batch_size)
         else:
             batch_of_inds = [np.arange(
@@ -625,7 +625,7 @@ class AlexNet_CNN(AlexNet):
         
         test_size = len(test_inds)
         if test_size > batch_size:
-            batch_inds = prep_dat.gen_batch_inds(
+            batch_inds = gen_batch_inds(
                 test_size, batch_size)
         else:
             batch_inds = [np.arange(len(
@@ -902,3 +902,32 @@ def load_winds(train_inds,
                 hot_labels[:,train_inds])
     else:
         return batch_of_data
+
+
+def gen_batch_inds(data_size, batch_size):
+    """Generating a list of random indices 
+    to extract batches
+    """
+    
+    # determine size of the batches
+    quot, rem = np.divmod(data_size, 
+                          batch_size)
+    batches = list()
+    
+    # random permutation of indices
+    rand_perm = np.random.permutation(
+        data_size).tolist()
+    
+    # assigning indices to batches
+    for i in range(quot):
+        this_batch = rand_perm[
+            slice(i*batch_size, 
+                  (i+1)*batch_size)]
+        batches += [this_batch]
+        
+    # if there is remainder, add them
+    # separately
+    if rem>0:
+        batches += [rand_perm[-rem:]]
+        
+    return batches
