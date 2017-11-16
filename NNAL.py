@@ -392,12 +392,13 @@ def CNN_query(model,
         # using only few indices of the features
         F = model.extract_features(pool_inds[sel_inds], 
                                    img_path_list,
-                                   session)
+                                   session, B)
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
         feat_inds = np.argsort(-nnz_feats)[:B-1]
         F_sel = F[feat_inds,:]
+        # taking care of the rank
         while np.linalg.matrix_rank(F_sel)<len(feat_inds):
             # if the matrix is not full row-rank, discard
             # the last selected index (worst among all)
@@ -407,6 +408,14 @@ def CNN_query(model,
                 warnings.warn(
                     "Few features (%d) are selected"% (
                         len(feat_inds)))
+                
+        # taking care of the conditional number
+        while np.linalg.cond(F_sel) > 1e8:
+            feat_inds = feat_inds[:-1]
+            F_sel = F[feat_inds,:]
+            if len(feat_inds)==1:
+                lambda_=0
+                break
 
         # subtracting the mean
         F_sel -= np.repeat(np.expand_dims(
@@ -417,7 +426,7 @@ def CNN_query(model,
         print('\n\t',end='')
         print('Solving SDP..',end='\n\t')
         soln = NNAL_tools.SDP_query_distribution(
-            A, F_sel, lambda_, k)
+            A, lambda_, F_sel, k)
         print('status: %s'% (soln['status']), end='\n\t')
         q_opt = np.array(soln['x'][:B])
         
