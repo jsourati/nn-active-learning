@@ -369,11 +369,19 @@ class Experiment(object):
         saver = tf.train.Saver()
         
         if self.pars['model_name']=='Alex':
+            # for AlexNet there are two main
+            # differences: name of keep-
+            # probability variable is KEEP_PROB
+            # and the output is row-wise,
+            # hence the column flag (col_flag)
+            # should be False
             extra_feed_dict = {
                 model.KEEP_PROB: 1.}
+            col_flag = False
         else:
             extra_feed_dict = {
                 model.keep_prob: 1.}
+            col_flag = True
         
         # printing the accuracies so far:
         curr_accs = np.loadtxt(os.path.join(
@@ -412,7 +420,7 @@ class Experiment(object):
                     method_name,
                     sess, 
                     self.pars['batch_size'],
-                    False,
+                    col_flag,
                     extra_feed_dict
                 )
 

@@ -5,6 +5,7 @@ import copy
 import pdb
 import sys
 import cv2
+import os
 
 import NNAL_tools
 
@@ -156,7 +157,7 @@ class CNN(object):
                 # set the output of the layer one before last as 
                 # the features that the network will extract
                 if i==feature_layer:
-                    self.features = self.output
+                    self.feature_layer = self.output
                 
                 self.layer_type += [
                     layer_dict[layer_names[i]][1]]
@@ -186,7 +187,6 @@ class CNN(object):
             # if the next layer is fully-connected we need
             # to output a flatten tensor
             if next_layer_type=='fc':
-                pdb.set_trace()
                 self.add_conv(layer_specs, name, flatten=True)
             else:
                 self.add_conv(layer_specs, name, flatten=False)
@@ -329,7 +329,7 @@ class CNN(object):
         """
         
         n = len(inds)
-        d = self.features.get_shape()[0].value
+        d = self.feature_layer.get_shape()[0].value
         features = np.zeros((d, n))
         # preparing batch_of_inds, whose
         # indices are in terms of "inds"
@@ -347,8 +347,8 @@ class CNN(object):
                            img_path_list)
             features[:,inner_inds] = session.run(
                 self.feature_layer, 
-                feed_dict={self.x: X, 
-                           self.keep_prob:1.}).T
+                feed_dict={self.x: X,
+                           self.keep_prob:1.})
             
         return features
                     
@@ -423,7 +423,7 @@ class CNN(object):
             session.run(
                 self.train_step, 
                 feed_dict={self.x: batch_of_imgs, 
-                           self.y_: batch_of_labels.T,
+                           self.y_: batch_of_labels,
                            self.keep_prob: self.dropout_rate}
                 )
         
@@ -466,7 +466,8 @@ class AlexNet_CNN(AlexNet):
     """
     """
     
-    def __init__(self, x, dropout_rate, c, skip_layer):
+    def __init__(self, x, dropout_rate, 
+                 c, skip_layer, gpu_id):
         self.x = x
         self.dropout_rate = dropout_rate
         keep_prob = tf.placeholder(tf.float32)
@@ -474,6 +475,7 @@ class AlexNet_CNN(AlexNet):
                          skip_layer)
         self.output = self.fc8
         self.posteriors = tf.nn.softmax(self.output)
+        self.gpu_id = gpu_id
         
         
     def initialize_graph(self, session,
@@ -663,9 +665,9 @@ def create_model(model_name,
         
     return model
 
-def create_Alex(dropout_rate, 
+def create_Alex(dropout_rate,
                 n_class,
-                learning_rate, 
+                learning_rate,
                 starting_layer):
     """Creating an AlexNet model 
     using `AlexNet_CNN` class
@@ -690,7 +692,7 @@ def create_VGG19(dropout_rate, learning_rate,
     """
     
     # architechture dictionary
-    CNN_dict = {'conv1':[64, 'conv', [3,3]],
+    vgg_dict = {'conv1':[64, 'conv', [3,3]],
                 'conv2':[64, 'conv', [3,3]],
                 'max1': [[2,2], 'pool'],
                 'conv3':[128, 'conv', [3,3]],
@@ -718,9 +720,10 @@ def create_VGG19(dropout_rate, learning_rate,
 
     dropout = [[21,22], dropout_rate]
     x = tf.placeholder(tf.float32,[None, 224, 224, 3])
-    feature_layer = 23
-    model = CNN(x, CNN_dict, 'VGG-19', 
+    feature_layer = len(vgg_dict) - 2
+    model = CNN(x, vgg_dict, 'VGG19', 
                 feature_layer, dropout)
+
     model.get_optimizer(learning_rate)
     model.get_gradients(starting_layer)
 
