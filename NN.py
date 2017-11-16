@@ -880,21 +880,30 @@ def max_pool(x, w_size, stride):
     
 def load_winds(train_inds, 
                imgs_path_list,
-               hot_labels=[]):
+               hot_labels=[],
+               wprep=True):
     """Creating a 4D array that contains a
     number of 3D images 
     """
     
     # load the first image 
     # (to get the common shape of all images)
-    img = cv2.imread(imgs_path_list[train_inds[0]])
+    img = np.float64(cv2.imread(
+        imgs_path_list[train_inds[0]]))
+    if wprep:
+        imagenet_mean = [103.939, 116.779, 123.68]
+        img -= imagenet_mean
+
     ntrain = len(train_inds)
     batch_of_data = np.zeros((ntrain,)+img.shape)
     batch_of_data[0,:,:,:] = img
     # read the rest of the images
     for i in range(1, ntrain):
-        img = cv2.imread(
-            imgs_path_list[train_inds[i]])
+        img = np.float64(cv2.imread(
+            imgs_path_list[train_inds[i]]))
+        if wprep:
+            img -= imagenet_mean
+
         batch_of_data[i,:,:,:] = img
             
     if len(hot_labels)>0:
