@@ -230,12 +230,21 @@ class Experiment(object):
             # training from initial training data
             model.initialize_graph(
                 sess, self.pars['pre_weights_path'])
+            
+            merged = tf.summary.merge_all()
+            train_writer = tf.summary.FileWriter(
+                os.path.join(
+                    '/common/external/rawabd/Jamshid/train_log'),sess.graph)
+
             for i in range(self.pars['epochs']):
                 model.train_graph_one_epoch(
-                    self, 
-                    init_inds, 
+                    self,
+                    init_inds,
                     self.pars['batch_size'], 
-                    sess)
+                    sess,
+                    i,
+                    merged,
+                    train_writer)
                 print('%d'% i, end=',')
             
             # get a prediction of the test samples
@@ -432,9 +441,10 @@ class Experiment(object):
                             iter_cnt)
                         ), curr_pool[Q_inds])
                 
-                # preparing the updating training
-                # samples
-                nold_train = 200 + iter_cnt
+                # preparing the new training sampels
+                old_ratio = .8
+                nold_train = int(np.floor(
+                    len(curr_train)*old_ratio) + iter_cnt)
                 rand_inds = np.random.permutation(
                     len(curr_train))[:nold_train]
                 old_train = curr_train[rand_inds]
@@ -747,16 +757,6 @@ class Experiment(object):
         plt.grid()
         return total_accs
         
-def evaluate_PrecRec(preds, labels):
-    """Compute precision-recall criteria for a given set
-    of predictions versus groud-truth labels
-    
-    This function is an example-based method explained
-    in http://ieeexplore.ieee.org/document/6471714/
-    """
-    
-    pass
-    
     
 
 def paths_n_labels(path, label_name):
@@ -815,6 +815,9 @@ def get_accuracy(predicts, labels, hot=True):
 def get_multi_PR(predicts, labels, hot=True):
     """Computing Precision-Recall of a multiclass
     predictions and ground-truth
+
+    This function is an example-based method explained
+    in http://ieeexplore.ieee.org/document/6471714/
     """
     
     n=len(predicts)

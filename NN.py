@@ -8,6 +8,7 @@ import cv2
 import os
 
 import NNAL_tools
+import AL
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
@@ -333,7 +334,7 @@ class CNN(object):
         features = np.zeros((d, n))
         # preparing batch_of_inds, whose
         # indices are in terms of "inds"
-        if batch_size<n: 
+        if batch_size > n: 
             batch_of_inds = [np.arange(
                 n).tolist()]
         else:
@@ -367,6 +368,8 @@ class CNN(object):
                 labels=tf.transpose(self.y_), 
                 logits=tf.transpose(self.output)))
         
+        tf.summary.scalar('Loss', loss)
+        
         # optimizer
         self.train_step = tf.train.AdamOptimizer(
             learning_rate).minimize(loss)
@@ -396,10 +399,13 @@ class CNN(object):
             )
 
         
-    def train_graph_one_epoch(self, expr, 
-                              train_inds, 
-                              batch_size, 
-                              session):
+    def train_graph_one_epoch(self, expr,
+                              train_inds,
+                              batch_size,
+                              session,
+                              epoch_id,
+                              merges,
+                              train_writer):
         """Randomly partition the data into 
         batches and complete one epoch of training
         
@@ -420,13 +426,29 @@ class CNN(object):
             iter_inds = train_inds[batch_of_inds[j]]
             batch_of_imgs, batch_of_labels = load_winds(
                 iter_inds, expr.img_path_list, expr.labels)
-            session.run(
-                self.train_step, 
+            summary, _ = session.run(
+                [merges, self.train_step], 
                 feed_dict={self.x: batch_of_imgs, 
                            self.y_: batch_of_labels,
                            self.keep_prob: self.dropout_rate}
                 )
-        
+            if j%50 == 0:
+                train_preds = self.predict(
+                    expr, train_inds,
+                    batch_size, session)
+                iter_acc = AL.get_accuracy(
+                    train_preds, expr.labels[:,train_inds])
+                # adding accuracy to the summary
+                acc_summary = tf.Summary()
+                acc_summary.value.add(tag='Accuracy',
+                                  simple_value=iter_acc)
+                
+                train_writer.add_summary(
+                    summary, epoch_id*len(batch_of_inds)+j)
+                train_writer.add_summary(
+                    acc_summary, epoch_id*len(batch_of_inds)+j)
+            
+                
         
     def predict(self, expr, test_inds, 
                 batch_size, session):
@@ -446,8 +468,7 @@ class CNN(object):
             batch_inds = [np.arange(len(
                 test_inds)).tolist()]
             
-        n = len(test_inds)
-        predicts = np.zeros(n)
+        predicts = np.zeros(test_size)
         for j in range(len(batch_inds)):
             # create the 4D array of the current batch
             iter_inds = test_inds[batch_inds[j]]
@@ -486,7 +507,7 @@ class AlexNet_CNN(AlexNet):
     
     def extract_features(self, inds, 
                          img_path_list,
-                         session, batch_size=None):
+                         session, batch_size):
         """Extracting features
         """
         
