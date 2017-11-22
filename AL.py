@@ -219,12 +219,11 @@ class Experiment(object):
         tf.reset_default_graph()
         model = NN.create_model(
             self.pars['model_name'],
-            self.pars['dropout_rate'], 
-            nclass, 
-            self.pars['learning_rate'], 
+            self.pars['dropout_rate'],
+            nclass,
+            self.pars['learning_rate'],
             self.pars['starting_layer'])
 
-        saver = tf.train.Saver()
         # start a session to do the training
         with tf.Session() as sess:
             # training from initial training data
@@ -258,11 +257,9 @@ class Experiment(object):
             np.savetxt(os.path.join(
                 run_path, 'init_predicts.txt'), 
                        predicts)
-            # save the initial model
-            saver.save(sess, 
-                       os.path.join(run_path, 
-                                    'saved_model',
-                                    'model.ckpt'))
+            # save the initial weights
+            model.save_weights(os.path.join(
+                run_path,'init_weights.h5'))
             
     def add_method(self, method_name, run):
         """Adding a method to a given run of the experiment
@@ -303,14 +300,9 @@ class Experiment(object):
             os.path.join(run_path,'init_predicts.txt'),
             os.path.join(method_path,'predicts.txt')
             )
-        # copying the directory with shutil.copyfile()
-        # shutil.copyfile() gave strange errors
-        os.mkdir(os.path.join(method_path, 'curr_model'))
-        for item in os.listdir(os.path.join(
-                run_path,'saved_model')):
-            shutil.copy2(
-                os.path.join(run_path,'saved_model',item),
-                os.path.join(method_path,'curr_model')
+        shutil.copy(
+            os.path.join(run_path,'init_weights.h5'),
+            os.path.join(method_path,'curr_weights.h5')
             )
         
         # also, computing the first accuracy for the 
@@ -375,7 +367,6 @@ class Experiment(object):
             nclass, 
             self.pars['learning_rate'], 
             self.pars['starting_layer'])
-        saver = tf.train.Saver()
         
         if self.pars['model_name']=='Alex':
             # for AlexNet there are two main
@@ -402,13 +393,11 @@ class Experiment(object):
         
         with tf.Session() as sess:
             sess.graph.finalize()
-            # load the stored model into
-            # the holder of variables
-            saver.restore(
-                sess, os.path.join(
-                    method_path,
-                    'curr_model',
-                    'model.ckpt'))
+            # loading the stored weights
+            model.load_weights(
+                os.path.join(method_path,
+                             'curr_weights.h5'),
+                sess)
 
             # starting the iterations
             print("Starting the iterations for %s"%
@@ -516,12 +505,11 @@ class Experiment(object):
                 method_path, 'curr_train'), 
                        curr_train,
                        fmt='%d')
-            # save the current model
-            saver.save(sess, 
-                       os.path.join(
-                           method_path,
-                           'curr_model',
-                           'model.ckpt'))
+            # save the current weights
+            model.save_weights(
+                os.path.join(
+                    method_path,
+                    'curr_weihgts.h5'))
             
     def reset_method(self, method_name, run):
         """ Resetting a given run/method, 
@@ -789,9 +777,29 @@ def make_onehot(labels):
         one_hot[label_ind,i] = 1.
         
     return one_hot
+
+def onehot_to_classid(labels):
+    """Covnerting a one-hot label matrix into
+    an array of class ID, such that the i'th
+    element of the output array indicates the 
+    class ID--which corresponds to the row ID
+    in the input one-hot vector--of the i'th
+    column of the input.
+    """
+    
+    if labels.ndim<2:
+        raise ValueError(
+            "The given label does not seem to"+
+            "be a one-hot vector..")
+        
+    one_indics = np.where(labels>0)
+    class_ids = one_indics[0][
+        np.argsort(one_indics[1])]
+    
+    return class_ids
         
         
-def get_accuracy(predicts, labels, hot=True):
+def get_accuracy(predicts, labels):
     """Computing accuracy of a set of predictions
     based on a given ground-truth labels
     
@@ -802,9 +810,9 @@ def get_accuracy(predicts, labels, hot=True):
     
     n = len(predicts)
     
-    # if labels are in one-hot vector format
-    if hot:
-        labels = np.where(labels>0)[0]
+    # if labels are in one-hot format
+    if labels.ndim > 1:
+        labels = onehot_to_classid(labels)
         
     # now compare the integer class labels
     acc = np.sum(predicts==labels) / float(n)

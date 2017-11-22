@@ -318,7 +318,7 @@ class CNN(object):
                 self, path, session)
             
 
-    def save_model(self, file_path):
+    def save_weights(self, file_path):
         """Saving only the parameter values of the 
         current model into a .h5 file
         
@@ -337,7 +337,7 @@ class CNN(object):
             
         f.close()
         
-    def load_model(self, file_path, session):
+    def load_weights(self, file_path, session):
         """Loading parameter values saved in a .h5 file
         into the tensorflow variables of the class object
         
