@@ -77,6 +77,26 @@ class Experiment(object):
         # into a text file to be used later
         if len(pars)>0:
             self.save_parameters(pars)
+            
+    def modify_parameters(self, mod_dict):
+        """Modifying parameters of a given 
+        experiment according to a given 
+        dictionary which has a subset of keys
+        and the corresponding modified values
+        
+        CAUTIOUS: only use this method for testing.
+        Never change parameters of an experiment
+        whose runs are completed
+        """
+        
+        if not(hasattr(self, 'pars')):
+            self.load_parameters()
+            
+        for var, value in mod_dict.items():
+            self.pars[var] = value
+            
+        # saving the modified parameters
+        self.save_parameters(self.pars)
         
     def save_parameters(self, pars):
         """Saving a given dictionary of parameters
@@ -142,7 +162,7 @@ class Experiment(object):
         """Loading a network model that is already saved
         """
         
-        if not(hasattr(self, sess, 'pars')):
+        if not(hasattr(self, 'pars')):
             self.load_parameters()
 
         # create a model if nothing already exists
