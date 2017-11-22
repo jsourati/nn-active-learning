@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 import copy
+import h5py
 import pdb
 import sys
 import cv2
@@ -317,12 +318,48 @@ class CNN(object):
                 self, path, session)
             
 
-    def save_model(self, addr, session):
-        """Saving the current model
+    def save_model(self, file_path):
+        """Saving only the parameter values of the 
+        current model into a .h5 file
+        
+        The file will have as many groups as the number
+        of layers in the model (which is equal to the
+        number of keys in `self.var_dict`. Each group has
+        two datasets, one for the weight W, and one for
+        the bias b.
         """
-        saver = tf.train.Saver()
-        saver.save(session, addr)
-        self.save_path = addr
+        
+        f = h5py.File(file_path, 'w')
+        for layer_name, pars in self.var_dict.items():
+            L = f.create_group(layer_name)
+            L.create_dataset('Weight', data=pars[0].eval())
+            L.create_dataset('Bias', data=pars[1].eval())
+            
+        f.close()
+        
+    def load_model(self, file_path, session):
+        """Loading parameter values saved in a .h5 file
+        into the tensorflow variables of the class object
+        
+        The groups in the .h5 file should match the layers
+        in the model. Specifically, name of each group 
+        needs to be the same as the name of the layers
+        in `self.var_dict` (this is autmatically satisfied
+        if the .h5 file is generated using self.save_model().
+        """
+        
+        f = h5py.File(file_path)
+        for layer_name, pars in self.var_dict.items():
+            # weight
+            value_to_load = np.array(
+                f[layer_name]['Weight'])
+            session.run(pars[0].assign(value_to_load))
+            
+            # bias
+            value_to_load = np.array(
+                f[layer_name]['Bias'])
+            session.run(pars[1].assign(value_to_load))
+
         
     def extract_features(self, inds, 
                          img_path_list, 
