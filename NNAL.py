@@ -410,20 +410,23 @@ def CNN_query(model,
                         len(feat_inds)))
                 
         # taking care of the conditional number
-        while np.linalg.cond(F_sel) > 1e8:
+        while np.linalg.cond(F_sel) > 1e6:
             feat_inds = feat_inds[:-1]
             F_sel = F[feat_inds,:]
             if len(feat_inds)==1:
                 lambda_=0
                 break
-
+        
         # subtracting the mean
         F_sel -= np.repeat(np.expand_dims(
             np.mean(F_sel, axis=1),
             axis=1), B, axis=1)
         
+        print('Cond. #: %f'% (np.linalg.cond(F_sel)),
+              end='\n\t')
+        print('# selected features: %d'% 
+              (len(feat_inds)), end='\n\t')
         # SDP
-        print('\n\t',end='')
         print('Solving SDP..',end='\n\t')
         soln = NNAL_tools.SDP_query_distribution(
             A, lambda_, F_sel, k)
