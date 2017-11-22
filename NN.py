@@ -125,7 +125,8 @@ class CNN(object):
         self.layer_type = []
         self.name = name
         
-        self.keep_prob = tf.placeholder(tf.float32)
+        self.keep_prob = tf.placeholder(
+            tf.float32, name='keep_prob')
         if dropout:
             self.dropout_layers = dropout[0]
             self.dropout_rate = dropout[1]
@@ -173,7 +174,8 @@ class CNN(object):
             
             # posterior
             posteriors = tf.nn.softmax(tf.transpose(self.output))
-            self.posteriors = tf.transpose(posteriors)
+            self.posteriors = tf.transpose(posteriors, 
+                                           name='posteriors')
             
     def add_layer(self, layer_specs, name, 
                   next_layer_type=None, 
@@ -360,26 +362,26 @@ class CNN(object):
         
         # number of classes
         c = self.output.get_shape()[0].value
-        self.y_ = tf.placeholder(tf.float32, [c, None])
+        self.y_ = tf.placeholder(tf.float32, 
+                                 [c, None],
+                                 name='labels')
         
         # loss function
         loss = tf.reduce_mean(
             tf.nn.softmax_cross_entropy_with_logits(
                 labels=tf.transpose(self.y_), 
-                logits=tf.transpose(self.output)))
+                logits=tf.transpose(self.output)),
+            name='loss')
         
         tf.summary.scalar('Loss', loss)
         
         # optimizer
         self.train_step = tf.train.AdamOptimizer(
-            learning_rate).minimize(loss)
+            learning_rate).minimize(loss, name='train_step')
         
         # define the accuracy
-        self.prediction = tf.argmax(self.posteriors, 0)
-        correct_pred = tf.equal(self.prediction, 
-                                tf.argmax(self.y_, 0))
-        self.accuracy = tf.reduce_mean(
-            tf.cast(correct_pred, tf.float32))
+        self.prediction = tf.argmax(
+            self.posteriors, 0, name='prediction')
         
     def get_gradients(self, start_layer=0):
         """Forming gradients of the log-posteriors
@@ -394,7 +396,7 @@ class CNN(object):
             self.grad_log_posts.update(
                 {str(j): tf.gradients(
                     tf.log(self.posteriors)[j, 0], 
-                    gpars)
+                    gpars, name='score_class_%d'% j)
              }
             )
 
@@ -740,7 +742,9 @@ def create_VGG19(dropout_rate, learning_rate,
 
 
     dropout = [[21,22], dropout_rate]
-    x = tf.placeholder(tf.float32,[None, 224, 224, 3])
+    x = tf.placeholder(tf.float32,
+                       [None, 224, 224, 3],
+                       name='input')
     feature_layer = len(vgg_dict) - 2
     model = CNN(x, vgg_dict, 'VGG19', 
                 feature_layer, dropout)
