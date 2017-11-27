@@ -389,12 +389,13 @@ class Experiment(object):
         print(*curr_accs, sep=', ')
         
         with tf.Session() as sess:
-            sess.graph.finalize()
             # loading the stored weights
+            model.initialize_graph(sess)
             model.load_weights(
                 os.path.join(method_path,
                              'curr_weights.h5'),
                 sess)
+            #sess.graph.finalize()
 
             # starting the iterations
             print("Starting the iterations for %s"%
@@ -430,7 +431,7 @@ class Experiment(object):
                 # preparing the new training sampels
                 old_ratio = .8
                 nold_train = int(np.floor(
-                    len(curr_train)*old_ratio) + iter_cnt)
+                    len(curr_train)*old_ratio))
                 rand_inds = np.random.permutation(
                     len(curr_train))[:nold_train]
                 old_train = curr_train[rand_inds]
@@ -444,12 +445,22 @@ class Experiment(object):
                     curr_pool, Q_inds)
                 
                 """ updating the model """
+                merged_summ = tf.summary.merge_all()
+                train_writer = tf.summary.FileWriter(
+                    os.path.join(
+                        '/common/external/rawabd/Jamshid/train_log'),sess.graph)
+                TB_opt = {'summs':merged_summ,
+                          'writer': train_writer,
+                          'epoch_id': 0,
+                          'tag': 'initial'}
+
                 for i in range(self.pars['epochs']):
                     model.train_graph_one_epoch(
                         self,
                         update_inds,
                         self.pars['batch_size'],
-                        sess)
+                        sess,
+                        TB_opt)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
