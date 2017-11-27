@@ -313,9 +313,10 @@ class CNN(object):
         """
         session.run(tf.global_variables_initializer())
         
-        if self.name=="VGG19":
-            NNAL_tools.load_weights_VGG19(
-                self, path, session)
+        if path:
+            if self.name=="VGG19":
+                NNAL_tools.load_weights_VGG19(
+                    self, path, session)
             
 
     def save_weights(self, file_path):
