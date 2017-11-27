@@ -158,32 +158,6 @@ class Experiment(object):
                 os.rename(os.path.join(self.root_dir, name),
                           os.path.join(self.root_dir, str(i)))
                 
-    def load_model(self, model_path):
-        """Loading a network model that is already saved
-        """
-        
-        if not(hasattr(self, 'pars')):
-            self.load_parameters()
-
-        # create a model if nothing already exists
-        nclass = self.labels.shape[0]
-        model = NN.create_Alex(
-            self.pars['dropout_rate'], 
-            nclass, 
-            self.pars['learning_rate'], 
-            self.pars['starting_layer'])
-
-        saver = tf.train.Saver()
-        saver.restore(sess, model_path)
-        
-        return model
-        
-    def save_model(self, sess, model_path):
-        """Saving the current model into a path
-        """
-        
-        saver=tf.train.Saver()
-        saver.save(sess, model_path)
         
     def add_run(self):
         """Adding a run to this experiment
@@ -226,7 +200,7 @@ class Experiment(object):
                    init_inds, fmt='%d')
         np.savetxt('%s/pool_inds.txt'% run_path, 
                    pool_inds, fmt='%d')
-        
+
         # creating an initial initial model
         # -------------------------
         print('Initializing a model for this run..')
@@ -250,10 +224,14 @@ class Experiment(object):
             model.initialize_graph(
                 sess, self.pars['pre_weights_path'])
             
-            merged = tf.summary.merge_all()
+            merged_summ = tf.summary.merge_all()
             train_writer = tf.summary.FileWriter(
                 os.path.join(
                     '/common/external/rawabd/Jamshid/train_log'),sess.graph)
+            TB_opt = {'summs':merged_summ,
+                      'writer': train_writer,
+                      'epoch_id': 0,
+                      'tag': 'initial'}
 
             for i in range(self.pars['epochs']):
                 model.train_graph_one_epoch(
@@ -261,9 +239,8 @@ class Experiment(object):
                     init_inds,
                     self.pars['batch_size'], 
                     sess,
-                    i,
-                    merged,
-                    train_writer)
+                    TB_opt)
+                TB_opt['epoch_id'] += 1
                 print('%d'% i, end=',')
             
             # get a prediction of the test samples

@@ -442,12 +442,39 @@ class CNN(object):
                               train_inds,
                               batch_size,
                               session,
-                              epoch_id,
-                              merges,
-                              train_writer):
+                              TB_opt={}):
         """Randomly partition the data into 
         batches and complete one epoch of training
         
+        
+        :Parameters:
+        
+            **expr** : AL.Experiment object
+        
+            **train_inds** : list or array of integers
+                indices of the samples in terms of the
+                `img_path_list` of the give experiment
+                based on which the model is to be modified
+
+            **batch_size** : integer
+                size of the batch for training or
+                evaluating the accuracy
+        
+            **session** : Tensorflow Session 
+
+            **TB_opt** : dictionary (default={})
+                If the results are to be saved for 
+                Tensorboard's use, this dictionary
+                includes all the necessary information
+                for saving the TB files:
+
+                * `summs`: the merged summaries that are
+                           are created outisde the function
+                * `writer`: file writer f the TB for these
+                            this epoch (it contains the path
+                            in which the TB files will be saved)
+                * `epoch_id`: index of the current epoch
+                * `tag`: a tag for the current training epoch
         """
         
         # random partitioning into batches
@@ -465,27 +492,41 @@ class CNN(object):
             iter_inds = train_inds[batch_of_inds[j]]
             batch_of_imgs, batch_of_labels = load_winds(
                 iter_inds, expr.img_path_list, expr.labels)
-            summary, _ = session.run(
-                [merges, self.train_step], 
-                feed_dict={self.x: batch_of_imgs, 
-                           self.y_: batch_of_labels,
-                           self.keep_prob: self.dropout_rate}
-                )
-            if j%50 == 0:
-                train_preds = self.predict(
-                    expr, train_inds,
-                    batch_size, session)
-                iter_acc = AL.get_accuracy(
-                    train_preds, expr.labels[:,train_inds])
-                # adding accuracy to the summary
-                acc_summary = tf.Summary()
-                acc_summary.value.add(tag='Accuracy',
-                                  simple_value=iter_acc)
-                
-                train_writer.add_summary(
-                    summary, epoch_id*len(batch_of_inds)+j)
-                train_writer.add_summary(
-                    acc_summary, epoch_id*len(batch_of_inds)+j)
+            if TB_opt:
+                summary, _ = session.run(
+                    [TB_opt['summs'], self.train_step], 
+                    feed_dict={self.x: batch_of_imgs, 
+                               self.y_: batch_of_labels,
+                               self.keep_prob: self.dropout_rate})
+            else:
+                session.run(
+                    self.train_step, 
+                    feed_dict={self.x: batch_of_imgs, 
+                               self.y_: batch_of_labels,
+                               self.keep_prob: self.dropout_rate})
+
+            # writing tensorboard files if necessary
+            # (every 50 iterations)
+            if TB_opt:
+                if j%50 == 0:
+                    # compute the accuracy
+                    train_preds = self.predict(
+                        expr, train_inds,
+                        batch_size, session)
+                    iter_acc = AL.get_accuracy(
+                        train_preds, expr.labels[:,train_inds])
+                    # adding accuracy to a summary
+                    acc_summary = tf.Summary()
+                    acc_summary.value.add(
+                        tag='Accuracy/%s'% (TB_opt['tag']),
+                        simple_value=iter_acc)
+
+                    TB_opt['writer'].add_summary(
+                        summary, 
+                        TB_opt['epoch_id']*len(batch_of_inds)+j)
+                    TB_opt['writer'].add_summary(
+                        acc_summary, 
+                        TB_opt['epoch_id']*len(batch_of_inds)+j)
             
                 
         
