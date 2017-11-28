@@ -410,7 +410,7 @@ def idxBatch_posteriors(model, inds,
         batch_of_inds = np.arange(
             len(inds)).tolist()
     else:
-        batch_of_inds = prep_dat.gen_batch_inds(
+        batch_of_inds = NN.gen_batch_inds(
             n, batch_size)
     
     # computing the posteriors

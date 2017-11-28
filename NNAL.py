@@ -392,7 +392,7 @@ def CNN_query(model,
         # using only few indices of the features
         F = model.extract_features(pool_inds[sel_inds], 
                                    img_path_list,
-                                   session, B)
+                                   session, batch_size)
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
