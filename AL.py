@@ -216,7 +216,8 @@ class Experiment(object):
             self.pars['dropout_rate'],
             nclass,
             self.pars['learning_rate'],
-            self.pars['starting_layer'])
+            self.pars['starting_layer'],
+            self.pars['layer_list'])
 
         # start a session to do the training
         with tf.Session() as sess:

@@ -394,8 +394,21 @@ class CNN(object):
         return features
                     
         
-    def get_optimizer(self, learning_rate):
+    def get_optimizer(self, learning_rate, 
+                      layer_list=[]):
         """Form the loss function and optimizer of the CNN graph
+        
+        :Parameters;
+        
+            **learning_rate** : positive float
+                learning rate of the optimization, which is 
+                proportional to the step length of the descent
+
+            **layer_list** : list of strings
+                list of names of those layers that are to be
+                modified in the training step; if empty all
+                the layers will be included. This list should
+                be a subset of `self.var_dict.keys()`.
         """
         
         # number of classes
@@ -414,8 +427,21 @@ class CNN(object):
         tf.summary.scalar('Loss', loss)
         
         # optimizer
-        self.train_step = tf.train.AdamOptimizer(
-            learning_rate).minimize(loss, name='train_step')
+        if len(layer_list)==0:
+            self.train_step = tf.train.AdamOptimizer(
+                learning_rate).minimize(
+                    loss, name='train_step')
+        else:
+            self.layer_list = layer_list
+            # if some layers are specified, only
+            # modify these layers in the training
+            var_list = []
+            for layer in layer_list:
+                var_list += self.var_dict[layer]
+            
+            self.train_step = tf.train.AdamOptimizer(
+                learning_rate).minimize(
+                    loss, var_list=var_list)
         
         # define the accuracy
         self.prediction = tf.argmax(
@@ -752,7 +778,8 @@ def create_model(model_name,
                  dropout_rate, 
                  n_class,
                  learning_rate, 
-                 starting_layer):
+                 starting_layer,
+                 layer_list=[]):
     
     if model_name=='Alex':
         model = create_Alex(dropout_rate, 
@@ -763,7 +790,8 @@ def create_model(model_name,
         model = create_VGG19(dropout_rate, 
                              learning_rate,
                              n_class, 
-                             starting_layer)
+                             starting_layer,
+                             layer_list)
         
     return model
 
@@ -789,7 +817,8 @@ def create_Alex(dropout_rate,
     return model
 
 def create_VGG19(dropout_rate, learning_rate,
-                 n_class, starting_layer):
+                 n_class, starting_layer,
+                 layer_list):
     """Creating a VGG19 model using CNN class
     """
     
@@ -825,10 +854,13 @@ def create_VGG19(dropout_rate, learning_rate,
                        [None, 224, 224, 3],
                        name='input')
     feature_layer = len(vgg_dict) - 2
+    
+    # creating the architecture
     model = CNN(x, vgg_dict, 'VGG19', 
                 feature_layer, dropout)
 
-    model.get_optimizer(learning_rate)
+    # forming optimizer and gradient operator
+    model.get_optimizer(learning_rate, layer_list)
     model.get_gradients(starting_layer)
 
     return model
