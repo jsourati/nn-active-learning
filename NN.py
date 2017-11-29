@@ -454,12 +454,12 @@ class CNN(object):
         # collect all the trainable variabels
         gpars = tf.trainable_variables()[start_layer*2:]
         
-        self.grad_log_posts = {}
+        self.grad_posts = {}
         c = self.output.get_shape()[0].value
         for j in range(c):
-            self.grad_log_posts.update(
+            self.grad_posts.update(
                 {str(j): tf.gradients(
-                    tf.log(self.posteriors)[j, 0], 
+                    self.posteriors[j, 0], 
                     gpars, name='score_class_%d'% j)
              }
             )

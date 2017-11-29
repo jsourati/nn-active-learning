@@ -327,7 +327,7 @@ def CNN_query(model,
         # weights and bias terms --> number of layers that
         # are considered is obtained after dividing by 2
         A_size = int(
-            len(model.grad_log_posts['0'])/2)
+            len(model.grad_posts['0'])/2)
         c,n = posteriors.shape
 
         A = []
@@ -341,6 +341,16 @@ def CNN_query(model,
                 model.x:np.expand_dims(X_i, axis=0)}
             feed_dict.update(extra_feed_dict)
 
+            # remove zero, or close-to-zero posteriors
+            x_posterior = sel_posteriors[:,i]
+            x_posterior[x_posterior<1e-6] = 0.
+            nz_classes = np.where(x_posterior > 0.)[0]
+            nz_posts = x_posterior[nz_classes] / np.sum(
+                x_posterior[nz_classes])
+            nz_classes_grads = {
+                str(cc): model.grad_posts[str(cc)]
+                for cc in nz_classes}
+
             # computing the gradients
             # grads={ '0': dP(y=0|x)/dtheta, 
             #         '1': dP(y=1|x)/dtheta, 
@@ -352,23 +362,22 @@ def CNN_query(model,
             # where {c0,c1,etc} are classes with largest
             # posteriors for x.
             # 
-            if c < 20:
-                grads = session.run(model.grad_log_posts, 
+            if len(nz_classes) < 20:
+                grads = session.run(nz_classes_grads, 
                                     feed_dict=feed_dict)
-                sel_classes = np.arange(c)
-                new_posts = sel_posteriors[:,i]
+                sel_classes = nz_classes
+                new_posts = nz_posts
             else:
                 # if the number of classes is large,
                 # compute gradients of few classes with 
                 # largest  posteriors only
-                sel_classes = np.argsort(
-                    -sel_posteriors[:,i])[:10]
+                sel_nz_classes = np.argsort(-nz_posts)[:20]
+                sel_classes = nz_classes[sel_nz_classes]
                 sel_classes_grads = {
-                    str(cc): model.grad_log_posts[str(cc)]
-                    for cc in sel_classes
-                    }
+                    str(cc): nz_classes_grads[str(cc)]
+                    for cc in sel_classes}
                 # normalizing posteriors of the selected classes
-                new_posts = sel_posteriors[sel_classes, i]
+                new_posts = nz_posts[sel_nz_classes]
                 new_posts /= np.sum(new_posts)
                 # gradients for the selected classes
                 grads = session.run(sel_classes_grads, 
@@ -379,9 +388,9 @@ def CNN_query(model,
             for j in range(len(sel_classes)):
                 shrunk_grad = NNAL_tools.shrink_gradient(
                     grads[str(sel_classes[j])], 'sum')
-                Ai += new_posts[j]*np.outer(
-                    shrunk_grad, 
-                    shrunk_grad) + np.eye(A_size)*1e-5
+                Ai += np.outer(shrunk_grad, 
+                               shrunk_grad) / new_posts[j] \
+                    + np.eye(A_size)*1e-5
 
             if not(i%10):
                 print(i, end=',')
@@ -396,7 +405,7 @@ def CNN_query(model,
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
-        feat_inds = np.argsort(-nnz_feats)[:B-1]
+        feat_inds = np.argsort(-nnz_feats)[:int(B/2)]
         F_sel = F[feat_inds,:]
         # taking care of the rank
         while np.linalg.matrix_rank(F_sel)<len(feat_inds):
@@ -417,6 +426,7 @@ def CNN_query(model,
                 lambda_=0
                 break
         
+        #pdb.set_trace()
         # subtracting the mean
         F_sel -= np.repeat(np.expand_dims(
             np.mean(F_sel, axis=1),

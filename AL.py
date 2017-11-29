@@ -208,6 +208,8 @@ class Experiment(object):
                 run_path,'saved_model'))):
             os.mkdir(os.path.join(run_path, 
                                   'saved_model'))
+            
+        pdb.set_trace()
         # create the NN model
         nclass = self.labels.shape[0]
         tf.reset_default_graph()
@@ -228,7 +230,7 @@ class Experiment(object):
             merged_summ = tf.summary.merge_all()
             train_writer = tf.summary.FileWriter(
                 os.path.join(
-                    '/common/external/rawabd/Jamshid/train_log'),sess.graph)
+                    '/common/external/rawabd/Jamshid/train_log/All/'),sess.graph)
             TB_opt = {'summs':merged_summ,
                       'writer': train_writer,
                       'epoch_id': 0,
@@ -364,7 +366,8 @@ class Experiment(object):
             self.pars['dropout_rate'], 
             nclass, 
             self.pars['learning_rate'], 
-            self.pars['starting_layer'])
+            self.pars['starting_layer'],
+            self.pars['layer_list'])
         
         if self.pars['model_name']=='Alex':
             # for AlexNet there are two main
@@ -388,6 +391,16 @@ class Experiment(object):
             curr_accs = [curr_accs]
         print("Current accuracies: ", end='')
         print(*curr_accs, sep=', ')
+
+        #merged_summ = tf.summary.merge_all()
+        #train_writer = tf.summary.FileWriter(
+        #    os.path.join(
+        #        '/common/external/rawabd/Jamshid/train_log'),sess.graph)
+        #TB_opt = {'summs':merged_summ,
+        #          'writer': train_writer,
+        #          'epoch_id': 0,
+        #          'tag': 'initial'}
+        TB_opt = {}
         
         with tf.Session() as sess:
             # loading the stored weights
@@ -396,7 +409,7 @@ class Experiment(object):
                 os.path.join(method_path,
                              'curr_weights.h5'),
                 sess)
-            #sess.graph.finalize()
+            sess.graph.finalize()
 
             # starting the iterations
             print("Starting the iterations for %s"%
@@ -430,7 +443,7 @@ class Experiment(object):
                         ), curr_pool[Q_inds])
                 
                 # preparing the new training sampels
-                old_ratio = .8
+                old_ratio = 1.
                 nold_train = int(np.floor(
                     len(curr_train)*old_ratio))
                 rand_inds = np.random.permutation(
@@ -446,15 +459,6 @@ class Experiment(object):
                     curr_pool, Q_inds)
                 
                 """ updating the model """
-                merged_summ = tf.summary.merge_all()
-                train_writer = tf.summary.FileWriter(
-                    os.path.join(
-                        '/common/external/rawabd/Jamshid/train_log'),sess.graph)
-                TB_opt = {'summs':merged_summ,
-                          'writer': train_writer,
-                          'epoch_id': 0,
-                          'tag': 'initial'}
-
                 for i in range(self.pars['epochs']):
                     model.train_graph_one_epoch(
                         self,
