@@ -368,6 +368,9 @@ class Experiment(object):
             self.pars['learning_rate'], 
             self.pars['starting_layer'],
             self.pars['layer_list'])
+        model.add_assign_ops(os.path.join(
+            method_path, 'curr_weights.h5'))
+        
         
         if self.pars['model_name']=='Alex':
             # for AlexNet there are two main
@@ -405,10 +408,6 @@ class Experiment(object):
         with tf.Session() as sess:
             # loading the stored weights
             model.initialize_graph(sess)
-            model.load_weights(
-                os.path.join(method_path,
-                             'curr_weights.h5'),
-                sess)
             sess.graph.finalize()
 
             # starting the iterations
@@ -417,6 +416,8 @@ class Experiment(object):
             nqueries = 0
             #iter_cnt = 0
             while nqueries < max_queries:
+                model.perform_assign_ops(sess)
+                
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
                 """ querying """

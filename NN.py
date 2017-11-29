@@ -360,6 +360,28 @@ class CNN(object):
             value_to_load = np.array(
                 f[layer_name]['Bias'])
             session.run(pars[1].assign(value_to_load))
+            
+    def add_assign_ops(self, file_path):
+
+        f = h5py.File(file_path)
+        self.assign_dict = {}
+        for layer_name, pars in self.var_dict.items():
+            # weight
+            weight_to_load = np.array(
+                f[layer_name]['Weight'])
+            bias_to_load = np.array(
+                f[layer_name]['Bias'])
+            
+            self.assign_dict.update({
+                layer_name: [
+                    tf.assign(pars[0], weight_to_load),
+                    tf.assign(pars[1], bias_to_load)]
+            })
+            
+    def perform_assign_ops(self,sess):
+        
+        for _, assign_ops in self.assign_dict.items():
+            sess.run(assign_ops)
 
         
     def extract_features(self, inds, 
