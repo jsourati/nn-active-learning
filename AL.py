@@ -1,5 +1,6 @@
 from matplotlib import pyplot as plt
 import numpy as np
+import linecache
 import shutil
 import pickle
 import scipy
@@ -340,11 +341,10 @@ class Experiment(object):
         """ Loading the model """
         print("Loading the current model..")
         # create a model-holder
-        nclass = self.labels.shape[0]
         model = NN.create_model(
             self.pars['model_name'],
             self.pars['dropout_rate'], 
-            nclass, 
+            self.nclass, 
             self.pars['learning_rate'], 
             self.pars['starting_layer'],
             self.pars['layer_list'])
@@ -808,10 +808,11 @@ def get_accuracy(predicts, labels_file, inds):
     # if labels are in one-hot format
     cnt = 0
     for i in range(len(inds)):
-        label = linecache.getline(labels_file,
-                                  inds[i])
-    if predicts[i]==labels:
-        cnt += 1
+        label = linecache.getline(
+            labels_file,
+            inds[i]+1).splitlines()[0]
+        if predicts[i]==int(label):
+            cnt += 1
         
     # now compare the integer class labels
     acc = float(cnt) / float(n)

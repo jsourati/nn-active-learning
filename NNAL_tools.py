@@ -419,7 +419,7 @@ def idxBatch_posteriors(model, inds,
     # computing the posteriors
     for inner_inds in batch_of_inds:
         # load the data
-        X = NN.load_winds(inds[inner_inds],
+        X,_ = NN.load_winds(inds[inner_inds],
                           expr.imgs_path_file,
                           expr.pars['target_shape'],
                           expr.pars['mean'])

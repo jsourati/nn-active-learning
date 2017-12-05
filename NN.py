@@ -438,7 +438,7 @@ class CNN(object):
             X,_ = load_winds(inds[inner_inds],
                            expr.imgs_path_file,
                            expr.pars['target_shape'],
-                           expr.pras['mean'])
+                           expr.pars['mean'])
 
             features[:,inner_inds] = session.run(
                 self.feature_layer, 
@@ -493,7 +493,7 @@ class CNN(object):
             for layer in layer_list:
                 var_list += self.var_dict[layer]
             
-            self.train_step = tf.train.AdamOptimizer(
+            self.train_step = tf.train.GradientDescentOptimizer(
                 learning_rate).minimize(
                     loss, var_list=var_list)
         

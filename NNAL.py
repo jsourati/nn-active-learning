@@ -299,9 +299,8 @@ def CNN_query(model,
         # computing the posteriors
         posteriors = NNAL_tools.idxBatch_posteriors(
             model, 
-            pool_inds, 
-            expr.imgs_path_file, 
-            batch_size, 
+            pool_inds,
+            expr,
             session, 
             col, 
             extra_feed_dict)
@@ -346,7 +345,7 @@ def CNN_query(model,
         # indices: sel_inds --> pool_inds
         # CAUTIOUS: this will give an error if the selected
         # indices in `sel_inds` contains only one index.
-        sel_X = NN.load_winds(
+        sel_X, _ = NN.load_winds(
             pool_inds[sel_inds],
             expr.imgs_path_file,
             expr.pars['target_shape'],
@@ -488,8 +487,7 @@ def CNN_query(model,
         print("\t Finding Similarities..", end='\n\t')
         # extract the features for all the pool
         # sel_inds, rem_inds  -->  pool_inds
-        F = model.extract_features(pool_inds, expr,
-                                   session)
+        F = model.extract_features(pool_inds, expr, session)
         F_uncertain = F[:, sel_inds]
         norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
         F_rem_pool = F[:, rem_inds]
