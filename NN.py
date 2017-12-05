@@ -449,7 +449,7 @@ class CNN(object):
                     
         
     def get_optimizer(self, learning_rate, 
-                      layer_list=[]):
+                      train_layers=[]):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -481,16 +481,16 @@ class CNN(object):
         tf.summary.scalar('Loss', loss)
         
         # optimizer
-        if len(layer_list)==0:
+        if len(train_layers)==0:
             self.train_step = tf.train.AdamOptimizer(
                 learning_rate).minimize(
                     loss, name='train_step')
         else:
-            self.layer_list = layer_list
+            self.train_layers = train_layers
             # if some layers are specified, only
             # modify these layers in the training
             var_list = []
-            for layer in layer_list:
+            for layer in train_layers:
                 var_list += self.var_dict[layer]
             
             self.train_step = tf.train.GradientDescentOptimizer(
@@ -501,12 +501,18 @@ class CNN(object):
         self.prediction = tf.argmax(
             self.posteriors, 0, name='prediction')
         
-    def get_gradients(self, start_layer=0):
+    def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
         """
         
         # collect all the trainable variabels
-        gpars = tf.trainable_variables()[start_layer*2:]
+        self.grad_layers = grad_layers
+        if len(grad_layers)==0:
+            gpars = tf.trainable_variables()
+        else:
+            gpars = []
+            for layer in grad_layers:
+                gpars += self.var_dict[layer]
         
         self.grad_posts = {}
         c = self.output.get_shape()[0].value
@@ -843,8 +849,8 @@ def create_model(model_name,
                  dropout_rate, 
                  n_class,
                  learning_rate, 
-                 starting_layer,
-                 layer_list=[]):
+                 grad_layers=[],
+                 train_layers=[]):
     
     if model_name=='Alex':
         model = create_Alex(dropout_rate, 
@@ -855,8 +861,8 @@ def create_model(model_name,
         model = create_VGG19(dropout_rate, 
                              learning_rate,
                              n_class, 
-                             starting_layer,
-                             layer_list)
+                             grad_layers,
+                             train_layers)
         
     return model
 
@@ -882,8 +888,8 @@ def create_Alex(dropout_rate,
     return model
 
 def create_VGG19(dropout_rate, learning_rate,
-                 n_class, starting_layer,
-                 layer_list):
+                 n_class, grad_layers,
+                 train_layers):
     """Creating a VGG19 model using CNN class
     """
     
@@ -926,9 +932,9 @@ def create_VGG19(dropout_rate, learning_rate,
 
     # forming optimizer and gradient operator
     print('Optimizers..')
-    model.get_optimizer(learning_rate, layer_list)
+    model.get_optimizer(learning_rate, train_layers)
     print('Gradients..')
-    model.get_gradients(starting_layer)
+    model.get_gradients(grad_layers)
 
     return model
 

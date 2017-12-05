@@ -190,10 +190,6 @@ class Experiment(object):
         # creating an initial initial model
         # -------------------------
         print('Initializing a model for this run..')
-        if not(os.path.exists(os.path.join(
-                run_path,'saved_model'))):
-            os.mkdir(os.path.join(run_path, 
-                                  'saved_model'))
             
         # create the NN model
         tf.reset_default_graph()
@@ -202,8 +198,8 @@ class Experiment(object):
             self.pars['dropout_rate'],
             self.nclass,
             self.pars['learning_rate'],
-            self.pars['starting_layer'],
-            self.pars['layer_list'])
+            self.pars['grad_layers'],
+            self.pars['train_layers'])
 
         # start a session to do the training
         with tf.Session() as sess:
@@ -346,8 +342,8 @@ class Experiment(object):
             self.pars['dropout_rate'], 
             self.nclass, 
             self.pars['learning_rate'], 
-            self.pars['starting_layer'],
-            self.pars['layer_list'])
+            self.pars['grad_layers'],
+            self.pars['train_layers'])
         model.add_assign_ops(os.path.join(
             method_path, 'curr_weights.h5'))
         
