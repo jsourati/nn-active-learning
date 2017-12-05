@@ -81,7 +81,7 @@ def compute_entropy(PMFs):
     
     return entropies
 
-def test_training_part(labels, test_ratio):
+def test_training_part(labels_file, test_ratio):
     """Paritioning a given labeled data set into test and 
     training partitions, with a given test-to-total ratio
     
@@ -89,14 +89,17 @@ def test_training_part(labels, test_ratio):
     matrix.
     """
     
-    (c,n) = labels.shape
+    labels = np.loadtxt(labels_file)
+    c = int(labels.max()+1)
+    n = len(labels)
     
     test_inds = []
     train_inds = np.arange(n)
     # randomly selecting indices from each class
     for j in range(c):
-        class_inds = np.where(np.where(labels)[0]==j)[0]
-        test_size = round(len(class_inds)*test_ratio)
+        class_inds = np.where(labels==j)[0]
+        test_size = round(
+            len(class_inds)*test_ratio)
         rand_inds = np.random.permutation(
             len(class_inds))[:test_size]
         test_class_inds = class_inds[rand_inds]
@@ -375,8 +378,7 @@ def Alex_features_MNIST(bulk_size):
 
 
 def idxBatch_posteriors(model, inds,
-                        img_path_list,
-                        batch_size,
+                        expr,
                         session, col,
                         extra_feed_dict={}):
     """A function similar to `batch_posteriors()`
@@ -395,6 +397,7 @@ def idxBatch_posteriors(model, inds,
     `image_path_list[ inds[i] ]`
     """
     
+    batch_size = expr.pars['batch_size']
     n = len(inds)
     if col:
         c = model.output.get_shape()[0].value
@@ -406,7 +409,7 @@ def idxBatch_posteriors(model, inds,
     # each batch has indices (batch_of_inds)
     # that are in terms of the input variable
     # "inds"
-    if not(batch_size): 
+    if n<batch_size:
         batch_of_inds = np.arange(
             len(inds)).tolist()
     else:
@@ -417,7 +420,9 @@ def idxBatch_posteriors(model, inds,
     for inner_inds in batch_of_inds:
         # load the data
         X = NN.load_winds(inds[inner_inds],
-                          img_path_list)
+                          expr.imgs_path_file,
+                          expr.pars['target_shape'],
+                          expr.pars['mean'])
         # preparing the feed-dictionary for 
         # the network
         feed_dict = {model.x: X}

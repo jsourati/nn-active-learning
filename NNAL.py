@@ -186,12 +186,10 @@ def querying_iterations_MNIST(batch_of_data, batch_of_labels,
     return accs, batch_of_data, batch_of_labels
 
 def CNN_query(model,
-              img_path_list,
+              expr,
               pool_inds,
-              k, B, lambda_,
               method_name,
               session,
-              batch_size=None,
               col=True,
               extra_feed_dict={}):
     """Querying a number of unlabeled samples from a given pool
@@ -227,6 +225,11 @@ def CNN_query(model,
         prone to out-of-memory error especially when GPU's
         are being used
     """
+    
+    k = expr.pars['k']
+    B = expr.pars['B']
+    lambda_ = expr.pars['lambda_']
+    batch_size = expr.pars['batch_size']
 
     if method_name=='egl':
         # uncertainty filtering
@@ -295,9 +298,13 @@ def CNN_query(model,
     elif method_name=='entropy':
         # computing the posteriors
         posteriors = NNAL_tools.idxBatch_posteriors(
-            model, pool_inds, 
-            img_path_list, batch_size, 
-            session, col, extra_feed_dict)
+            model, 
+            pool_inds, 
+            expr.imgs_path_file, 
+            batch_size, 
+            session, 
+            col, 
+            extra_feed_dict)
         
         # entropies    
         entropies = NNAL_tools.compute_entropy(posteriors)
@@ -308,10 +315,14 @@ def CNN_query(model,
         print("Uncertainty filtering...", end='\n\t')
 
         posteriors = NNAL_tools.idxBatch_posteriors(
-            model, pool_inds, 
-            img_path_list, batch_size, 
-            session, col, extra_feed_dict)
+            model, 
+            pool_inds, 
+            expr, 
+            session, 
+            col, 
+            extra_feed_dict)
         
+        # uncertainty filtering
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(
                 posteriors, B)
@@ -333,8 +344,14 @@ def CNN_query(model,
         A = []
         # load an images
         # indices: sel_inds --> pool_inds
-        sel_X = NN.load_winds(pool_inds[sel_inds],
-                              img_path_list)
+        # CAUTIOUS: this will give an error if the selected
+        # indices in `sel_inds` contains only one index.
+        sel_X = NN.load_winds(
+            pool_inds[sel_inds],
+            expr.imgs_path_file,
+            expr.pars['target_shape'],
+            expr.pars['mean'])
+
         for i in range(B):
             X_i = sel_X[i,:,:,:]
             feed_dict = {
@@ -400,8 +417,7 @@ def CNN_query(model,
         # extracting features for pool samples
         # using only few indices of the features
         F = model.extract_features(pool_inds[sel_inds], 
-                                   img_path_list,
-                                   session, batch_size)
+                                   expr,session)
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
@@ -452,9 +468,10 @@ def CNN_query(model,
         # uncertainty filtering
         print("Uncertainty filtering...")
         posteriors = NNAL_tools.idxBatch_posteriors(
-            model, pool_inds, 
-            img_path_list, batch_size, 
-            session, col, extra_feed_dict)
+            model, 
+            expr,pool_inds, 
+            session, col, 
+            extra_feed_dict)
         
         if B < posteriors.shape[1]:
             sel_inds = NNAL_tools.uncertainty_filtering(
@@ -471,8 +488,8 @@ def CNN_query(model,
         print("\t Finding Similarities..", end='\n\t')
         # extract the features for all the pool
         # sel_inds, rem_inds  -->  pool_inds
-        F = model.extract_features(pool_inds, img_path_list,
-                                   session, batch_size)
+        F = model.extract_features(pool_inds, expr,
+                                   session)
         F_uncertain = F[:, sel_inds]
         norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
         F_rem_pool = F[:, rem_inds]

@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
+import linecache
 import copy
 import h5py
 import pdb
@@ -362,6 +363,26 @@ class CNN(object):
             session.run(pars[1].assign(value_to_load))
             
     def add_assign_ops(self, file_path):
+        """Adding operations for assigning values to
+        the nodes of the class's graph. This method
+        is for creating repeatedly assigning values to
+        the nodes after finalizing the graph. It should
+        be called before `sess.graph.finalize()` to 
+        create the operation nodes before finalizing.
+        Then, the created operation nodes can be 
+        performed without any need to create new nodes.
+        
+        Note that such repeated value assignment to the
+        nodes are necessary for, say, querying iterations
+        where after selecting each set of queries the model
+        should be trained from scratch (or from the point
+        that we saved the weights beforehand).
+        
+        This function, together with `self.perform_assign_ops`
+        will be used instead of `self.load_weights` when 
+        value assignment needs to be done repeatedly after
+        finalizing the graph.
+        """
 
         f = h5py.File(file_path)
         self.assign_dict = {}
@@ -379,21 +400,29 @@ class CNN(object):
             })
             
     def perform_assign_ops(self,sess):
+        """Performing assignment operations that have
+        been created by `self.add_assign_ops`.
+
+        This function, together with `self.add_assign_ops`
+        will be used instead of `self.load_weights` when 
+        value assignment needs to be done repeatedly after
+        finalizing the graph.
+        """
         
         for _, assign_ops in self.assign_dict.items():
             sess.run(assign_ops)
 
         
     def extract_features(self, inds, 
-                         img_path_list, 
-                         session, 
-                         batch_size):
+                         expr, 
+                         session):
         """Extracting features
         """
         
         n = len(inds)
         d = self.feature_layer.get_shape()[0].value
         features = np.zeros((d, n))
+        batch_size = expr.pars['batch_size']
         # preparing batch_of_inds, whose
         # indices are in terms of "inds"
         if batch_size > n: 
@@ -406,8 +435,11 @@ class CNN(object):
         # extracting the features
         for inner_inds in batch_of_inds:
             # loading the data for this patch
-            X = load_winds(inds[inner_inds],
-                           img_path_list)
+            X,_ = load_winds(inds[inner_inds],
+                           expr.imgs_path_file,
+                           expr.pars['target_shape'],
+                           expr.pras['mean'])
+
             features[:,inner_inds] = session.run(
                 self.feature_layer, 
                 feed_dict={self.x: X,
@@ -489,7 +521,6 @@ class CNN(object):
         
     def train_graph_one_epoch(self, expr,
                               train_inds,
-                              batch_size,
                               session,
                               TB_opt={}):
         """Randomly partition the data into 
@@ -527,6 +558,7 @@ class CNN(object):
         """
         
         # random partitioning into batches
+        batch_size = expr.pars['batch_size']
         train_size = len(train_inds)
         if train_size > batch_size:
             batch_of_inds = gen_batch_inds(
@@ -540,7 +572,15 @@ class CNN(object):
             # create the 4D array of batch images
             iter_inds = train_inds[batch_of_inds[j]]
             batch_of_imgs, batch_of_labels = load_winds(
-                iter_inds, expr.img_path_list, expr.labels)
+                iter_inds, 
+                expr.imgs_path_file, 
+                expr.pars['target_shape'],
+                expr.pars['mean'],
+                expr.labels_file)
+            
+            batch_of_labels = AL.make_onehot(
+                batch_of_labels, expr.nclass)
+
             if TB_opt:
                 summary, _ = session.run(
                     [TB_opt['summs'], self.train_step], 
@@ -560,14 +600,13 @@ class CNN(object):
                 if j%50 == 0:
                     # compute the accuracy
                     train_preds = self.predict(
-                        expr, train_inds,
-                        batch_size, session)
+                        expr, train_inds, session)
                     iter_acc = AL.get_accuracy(
                         train_preds, expr.labels[:,train_inds])
                     # adding accuracy to a summary
                     acc_summary = tf.Summary()
                     acc_summary.value.add(
-                        tag='Accuracy/%s'% (TB_opt['tag']),
+                        tag='Accuracy',
                         simple_value=iter_acc)
 
                     TB_opt['writer'].add_summary(
@@ -579,8 +618,9 @@ class CNN(object):
             
                 
         
-    def predict(self, expr, test_inds, 
-                batch_size, session):
+    def predict(self, expr, 
+                inds, 
+                session):
         """Generate a set of predictions for a set of
         data points
         
@@ -589,20 +629,23 @@ class CNN(object):
         text.txt of the given experiment.
         """
         
-        test_size = len(test_inds)
-        if test_size > batch_size:
+        n = len(inds)
+        batch_size = expr.pars['batch_size']
+        if n > batch_size:
             batch_inds = gen_batch_inds(
-                test_size, batch_size)
+                n, batch_size)
         else:
-            batch_inds = [np.arange(len(
-                test_inds)).tolist()]
+            batch_inds = [np.arange(len(n)).tolist()]
             
-        predicts = np.zeros(test_size)
+        predicts = np.zeros(n)
         for j in range(len(batch_inds)):
             # create the 4D array of the current batch
-            iter_inds = test_inds[batch_inds[j]]
-            batch_of_imgs = load_winds(
-                iter_inds, expr.img_path_list)
+            iter_inds = inds[batch_inds[j]]
+            batch_of_imgs, _ = load_winds(
+                iter_inds, 
+                expr.imgs_path_file, 
+                expr.pars['target_shape'],
+                expr.pars['mean'])
             
             predicts[batch_inds[j]] = session.run(
                 self.prediction, 
@@ -755,7 +798,7 @@ class AlexNet_CNN(AlexNet):
             # create the 4D array of batch images
             iter_inds = train_inds[batch_of_inds[j]]
             batch_of_imgs, batch_of_labels = load_winds(
-                iter_inds, expr.img_path_list, expr.labels)
+                iter_inds, expr, True)
             session.run(
                 self.train_step, 
                 feed_dict={self.x: batch_of_imgs, 
@@ -882,7 +925,9 @@ def create_VGG19(dropout_rate, learning_rate,
                 feature_layer, dropout)
 
     # forming optimizer and gradient operator
+    print('Optimizers..')
     model.get_optimizer(learning_rate, layer_list)
+    print('Gradients..')
     model.get_gradients(starting_layer)
 
     return model
@@ -1036,40 +1081,53 @@ def max_pool(x, w_size, stride):
         strides=[1, stride, stride, 1], 
         padding='SAME')
     
-def load_winds(train_inds, 
-               imgs_path_list,
-               hot_labels=[],
-               wprep=True):
+def load_winds(inds, 
+               imgs_path_file, 
+               target_shape,
+               mean=None,
+               labels_file=None):
     """Creating a 4D array that contains a
     number of 3D images 
     """
-    
-    # load the first image 
-    # (to get the common shape of all images)
-    img = np.float64(cv2.imread(
-        imgs_path_list[train_inds[0]]))
-    if wprep:
-        imagenet_mean = [103.939, 116.779, 123.68]
-        img -= imagenet_mean
 
-    ntrain = len(train_inds)
-    batch_of_data = np.zeros((ntrain,)+img.shape)
-    batch_of_data[0,:,:,:] = img
-    # read the rest of the images
-    for i in range(1, ntrain):
-        img = np.float64(cv2.imread(
-            imgs_path_list[train_inds[i]]))
-        if wprep:
-            img -= imagenet_mean
+    ntrain = len(inds)
+    # read the first image to get the number of 
+    path = linecache.getline(
+        imgs_path_file, 
+        inds[0]+1).splitlines()[0]
+    img = np.float64(cv2.imread(path))
+    img = cv2.resize(img,target_shape)
+    if mean:
+        img -= mean
 
+    nchannels = img.shape[-1]
+    batch_of_data = np.zeros(
+        (ntrain,)+target_shape+(nchannels,))
+    labels = []
+    if labels_file:
+        label = linecache.getline(
+            labels_file,
+            inds[0]+1).splitlines()[0]
+        labels += [int(label)]
+
+    # reading batch of images
+    for i in range(1,ntrain):
+        img_path = linecache.getline(
+            imgs_path_file, 
+            inds[i]+1).splitlines()[0]
+        img = np.float64(cv2.imread(img_path))
+        img = cv2.resize(img,target_shape)
+        if mean:
+            img -= mean
         batch_of_data[i,:,:,:] = img
+        
+        if labels_file:
+            label = linecache.getline(
+                labels_file,
+                inds[i]+1).splitlines()[0]
+            labels += [int(label)]
             
-    if len(hot_labels)>0:
-        return (batch_of_data, 
-                hot_labels[:,train_inds])
-    else:
-        return batch_of_data
-
+    return (batch_of_data, labels)
 
 def gen_batch_inds(data_size, batch_size):
     """Generating a list of random indices 

@@ -18,8 +18,8 @@ class Experiment(object):
     
     def __init__(self, 
                  root_dir,
-                 img_path_list=None,
-                 labels=None,
+                 imgs_path_file,
+                 labels_file,
                  pars={}):
         """Constructor
         
@@ -40,39 +40,24 @@ class Experiment(object):
         """
         
         self.root_dir = root_dir
-        
-        img_path_list_f = os.path.join(
-            root_dir,'img_path_list.txt')
-        labels_f = os.path.join(
-            root_dir,'labels.txt')
-
-        # if a path exists, don't need to do much
-        if os.path.exists(root_dir):
-            # loading the image paths
-            with open(img_path_list_f, 'r') as f:
-                self.img_path_list = f.read().splitlines()
-            # loading the labels
-            self.labels = np.int32(np.loadtxt(labels_f))
-
-        else:
+        if not(os.path.exists(root_dir)):
             os.mkdir(root_dir)
-            self.img_path_list = img_path_list
-            with open(img_path_list_f, 'a') as f:
-                # writing paths into a file
-                for path in img_path_list:
-                    f.write('%s\n'% path)
+            self.imgs_path_file = imgs_path_file
+            self.labels_file = labels_file
+            # writing 
+            with open(os.path.join(
+                    root_dir,'data_dirs.txt'),'w') as f:
+                f.write(self.imgs_path_file+'\n')
+                f.write(self.labels_file+'\n')
+        else:
+            with open(os.path.join(
+                    root_dir,'data_dirs.txt'),'r') as f:
+                dirs = f.read().splitlines()
+            self.imgs_path_file = dirs[0]
+            self.labels_file = dirs[1]
             
-            # if labels are not in a one-hot
-            # form, transform them
-            if np.array(labels).ndim==1:
-                labels = make_onehot(labels)
-            #
-            self.labels = labels
-
-            # storing the labels
-            np.savetxt(labels_f, 
-                       labels, fmt='%d')
-        
+        labels = np.loadtxt(self.labels_file)
+        self.nclass = int(labels.max()+1)
         # if there are parameter given, write them
         # into a text file to be used later
         if len(pars)>0:
@@ -181,7 +166,7 @@ class Experiment(object):
         # -----------------------
         # test-training partitioning
         train_inds, test_inds = NNAL_tools.test_training_part(
-            self.labels, self.pars['test_ratio'])
+            self.labels_file, self.pars['test_ratio'])
         
         # getting the initial and pool indices
         ntrain = len(train_inds)
@@ -209,14 +194,12 @@ class Experiment(object):
             os.mkdir(os.path.join(run_path, 
                                   'saved_model'))
             
-        pdb.set_trace()
         # create the NN model
-        nclass = self.labels.shape[0]
         tf.reset_default_graph()
         model = NN.create_model(
             self.pars['model_name'],
             self.pars['dropout_rate'],
-            nclass,
+            self.nclass,
             self.pars['learning_rate'],
             self.pars['starting_layer'],
             self.pars['layer_list'])
@@ -240,9 +223,7 @@ class Experiment(object):
                 model.train_graph_one_epoch(
                     self,
                     init_inds,
-                    self.pars['batch_size'], 
-                    sess,
-                    TB_opt)
+                    sess)
                 TB_opt['epoch_id'] += 1
                 print('%d'% i, end=',')
             
@@ -250,7 +231,6 @@ class Experiment(object):
             predicts = model.predict(
                 self, 
                 test_inds, 
-                self.pars['batch_size'],
                 sess)
                 
             # save the predictions 
@@ -312,7 +292,7 @@ class Experiment(object):
         predicts = np.loadtxt(
             os.path.join(method_path,'predicts.txt'))
         init_acc = get_accuracy(
-            predicts, self.labels[:,test_inds])
+            predicts, self.labels_file, test_inds)
         np.savetxt(
             os.path.join(method_path,'accs.txt'),
             [init_acc])
@@ -423,14 +403,10 @@ class Experiment(object):
                 """ querying """
                 Q_inds = NNAL.CNN_query(
                     model, 
-                    self.img_path_list,
+                    self,
                     curr_pool,
-                    self.pars['k'],
-                    self.pars['B'],
-                    self.pars['lambda_'],
                     method_name,
                     sess, 
-                    self.pars['batch_size'],
                     col_flag,
                     extra_feed_dict
                 )
@@ -464,15 +440,13 @@ class Experiment(object):
                     model.train_graph_one_epoch(
                         self,
                         update_inds,
-                        self.pars['batch_size'],
                         sess,
                         TB_opt)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
                 predicts = model.predict(
-                    self, test_inds, 
-                    self.pars['batch_size'], sess)
+                    self, test_inds, sess)
                 # loading the previous predictions,
                 # appending the new ones to them,
                 # and save them back
@@ -492,7 +466,9 @@ class Experiment(object):
 
                 # computing the accuracies
                 acc = get_accuracy(
-                    predicts, self.labels[:,test_inds])
+                    predicts, 
+                    self.labels_file,
+                    test_inds)
                                    
                 with open(os.path.join(
                         method_path, 
@@ -523,7 +499,7 @@ class Experiment(object):
             model.save_weights(
                 os.path.join(
                     method_path,
-                    'curr_weihgts.h5'))
+                    'curr_weights.h5'))
             
     def reset_method(self, method_name, run):
         """ Resetting a given run/method, 
@@ -649,7 +625,7 @@ class Experiment(object):
 
         return accs, fi_queries
         
-    def visualize_run(self, run, interp=True):
+    def visualize_run(self, run, tags={}, interp=True):
         """Visualizing results of a specific run in the
         experiment
         """
@@ -661,6 +637,8 @@ class Experiment(object):
         if not(hasattr(self, 'pars')):
             self.load_parameters()
             
+        
+
         # compute the common maximum queries
         max_queries = np.sum(
             self.read_queries('random',run))
@@ -759,7 +737,6 @@ class Experiment(object):
         plt.grid()
         return total_accs
         
-    
 
 def paths_n_labels(path, label_name):
     """Preparing a list containing the path to all individual
@@ -777,18 +754,22 @@ def paths_n_labels(path, label_name):
     
     return files, labels
     
-def make_onehot(labels):
+def make_onehot(labels,c):
     """Make a one-hot label matrix out of
     a 1D array of labels
     """
-
-    symbols = np.unique(labels)
-    c = len(symbols)
+    if np.array(labels).ndim>1:
+        raise ValueError(
+            "The input for one-hot conversion"+
+            " be a 1-D array.. %d-D is given"% 
+            (labels.ndim))
+    
     one_hot = np.zeros((c, len(labels)))
-    for i in range(len(labels)):
-        label_ind = np.where(
-            symbols==labels[i])[0]
-        one_hot[label_ind,i] = 1.
+    given_labels = np.unique(labels)
+    for label in given_labels:
+        label_inds = np.where(
+            labels==label)[0]
+        one_hot[label,label_inds] = 1.
         
     return one_hot
 
@@ -801,7 +782,7 @@ def onehot_to_classid(labels):
     column of the input.
     """
     
-    if labels.ndim<2:
+    if np.array(labels).ndim<2:
         raise ValueError(
             "The given label does not seem to"+
             "be a one-hot vector..")
@@ -813,7 +794,7 @@ def onehot_to_classid(labels):
     return class_ids
         
         
-def get_accuracy(predicts, labels):
+def get_accuracy(predicts, labels_file, inds):
     """Computing accuracy of a set of predictions
     based on a given ground-truth labels
     
@@ -825,11 +806,15 @@ def get_accuracy(predicts, labels):
     n = len(predicts)
     
     # if labels are in one-hot format
-    if labels.ndim > 1:
-        labels = onehot_to_classid(labels)
+    cnt = 0
+    for i in range(len(inds)):
+        label = linecache.getline(labels_file,
+                                  inds[i])
+    if predicts[i]==labels:
+        cnt += 1
         
     # now compare the integer class labels
-    acc = np.sum(predicts==labels) / float(n)
+    acc = float(cnt) / float(n)
     
     return acc
     
