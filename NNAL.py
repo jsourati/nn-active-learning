@@ -387,7 +387,7 @@ def CNN_query(model,
                 # if the number of classes is large,
                 # compute gradients of few classes with 
                 # largest  posteriors only
-                sel_nz_classes = np.argsort(-nz_posts)[:20]
+                sel_nz_classes = np.argsort(-nz_posts)[:10]
                 sel_classes = nz_classes[sel_nz_classes]
                 sel_classes_grads = {
                     str(cc): nz_classes_grads[str(cc)]
@@ -468,8 +468,10 @@ def CNN_query(model,
         print("Uncertainty filtering...")
         posteriors = NNAL_tools.idxBatch_posteriors(
             model, 
-            expr,pool_inds, 
-            session, col, 
+            pool_inds, 
+            expr, 
+            session, 
+            col, 
             extra_feed_dict)
         
         if B < posteriors.shape[1]:
@@ -487,7 +489,9 @@ def CNN_query(model,
         print("\t Finding Similarities..", end='\n\t')
         # extract the features for all the pool
         # sel_inds, rem_inds  -->  pool_inds
-        F = model.extract_features(pool_inds, expr, session)
+        F = model.extract_features(pool_inds, 
+                                   expr,
+                                   session)
         F_uncertain = F[:, sel_inds]
         norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
         F_rem_pool = F[:, rem_inds]

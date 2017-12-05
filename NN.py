@@ -1103,6 +1103,8 @@ def load_winds(inds,
     nchannels = img.shape[-1]
     batch_of_data = np.zeros(
         (ntrain,)+target_shape+(nchannels,))
+    batch_of_data[0,:,:,:] = img
+
     labels = []
     if labels_file:
         label = linecache.getline(
