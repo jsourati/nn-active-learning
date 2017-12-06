@@ -350,7 +350,7 @@ def CNN_query(model,
             expr.imgs_path_file,
             expr.pars['target_shape'],
             expr.pars['mean'])
-
+        
         for i in range(B):
             X_i = sel_X[i,:,:,:]
             feed_dict = {
@@ -366,7 +366,7 @@ def CNN_query(model,
             nz_classes_grads = {
                 str(cc): model.grad_posts[str(cc)]
                 for cc in nz_classes}
-
+            
             # computing the gradients
             # grads={ '0': dP(y=0|x)/dtheta, 
             #         '1': dP(y=1|x)/dtheta, 
@@ -378,7 +378,7 @@ def CNN_query(model,
             # where {c0,c1,etc} are classes with largest
             # posteriors for x.
             # 
-            if len(nz_classes) < 20:
+            if len(nz_classes) < 10:
                 grads = session.run(nz_classes_grads, 
                                     feed_dict=feed_dict)
                 sel_classes = nz_classes
