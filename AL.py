@@ -133,7 +133,7 @@ class Experiment(object):
     def organize_runs(self):
         """Organizing run folders such that they have 
         names from 1 to n
-
+        
         Having such organized folder for the runs, makes
         it much easier to add a new run.
         """
@@ -166,8 +166,9 @@ class Experiment(object):
         # preparing the indices
         # -----------------------
         # test-training partitioning
+        labels = np.loadtxt(self.labels_file)
         train_inds, test_inds = NNAL_tools.test_training_part(
-            self.labels_file, self.pars['test_ratio'])
+            labels, self.pars['test_ratio'])
         
         # getting the initial and pool indices
         ntrain = len(train_inds)
@@ -176,6 +177,7 @@ class Experiment(object):
             rand_inds[:self.pars['init_size']]]
         pool_inds = train_inds[
             rand_inds[self.pars['init_size']:]]
+        
         
         # saving indices into the run's folder
         np.savetxt('%s/train_inds.txt'% run_path, 

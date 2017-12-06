@@ -81,7 +81,7 @@ def compute_entropy(PMFs):
     
     return entropies
 
-def test_training_part(labels_file, test_ratio):
+def test_training_part(labels, test_ratio):
     """Paritioning a given labeled data set into test and 
     training partitions, with a given test-to-total ratio
     
@@ -89,7 +89,6 @@ def test_training_part(labels_file, test_ratio):
     matrix.
     """
     
-    labels = np.loadtxt(labels_file)
     c = int(labels.max()+1)
     n = len(labels)
     
@@ -962,3 +961,4 @@ def load_weights_VGG19(model, weights_path, session):
         var = model.var_dict[TF_var_names[i]][1]
         session.run(var.assign(np.expand_dims(
                     pretrained_pars[i][1], axis=1)))
+
