@@ -621,8 +621,88 @@ class CNN(object):
                     TB_opt['writer'].add_summary(
                         acc_summary, 
                         TB_opt['epoch_id']*len(batch_of_inds)+j)
+                    
+    def validated_train(self,
+                        expr,
+                        sess,
+                        train_inds,
+                        valid_ratio,
+                        const_inds=None,
+                        print_flag=False):
+        """Validated training of a CNN model
+
+        :Parameters:
+
+            **model** : CNN object
+                the CNN model which has the method
+                `train_graph_one_epoch()`
+
+            **expr** : active learning experiment
+                the experiment's object which contains
+                the path to data directories
+
+            **sess** : Tensorflow session
+
+
+            **train_inds** : array of positive integers
+                indices of samples inside the training
+                data set
+
+            **valid_ratio** : positive float (<1)
+                ratio of the validatio data set and the
+                one that is used for training
+
+            **cosnt_inds** : array of positive integerses
+                If given, it represents a set of samples
+                that are constrained to be inside the 
+                partition that is used for fine-tuning
+                (and not the validation data set)
+        
+        """
+
+        # separate the training indices to validation
+        # and the ones to be used for fine-tuning
+        labels = np.loadtxt(expr.labels_file)
+        tuning_inds, valid_inds = NNAL_tools.test_training_part(
+            labels[train_inds], valid_ratio)
+
+        if const_inds:
+            tuning_inds = np.append(tuning_inds, const_inds)
+
+
+        # best accuracy is the initial accuracy 
+        # in the beginning (like sorting)
+        predicts = self.predict(expr,valid_inds,sess)
+        best_acc = AL.get_accuracy(predicts,
+                                   expr.labels_file,
+                                   valid_inds)
+        # save the initial weights in the current directory
+        # as the temporary "best" weights so far
+        self.save_weights('tmp_weights.h5')
+        print('init. acc.: %f'% best_acc)
+
+        for i in range(expr.pars['epochs']):
+            self.train_graph_one_epoch(expr,tuning_inds,sess)
+
+            # validating the model after each epoch
+            predicts = self.predict(expr,valid_inds,sess)
+            acc = AL.get_accuracy(predicts,
+                                  expr.labels_file,
+                                  valid_inds)
+            if acc > best_acc + 1e-6:
+                best_acc = acc
+                self.save_weights("tmp_weights.h5")
             
-                
+            if print_flag:
+                print('%d- (%f,%f)'% (i,acc,best_acc))
+
+        # after fix number of iterations load the best
+        # weights that is stored
+        self.load_weights("tmp_weights.h5", sess)
+
+        # delete the temporary file
+        os.remove("tmp_weights.h5")
+
         
     def predict(self, expr, 
                 inds, 
@@ -1165,84 +1245,6 @@ def gen_batch_inds(data_size, batch_size):
         
     return batches
 
-
-def validated_train_CNN(model,
-                    expr,
-                    sess,
-                    train_inds,
-                    valid_ratio,
-                    const_inds=None):
-    """Validated training of a CNN model
-    
-    :Parameters:
-
-        **model** : CNN object
-            the CNN model which has the method
-            `train_graph_one_epoch()`
-    
-        **expr** : active learning experiment
-            the experiment's object which contains
-            the path to data directories
-    
-        **sess** : Tensorflow session
-
-
-        **train_inds** : array of positive integers
-            indices of samples inside the training
-            data set
-
-        **valid_ratio** : positive float (<1)
-            ratio of the validatio data set and the
-            one that is used for training
-
-        **cosnt_inds** : array of positive integerses
-            If given, it represents a set of samples
-            that are constrained to be inside the 
-            partition that is used for fine-tuning
-            (and not the validation data set)
-             
-    """
-
-    # separate the training indices to validation
-    # and the ones to be used for fine-tuning
-    tuning_inds, valid_inds = NNAL_tools.test_training_part(
-        expr.labels_file, valid_ratio)
-    
-    if const_inds:
-        tuning_inds = np.appen(tuning_inds, const_inds)
-        
-    
-    # best accuracy is the initial accuracy 
-    # in the beginning (like sorting)
-    predicts = model.predict(expr,valid_inds,sess)
-    best_acc = AL.get_accuracy(predicts,
-                               expr.labels_file,
-                               valid_inds)
-    # save the initial weights in the current directory
-    # as the temporary "best" weights so far
-    model.save_weights('tmp_weights.h5')
-    
-    
-    for i in range(expr.pars['epochs']):
-        model.train_graph_one_epoch(expr,tuning_inds,sess)
-        
-        # validating the model after each epoch
-        predicts = model.predict(expr,valid_inds,sess)
-        acc = AL.get_accuracy(predicts,
-                              expr.labels_file,
-                              valid_inds)
-        if acc > best_acc:
-            model.save_weights("tmp_weights.h5")
-                
-        
-    # after fix number of iterations load the best
-    # weights that is stored
-    model.load_weights("tmp_weights.h5", sess)
-    
-    # delete the temporary file
-    os.remove("tmp_weights.h5")
-    
-    return model
     
         
         
