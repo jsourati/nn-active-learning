@@ -1,5 +1,6 @@
 from scipy.signal import convolve2d
 import numpy as np
+import warnings
 import nibabel
 import nrrd
 import pdb
@@ -21,16 +22,55 @@ class PatchBinaryData(object):
         self.img_addrs = img_addrs
         self.mask_addrs = mask_addrs
         
-        # construcitng the patch dictionary, 
-        # including only the maksed indices
-        # (rest of the indices are unmasked)
-        self.masked_inds = {}
-        for addr in mask_addrs:
-            mask,_ = nrrd.read(addr)
-            raveled_inds = ravel_binary_mask(
-                mask)
-            self.masked_inds.update(
-                {addr: raveled_inds})
+        
+    def generate_samples(self, img_inds,N):
+        """Generating samples from somes of
+        the images whose indices are given
+        in terms of `self.img_addrs`
+        """
+        
+        inds_dict = {self.img_addrs[i]:[] 
+                     for i in img_inds}
+        labels_dict = {self.img_addrs[i]:[] 
+                     for i in img_inds}
+        
+        # sampling from the volumes
+        for i in img_inds:
+            img,_ = nrrd.read(
+                self.img_addrs[i])
+            mask,_ = nrrd.read(
+                self.mask_addrs[i])
+            
+            # determining the slices for which 
+            # the masked volume is larger than
+            # a specified threshold
+            ratio_thr = 0.2
+            ratios = np.zeros(img.shape[0])
+            for j in range(img.shape[0]):
+                mask_vol = np.sum(mask[j,:,:])
+                ratios[j] = float(
+                    mask_vol) / float(
+                        np.prod(img.shape[1:]))
+                
+            slices = np.where(
+                ratios>ratio_thr)[0]
+            
+            if len(slices)==0:
+                raise warinings.warn(
+                    "Image %d" % i + 
+                    " does not have any slice "+
+                    "satsifying the ratio check.")
+                continue
+                
+            print('Sampling %d slices from image %d' 
+                  % (len(slices), i))
+            sel_inds,sel_labels=sample_masked_volume(
+                img, mask, slices, N)
+
+            inds_dict[self.img_addrs[i]] = sel_inds
+            labels_dict[self.img_addrs[i]]=sel_labels
+            
+        return inds_dict, labels_dict
 
 
 def ravel_binary_mask(mask):
@@ -82,7 +122,7 @@ def extract_Hakims_data_path():
         
     return img_addrs, mask_addrs
 
-def sample_masked_data(img,mask,slices,N):
+def sample_masked_volume(img,mask,slices,N):
     """Sampling from a masked 3D image in way
     that a balanced number of samples are
     drawn from the masked class, the structured
