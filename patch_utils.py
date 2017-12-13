@@ -27,7 +27,8 @@ class PatchBinaryData(object):
     def generate_samples(self, 
                          img_inds,
                          N,
-                         ratio_thr):
+                         ratio_thr,
+                         view):
         """Generating samples from somes of
         the images whose indices are given
         in terms of `self.img_addrs`
@@ -37,6 +38,14 @@ class PatchBinaryData(object):
                      for i in img_inds}
         labels_dict = {self.img_addrs[i]:[] 
                      for i in img_inds}
+        # corresponding integer to the view
+        # sagittal : 0
+        # coronal  : 1
+        # axial    : 2
+        view_id = np.where(np.array(
+            ['sagittal',
+             'coronal',
+             'axial'])==view)[0][0]
         
         # sampling from the volumes
         for i in img_inds:
@@ -48,9 +57,15 @@ class PatchBinaryData(object):
             # determining the slices for which 
             # the masked volume is larger than
             # a specified threshold
-            ratios = np.zeros(img.shape[0])
-            for j in range(img.shape[0]):
-                mask_vol = np.sum(mask[j,:,:])
+            ratios = np.zeros(img.shape[view_id])
+            for j in range(len(ratios)):
+                if view_id==0:
+                    mask_vol = np.sum(mask[j,:,:])
+                elif view_id==1:
+                    mask_vol = np.sum(mask[:,j,:])
+                elif view_id==2:
+                    mask_vol = np.sum(mask[:,:,j])
+
                 ratios[j] = float(
                     mask_vol) / float(
                         np.prod(img.shape[1:]))
@@ -68,7 +83,7 @@ class PatchBinaryData(object):
             print('Sampling %d slices from image %d' 
                   % (len(slices), i))
             sel_inds,sel_labels=sample_masked_volume(
-                img, mask, slices, N)
+                img, mask, slices, N, view)
 
             inds_dict[self.img_addrs[i]] = sel_inds
             labels_dict[self.img_addrs[i]]=sel_labels
@@ -235,7 +250,11 @@ def extract_Hakims_data_path():
         
     return img_addrs, mask_addrs
 
-def sample_masked_volume(img,mask,slices,N):
+def sample_masked_volume(img,
+                         mask,
+                         slices,
+                         N,
+                         view):
     """Sampling from a masked 3D image in way
     that a balanced number of samples are
     drawn from the masked class, the structured
@@ -266,8 +285,18 @@ def sample_masked_volume(img,mask,slices,N):
     sel_inds = []
     sel_labels = []
     for s in slices:
-        img_slice = img[s,:,:]
-        mask_slice = mask[s,:,:]
+        if view=='axial':
+            img_slice = img[:,:,s]
+            mask_slice = mask[:,:,s]
+            slice_view=2
+        elif view=='coronal':
+            img_slice = img[:,s,:]
+            mask_slice = mask[:,s,:]
+            slice_view=1
+        elif view=='sagittal':
+            img_slice = img[s,:,:]
+            mask_slice = mask[s,:,:]
+            slice_view=0
         
         # partitioning the 2D indices into
         # three groups:
@@ -276,11 +305,11 @@ def sample_masked_volume(img,mask,slices,N):
         (masked,Hvar,Lvar)=partition_2d_indices(
             img_slice, mask_slice)
         gmasked = expand_raveled_inds(
-            masked, s, 0, img.shape)
+            masked, s, slice_view, img.shape)
         gHvar = expand_raveled_inds(
-            Hvar, s, 0, img.shape)
+            Hvar, s, slice_view, img.shape)
         gLvar = expand_raveled_inds(
-            Lvar, s, 0, img.shape)
+            Lvar, s, slice_view, img.shape)
 
         # randomly draw samples from each 
         # partition
