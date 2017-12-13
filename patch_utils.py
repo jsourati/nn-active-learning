@@ -6,6 +6,7 @@ import nrrd
 import pdb
 import os
 
+import NN
 
 class PatchBinaryData(object):
     """Class for creating patch-based data set
@@ -23,7 +24,10 @@ class PatchBinaryData(object):
         self.mask_addrs = mask_addrs
         
         
-    def generate_samples(self, img_inds,N):
+    def generate_samples(self, 
+                         img_inds,
+                         N,
+                         ratio_thr):
         """Generating samples from somes of
         the images whose indices are given
         in terms of `self.img_addrs`
@@ -44,7 +48,6 @@ class PatchBinaryData(object):
             # determining the slices for which 
             # the masked volume is larger than
             # a specified threshold
-            ratio_thr = 0.2
             ratios = np.zeros(img.shape[0])
             for j in range(img.shape[0]):
                 mask_vol = np.sum(mask[j,:,:])
@@ -56,7 +59,7 @@ class PatchBinaryData(object):
                 ratios>ratio_thr)[0]
             
             if len(slices)==0:
-                raise warinings.warn(
+                raise warnings.warn(
                     "Image %d" % i + 
                     " does not have any slice "+
                     "satsifying the ratio check.")
@@ -72,6 +75,116 @@ class PatchBinaryData(object):
             
         return inds_dict, labels_dict
 
+    def get_batches(self, 
+                    inds_dict,
+                    batch_size):
+        """Divide a given set of image indices and
+        their labels into batches of specified
+        size
+        """
+        
+        # get the total size of the generated
+        # samples
+        imgs = list(inds_dict.keys())
+        n = np.sum([len(inds_dict[img]) 
+                    for img in imgs])
+        
+        batches = NN.gen_batch_inds(
+            n, batch_size)
+        
+        return batches
+        
+    def get_batch_vars(self,
+                       inds_dict,
+                       labels_dict,
+                       batch_inds,
+                       patch_shape):
+        """Creating tensors of data and labels
+        for a model with batch-learning (such
+        as CNN object) given a batch of
+        indices
+
+        CAUTIOUS: the input `patch_shape` should
+        have odd elements so that the radious 
+        along each direction will be an integer
+        and no shape mismatch will happen.
+        """
+        
+        # initializing variables
+        b = len(batch_inds)
+        batch_tensors = np.zeros(
+            (b,)+patch_shape)
+        batch_labels = np.zeros((2,b))
+        
+        # locating batch indices inside
+        # the data dictionaries
+        sub_dict = locate_in_dict(inds_dict,
+                                  batch_inds)
+        # calculating radii of the patch
+        rads = np.zeros(3,dtype=int)
+        for i in range(3):
+            rads[i] = int((patch_shape[i]-1)/2.)
+        
+        # extracting patches from the image
+        cnt = 0
+        for img_path in list(sub_dict.keys()):
+            img,_ = nrrd.read(img_path)
+            # padding with the patch radius 
+            # so that all patch indices 
+            # fall in the limits of the image
+            # (skip the z-direction, for now)
+            padded_img = np.pad(
+                img, 
+                ((rads[0],rads[0]),
+                 (rads[1],rads[1]),
+                 (rads[2],rads[2])),
+                'constant')
+            
+            # indices in the batch that belong
+            # to the `img_path` (sub-batch inds)
+            subbatch_inds = sub_dict[img_path]
+            b_i = len(subbatch_inds)
+            
+            # adding one-hot labels
+            sub_labels = np.array(labels_dict[
+                img_path])[subbatch_inds]
+            subhot = np.zeros((2,b_i))
+            subhot[0,sub_labels==0]=1
+            subhot[1,sub_labels==1]=1
+            batch_labels[
+                :,cnt:cnt+b_i] = subhot
+            
+            # converting to multiple-3D indicse
+            imgbatch_inds = np.array(inds_dict[
+                img_path])[subbatch_inds]
+            multi_inds3D = np.unravel_index(
+                imgbatch_inds, img.shape)
+            
+            # extracting tensors 
+            for i in range(b_i):
+                # multiple-indices of the
+                # centers change in the padded
+                # image; 
+                # an adjustment is needed 
+                center_vox = [
+                    multi_inds3D[0][i]+rads[0],
+                    multi_inds3D[1][i]+rads[1],
+                    multi_inds3D[2][i]+rads[2]]
+                    
+                patch = padded_img[
+                    center_vox[0]-rads[0]:
+                    center_vox[0]+rads[0]+1,
+                    center_vox[1]-rads[1]:
+                    center_vox[1]+rads[1]+1,
+                    center_vox[2]-rads[2]:
+                    center_vox[2]+rads[2]+1]
+
+                batch_tensors[cnt,:,:,:] = patch
+                
+                cnt += 1
+            
+        return batch_tensors, batch_labels
+            
 
 def ravel_binary_mask(mask):
     """Reading and raveling masked indices
@@ -302,38 +415,71 @@ def get_vars_2d(img,d):
     
     return varx
 
-
-def get_borders(mask):
-    """Returning border pixels of a given 2D
-    binary mask (with labels 0 and 1)
+def locate_in_dict(inds_dict, 
+                   inds):
+    """Locating a set of indices inside
+    a given data dictionary
     
-    A border pixel is a pixel which has 
-    neighborhood with both 0 and 1 classes.
-    The neighborhood size is a parameter that
-    is determined inside the function, and in
-    order to check the values of neighborhood's
-    pixels, we use 2D convolution of the mask 
-    with an all-one kernel.
+    Note that data dictionaries 
+    (either index- or labels-
+    dictionaries) have several indices
+    assigned to each image. Hence
+    locating a global index (which refers
+    to a specific index inside the 
+    dictionary is not straightforward.
+    Here, we assume that the indices or
+    labels are located in the dictionaries
+    in the same ordered as they are
+    saved. For example, only writing the
+    indices of the corresponding data in
+    the dictionary, we would get
+    
+    inds_dict = {'img-1': [0, 1,...,N1-1],
+                 'img-2': [N1, N1+1,
+                           ..., N1+N2-1],
+                   .
+                   .
+                   
+                  'img-10': [N1+...+N9,
+                             N1+...+N9+1,
+                             ...,  
+                             N1+N2+...+N10-1]}
+    
+    In this function, for each given index,
+    we locate it in the dictionary, and 
+    return a sub-dictionary containing 
+    indices WITH RESPECT TO the contents of
+    the same keys in the input dictionary.
     """
     
-    kernel_size = 5
-    kernel = np.ones((kernel_size,kernel_size))
+    # `imgs` are the keys
+    imgs = list(inds_dict.keys())
+
+    sub_dict = {img:[] for img in imgs}
+    key_vols = [len(inds_dict[img]) 
+                for img in imgs]
+    key_cumvols = np.append(
+        0, np.cumsum(key_vols)-1)
     
-    # upper and lower bounds for considering 
-    # a voxel as border or not-border:
-    # if a class has less than `lower_percnt`
-    # of the neighborhood, the centered voxel
-    # won't be consiered as a border voxel
-    least_percnt = 0.2
-    least_size = int(least_percnt*kernel_size**2)
-    masked_lb = least_size
-    masked_ub = kernel_size**2 - least_size
+    for ind in inds:
+        # finding the corresponding key
+        ind_key = key_cumvols.searchsorted(
+            ind) - 1
+        # updating the sub-dictionary
+        sub_dict[imgs[ind_key]] += [
+            ind - key_cumvols[ind_key]]
+        
+    # removing those keys who did not
+    # have any corresponding indices
+    subkey_vols = [len(sub_dict[img]) 
+                   for img in imgs]
+    keys_to_remove = np.where(
+        np.array(subkey_vols)==0)[0]
+    for key in keys_to_remove:
+        del sub_dict[imgs[key]]
     
-    c_mask = convolve2d(mask,kernel,'same')
+    return sub_dict
     
-    return np.logical_and(
-        masked_lb < c_mask,
-        c_mask < masked_ub)
 
 def expand_raveled_inds(inds_2D, 
                         slice_idx,
