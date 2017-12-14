@@ -101,8 +101,9 @@ class PatchBinaryData(object):
         # get the total size of the generated
         # samples
         imgs = list(inds_dict.keys())
-        n = np.sum([len(inds_dict[img]) 
+        n = np.sum([len(inds_dict[img])
                     for img in imgs])
+        
         
         batches = NN.gen_batch_inds(
             n, batch_size)
@@ -488,15 +489,17 @@ def locate_in_dict(inds_dict,
     key_vols = [len(inds_dict[img]) 
                 for img in imgs]
     key_cumvols = np.append(
-        0, np.cumsum(key_vols)-1)
+        -1, np.cumsum(key_vols)-1)
     
     for ind in inds:
+        
         # finding the corresponding key
         ind_key = key_cumvols.searchsorted(
             ind) - 1
         # updating the sub-dictionary
         sub_dict[imgs[ind_key]] += [
-            ind - key_cumvols[ind_key]]
+            ind-key_cumvols[ind_key]-1]
+        
         
     # removing those keys who did not
     # have any corresponding indices
@@ -579,3 +582,64 @@ def expand_raveled_inds(inds_2D,
         multi_inds, shape_3D)
     
     return inds_3D
+
+def get_mean_var(batches, 
+                 inds_dict, 
+                 labels_dict,
+                 pw_dataset,
+                 patch_shape):
+    """Computing the intensity mean and 
+    variance of all trianing patches
+    """
+    
+    # get the largest intensity
+    max_i = 345
+    if False:
+        for i, batch in enumerate(batches):
+            batch_tensors,_ = pw_dataset.get_batch_vars(
+                inds_dict,
+                labels_dict,
+                batch,
+                patch_shape)
+            if batch_tensors.max() > max_i:
+                max_i = batch_tensors.max()
+            print(i,end=',')
+            
+    print('\n Max intensity of batches:%d'% max_i)
+    
+    # since we are not sure what the maximum 
+    # intensity is, we leave the right end open
+    bin_seq = np.linspace(0,max_i,100)
+    hist = np.zeros(len(bin_seq)-1)
+    
+    cnt = 0
+    for i, batch in enumerate(batches):
+        batch_tensors,_ = pw_dataset.get_batch_vars(
+            inds_dict,
+            labels_dict,
+            batches[i],
+            patch_shape)
+
+        b = len(batch)
+        
+        # histogram of the new batch
+        new_hist = np.histogram(
+            batch_tensors, 
+            bin_seq)[0]
+        
+        if i < len(batches)-1:
+            prev_c = float(i) / float(i+1)
+        else:
+            prev_c = float(cnt) / float(
+                cnt+b*np.prod(patch_shape))
+        
+        cnt += b*np.prod(patch_shape)
+        
+        # update the total histogram
+        hist=prev_c*hist + new_hist/float(cnt)
+        
+        print(i,end=',')
+        
+    return bin_seq,hist
+        
+    
