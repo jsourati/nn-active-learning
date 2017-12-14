@@ -179,41 +179,72 @@ class CNN(object):
             self.posteriors = tf.transpose(posteriors, 
                                            name='posteriors')
             
-    def add_layer(self, layer_specs, name, 
+    def add_layer(self, 
+                  layer_specs, 
+                  name, 
                   next_layer_type=None, 
                   last_layer=True):
         """Adding a layer to the graph
         
         Type of the next layer should also be given so that
         the appropriate output can be prepared
+        
+        :Parameters:
+        
+            **layer_specs** : list of three elements
+                 specification list of the layer with
+                 a format explaned in `__init__` as the
+                 items of `layer_dict`
+        
+            **name** : string
+        
+            **next_layer_type** : string
+                determining type of the next layer so that
+                the output will be provided accordingly
+        
+            **last_layer** : binary flag
+                determining whether the layer is the 
+                last one; if it is `True` there won't be
+                any activation at the output
         """
         
         if layer_specs[1]=='conv':
-            # if the next layer is fully-connected we need
-            # to output a flatten tensor
+            # if the next layer is fully-connected,
+            # output a flattened tensor
             if next_layer_type=='fc':
-                self.add_conv(layer_specs, name, flatten=True)
+                self.add_conv(layer_specs, 
+                              name, 
+                              flatten=True)
             else:
-                self.add_conv(layer_specs, name, flatten=False)
+                self.add_conv(layer_specs, 
+                              name, 
+                              flatten=False)
 
         elif layer_specs[1]=='fc': 
             # apply relu activation only if we are NOT 
             # at the last layer 
             if last_layer:
-                self.add_fc(layer_specs, name, activation=False)
+                self.add_fc(layer_specs, 
+                            name, 
+                            activation=False)
             else:
-                self.add_fc(layer_specs, name, activation=True)
+                self.add_fc(layer_specs, 
+                            name, 
+                            activation=True)
 
         elif layer_specs[1] == 'pool':
             # if the next layer is fully-connected we need
             # to output a flatten tensor
             if next_layer_type=='fc':
-                self.add_pool(layer_specs, flatten=True)
+                self.add_pool(layer_specs, 
+                              flatten=True)
             else:
-                self.add_pool(layer_specs, flatten=False)
+                self.add_pool(layer_specs, 
+                              flatten=False)
         else:
-            raise ValueError("Layer's type should be either 'fc'" + 
-                             ", 'conv' or 'pool'.")
+            raise ValueError(
+                "Layer's type should be either 'fc'" + 
+                ", 'conv' or 'pool'.")
                 
                 
     def add_conv(self, layer_specs, name, flatten=True):
@@ -225,13 +256,18 @@ class CNN(object):
         
         self.var_dict.update(
             {name: [
-                    weight_variable([kernel_dim[0], kernel_dim[1], 
-                                     prev_depth, layer_specs[0]], 
-                                    name=name+'_weight'),
-                    bias_variable([layer_specs[0]],
-                                  name=name+'_bias')]
-             }
-            )
+                weight_variable(
+                    [kernel_dim[0], 
+                     kernel_dim[1], 
+                     prev_depth, 
+                     layer_specs[0]], 
+                    name=name+'_weight'),
+                bias_variable(
+                    [layer_specs[0]],
+                    name=name+'_bias')
+            ]
+         }
+        )
         # output of the layer
         output = tf.nn.conv2d(
             self.output, 
@@ -244,7 +280,8 @@ class CNN(object):
         # into a 2D array, where each column has a vectorized
         # tensor in it
         if flatten:
-            out_size = np.prod(self.output.get_shape()[1:]).value
+            out_size = np.prod(
+                self.output.get_shape()[1:]).value
             self.output = tf.reshape(
                 tf.transpose(self.output), [out_size, -1])
     
@@ -255,17 +292,18 @@ class CNN(object):
         prev_depth = self.output.get_shape()[0].value
         self.var_dict.update(
             {name:[
-                    weight_variable(
-                        [layer_specs[0], prev_depth], 
-                        name=name+'_weight'),
-                    bias_variable(
-                        [layer_specs[0], 1],
-                        name=name+'_bias')]
-                }
-            )
+                weight_variable(
+                    [layer_specs[0], prev_depth], 
+                    name=name+'_weight'),
+                bias_variable(
+                    [layer_specs[0], 1],
+                    name=name+'_bias')]
+         }
+        )
         # output of the layer
-        self.output = tf.matmul(self.var_dict[name][0], 
-                           self.output) + self.var_dict[name][1]
+        self.output = tf.matmul(
+            self.var_dict[name][0], 
+            self.output) + self.var_dict[name][1]
         # apply activation function if necessary
         if activation:
             self.output = tf.nn.relu(self.output)
@@ -493,8 +531,8 @@ class CNN(object):
             for layer in train_layers:
                 var_list += self.var_dict[layer]
             
-            self.train_step = tf.train.AdamOptimizer(
-                learning_rate).minimize(
+            self.train_step = tf.train.MomentumOptimizer(
+                learning_rate,0.5).minimize(
                     loss, var_list=var_list)
         
         # define the accuracy
@@ -1017,7 +1055,7 @@ def create_VGG19(dropout_rate, learning_rate,
     model.get_gradients(grad_layers)
 
     return model
-
+    
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes
     two layers of convolution (CNN) followed by two fully connected  layers.
@@ -1149,15 +1187,43 @@ def CNN_variables(kernel_dims, layer_list):
 def weight_variable(shape, name=None):
     """Creating a kernel tensor 
     with specified shape
+    
+    Here, as for the initialization we use
+    the strategy that He et al. (2015), 
+    "Delving deep into rectifiers: Surpassing 
+    human level..."such that the outputs have 
+    unit (reasonably large)
+    
+    It consists of Gaussian initialization
+    with zero-mean and a specific variance.
     """
-    initial = tf.truncated_normal(
-        shape, stddev=0.1)
+    
+    # using Eq (10) of He et al., assuming
+    # ReLu activation, independence of 
+    # elements of the weight tensors, 
+    # and independence between weights and
+    # input tensors
+    if len(shape)>2:
+        # conv. layer
+        # shape[0] : kernel dim_1 
+        # shape[1] : kernel dim_2
+        # shape[2] : input channels
+        n = shape[0]*shape[1]*shape[2]
+        std = np.sqrt(2/n)
+    else:
+        # fc layer
+        n = shape[1]
+        std = np.sqrt(2/n)
+    
+    initial = tf.random_normal(
+        shape, mean=0., stddev=std)
+    
     return tf.Variable(initial, name=name)
 
 def bias_variable(shape, name=None):
     """Creating a bias term with specified shape
     """
-    initial = tf.constant(0.1, shape=shape)
+    initial = tf.constant(0., shape=shape)
     return tf.Variable(initial, name=name)
 
     
