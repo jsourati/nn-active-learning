@@ -302,8 +302,8 @@ def get_slice_prediction(model,
                               (extra_inds,) +\
                               multiinds_2D[1:]
         elif slice_view=='axial':
-            multiinds_3D = (extra_inds,) +\
-                           multiinds_2D
+            multiinds_3D = multiinds_2D +\
+                           (extra_inds,)
         
         # multi 3D to single 3D indices
         inds_3D = np.ravel_multi_index(
@@ -320,7 +320,8 @@ def get_slice_prediction(model,
         pred_map[multiinds_2D] = preds
         slice_preds += [pred_map]
 
-        print(i)
+        print('... %d done in %d'% 
+              (i,len(slice_inds)))
 
     return slice_preds
 
