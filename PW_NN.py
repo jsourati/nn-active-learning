@@ -248,12 +248,82 @@ def get_prediction(model,
                 feed_dict={model.x:batch_tensors,
                            model.keep_prob: 1.})
             
-            #if i%100==0:
-            #    print(i,end=',')
-            print(i)
+            if i%50==0:
+                print(i,end=',')
             
     return preds
-            
+
+def get_slice_prediction(model,
+                         img_path,
+                         slice_inds,
+                         slice_view,
+                         patch_shape,
+                         stats,
+                         sess):
+    """Generating prediction of all voxels
+    in a few slices of a given image
+    """
+    
+    img,_ = nrrd.read(img_path)
+    img_shape = img.shape
+    
+    # preparing 3D indices of the slices
+    # ---------------------------------
+    # first preparing 2D single indices
+    if slice_view=='sagittal':
+        nvox_slice=img_shape[1]*img_shape[2]
+        slice_shape = img[0,:,:].shape
+    elif slice_view=='coronal':
+        nvox_slice=img_shape[0]*img_shape[2]
+        slice_shape = img[:,0,:].shape
+    elif slice_view=='axial':
+        nvox_slice=img_shape[0]*img_shape[1]
+        slice_shape = img[:,:,0].shape        
+        
+    inds_2D = np.arange(0, nvox_slice)
+    
+    # single to multiple 2D indices
+    # (common for all slices)
+    multiinds_2D = np.unravel_index(
+        inds_2D, slice_shape)
+    
+    slice_preds = []
+    for i in range(len(slice_inds)):
+        extra_inds = np.ones(
+            len(inds_2D),
+            dtype=int)*slice_inds[i]
+
+        # multi 2D to multi 3D indices
+        if slice_view=='sagittal':
+            multiinds_3D = (extra_inds,) + \
+                              multiinds_2D
+        elif slice_view=='coronal':
+            multiinds_3D = multiinds_2D[:1] +\
+                              (extra_inds,) +\
+                              multiinds_2D[1:]
+        elif slice_view=='axial':
+            multiinds_3D = (extra_inds,) +\
+                           multiinds_2D
+        
+        # multi 3D to single 3D indices
+        inds_3D = np.ravel_multi_index(
+            multiinds_3D, img_shape)
+        # get the prediction for this slice
+        inds_dict = {img_path: inds_3D}
+        preds = get_prediction(model,
+                               inds_dict,
+                               patch_shape,
+                               stats,
+                               sess)
+        # prediction map
+        pred_map = np.zeros(slice_shape)
+        pred_map[multiinds_2D] = preds
+        slice_preds += [pred_map]
+
+        print(i)
+
+    return slice_preds
+
 def get_accuracy(preds, labels):
     
     n = len(preds)
