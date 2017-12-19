@@ -175,9 +175,10 @@ class CNN(object):
                 layer_dict[layer_names[-1]][1]]
             
             # posterior
-            posteriors = tf.nn.softmax(tf.transpose(self.output))
-            self.posteriors = tf.transpose(posteriors, 
-                                           name='posteriors')
+            posteriors = tf.nn.softmax(
+                tf.transpose(self.output))
+            self.posteriors = tf.transpose(
+                posteriors, name='posteriors')
             
     def add_layer(self, 
                   layer_specs, 
@@ -510,19 +511,19 @@ class CNN(object):
                                  name='labels')
         
         # loss function
-        loss = tf.reduce_mean(
+        self.loss = tf.reduce_mean(
             tf.nn.softmax_cross_entropy_with_logits(
                 labels=tf.transpose(self.y_), 
                 logits=tf.transpose(self.output)),
             name='loss')
         
-        tf.summary.scalar('Loss', loss)
+        tf.summary.scalar('Loss', self.loss)
         
         # optimizer
         if len(train_layers)==0:
             self.train_step = tf.train.AdamOptimizer(
                 learning_rate).minimize(
-                    loss, name='train_step')
+                    self.loss, name='train_step')
         else:
             self.train_layers = train_layers
             # if some layers are specified, only
@@ -531,9 +532,9 @@ class CNN(object):
             for layer in train_layers:
                 var_list += self.var_dict[layer]
             
-            self.train_step = tf.train.MomentumOptimizer(
-                learning_rate,0.5).minimize(
-                    loss, var_list=var_list)
+            self.train_step = tf.train.AdamOptimizer(
+                learning_rate).minimize(
+                    self.loss, var_list=var_list)
         
         # define the accuracy
         self.prediction = tf.argmax(
@@ -742,8 +743,8 @@ class CNN(object):
         os.remove("tmp_weights.h5")
 
         
-    def predict(self, expr, 
-                inds, 
+    def predict(self, expr,
+                inds,
                 session):
         """Generate a set of predictions for a set of
         data points
