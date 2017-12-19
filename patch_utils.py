@@ -641,5 +641,20 @@ def get_mean_var(batches,
         print(i,end=',')
         
     return bin_seq,hist
-        
     
+def generate_rgb_mask(img,mask):
+    """Generating a colored image based
+    on a given 1-channel image and 
+    a binary maske
+    """
+    
+    img_rgb = np.repeat(np.expand_dims(
+        img,axis=2),3,axis=2)
+    img_rgb = np.uint8(
+        img_rgb*255./img_rgb.max())
+    
+    # create a mask in one of the channels
+    tmp = img_rgb[:,:,0]
+    tmp[mask>0] = 200.
+    
+    return img_rgb
