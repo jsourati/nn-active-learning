@@ -173,8 +173,8 @@ def get_model(nclass,
                'conv3':[32, 'conv', [3,3]],
                'conv4':[48, 'conv', [3,3]],
                'max2' :[[2,2], 'pool'],
-               'conv3':[48, 'conv', [3,3]],
-               'conv4':[96, 'conv', [3,3]],
+               'conv5':[48, 'conv', [3,3]],
+               'conv6':[96, 'conv', [3,3]],
                'max2' :[[2,2], 'pool'],
                'fc1':[4096,'fc'],
                'fc2':[4096,'fc'],
@@ -202,11 +202,54 @@ def get_prediction(model,
                    inds_dict,
                    patch_shape,
                    stats,
-                   sess):
+                   sess,
+                   pp_flag):
     """evaluating a list of tensorflow
     variables with batches over a set of 
     samples from different images
     
+    :Parameters:
+    
+        **model** : CNN model
+            an object with `prediction`
+            and `posterior` properties
+    
+        **inds_dict** : dictionary
+           keys of this dictionary include
+           path to images where prediction
+           and posterior are to be evaluated
+           for some voxels; and the items
+           include 3D indices of those
+           voxels.
+
+        **patch_shape** : tuple
+            shape of patches
+
+        **states** : array-like floats
+            mean and standard-deviation of
+            intensities to be used to
+            normalize intensity of the 
+            patches
+
+        **sess** : TF session
+
+        **pp_flag** : list of strings
+            a flag determining which one
+            of posterior (`post`) or
+            prediction (`pred`), or both
+            should be evaluated; note 
+            the number of outputs of the
+            function will be two in any
+            case, and if either of the
+            possible strings are not
+            present in this flag, the
+            corresponding output will
+            an all-zero array.
+    
+            Also note that the posterior
+            array includes only the 
+            probability of being masked
+            (in a binary segmentation).
     """
     
     # taking path of the images
@@ -228,6 +271,7 @@ def get_prediction(model,
                 batch_ends, n)
             
         # going through batches
+        posts = np.zeros(n)
         preds = np.zeros(n)
         for i in range(1,len(batch_ends)):
             # getting the chunk of indices
@@ -243,15 +287,25 @@ def get_prediction(model,
             batch_tensors = (
                 batch_tensors-mu)/sigma
 
-            preds[batch_inds] = sess.run(
-                model.prediction,
-                feed_dict={model.x:batch_tensors,
-                           model.keep_prob: 1.})
-            
+            # evaluating the flagged variabels
+            if 'pred' in pp_flag:
+                preds[batch_inds] = sess.run(
+                    model.prediction,
+                    feed_dict={model.x:batch_tensors,
+                               model.keep_prob: 1.})
+            if 'post' in pp_flag:
+                post_array = sess.run(
+                    model.posteriors,
+                    feed_dict={model.x:batch_tensors,
+                               model.keep_prob: 1.})
+                # keeping only posterior probability
+                # of being maksed
+                posts[batch_inds] = post_array[1,:]
+
             if i%50==0:
                 print(i,end=',')
             
-    return preds
+    return preds, posts
 
 def get_slice_prediction(model,
                          img_path,
@@ -259,7 +313,8 @@ def get_slice_prediction(model,
                          slice_view,
                          patch_shape,
                          stats,
-                         sess):
+                         sess,
+                         flag='pred'):
     """Generating prediction of all voxels
     in a few slices of a given image
     """
@@ -287,7 +342,7 @@ def get_slice_prediction(model,
     multiinds_2D = np.unravel_index(
         inds_2D, slice_shape)
     
-    slice_preds = []
+    slice_evals = []
     for i in range(len(slice_inds)):
         extra_inds = np.ones(
             len(inds_2D),
@@ -310,20 +365,32 @@ def get_slice_prediction(model,
             multiinds_3D, img_shape)
         # get the prediction for this slice
         inds_dict = {img_path: inds_3D}
-        preds = get_prediction(model,
-                               inds_dict,
-                               patch_shape,
-                               stats,
-                               sess)
+        if flag=='pred':
+            evals,_ = get_prediction(
+                model,
+                inds_dict,
+                patch_shape,
+                stats,
+                sess,
+                'pred')
+        elif flag=='post':
+            _,evals = get_prediction(
+                model,
+                inds_dict,
+                patch_shape,
+                stats,
+                sess,
+                'post')
+            
         # prediction map
-        pred_map = np.zeros(slice_shape)
-        pred_map[multiinds_2D] = preds
-        slice_preds += [pred_map]
+        eval_map = np.zeros(slice_shape)
+        eval_map[multiinds_2D] = evals
+        slice_evals += [eval_map]
 
         print('... %d done in %d'% 
               (i,len(slice_inds)))
 
-    return slice_preds
+    return slice_evals
 
 def get_accuracy(preds, labels):
     
@@ -376,3 +443,7 @@ def get_patches(img, inds, patch_shape):
         batch[i,:,:,:] = patch
         
     return batch
+
+
+
+    
