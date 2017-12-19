@@ -251,6 +251,87 @@ def extract_Hakims_data_path():
         
     return img_addrs, mask_addrs
 
+def extract_newborn_data_path():
+    """Preparing addresses pointing to
+    the raw images and masks of 
+    T1-weighted MRI of brains on newborn
+    subjects. The masks are manually 
+    modified by Hakim.
+    """
+
+    # common root directory 
+    root_dir = '/common/collections/dHCP/'+\
+               'dHCP_DCI_spatiotemporal_atlas/'+\
+               'Processed/'
+    
+    # common sub-directories
+    # (except the data files which include
+    # the subject and session codes in their
+    # names)
+    img_rest_of_path = 'common-processed' +\
+                       '/anatomical/01-t1w-ref'
+    mask_rest_of_path = 'common-processed' +\
+                        '/anatomical/03-ICC'
+
+
+    # subject-specific sub-directories
+    dirs = get_subdirs(root_dir)
+    img_addrs = []
+    mask_addrs = []
+    for i, d in enumerate(dirs):
+        if not('sub-CC00' in d):
+            continue
+            
+        # there are two levels of subject-
+        # specific sub-directories
+        subdir = get_subdirs(os.path.join(
+            root_dir, d))[0]
+        subsubdir = get_subdirs(os.path.join(
+            root_dir, d, subdir))[0]
+        
+        # we need the codes for accessing
+        # to names of the data
+        sub_code = d[4:]
+        sess_code = subsubdir[4:]
+            
+        # subject-specific sub-directories
+        subdirs = os.path.join(
+            root_dir,
+            d,
+            subdir,
+            subsubdir)
+
+        """Putting everything together"""
+        img_addrs += [
+            os.path.join(
+                root_dir,
+                subdirs,
+                img_rest_of_path,
+                'c%s_s%s_t1w_ref.nrrd'% 
+                (sub_code, sess_code))]
+        
+        mask_addrs += [
+            os.path.join(
+                root_dir,
+                subdirs,
+                mask_rest_of_path,
+                'c%s_s%s_ICC.nrrd'% 
+                (sub_code, sess_code))]
+        
+    return img_addrs, mask_addrs
+
+
+def get_subdirs(path):
+    """returning all sub-directories of a 
+    given path
+    """
+    
+    subdirs = [d for d in os.listdir(path)
+               if os.path.isdir(os.path.join(
+                       path,d))]
+    
+    return subdirs
+
 def sample_masked_volume(img,
                          mask,
                          slices,
@@ -593,19 +674,13 @@ def get_mean_var(batches,
     """
     
     # get the largest intensity
-    max_i = 345
-    if False:
-        for i, batch in enumerate(batches):
-            batch_tensors,_ = pw_dataset.get_batch_vars(
-                inds_dict,
-                labels_dict,
-                batch,
-                patch_shape)
-            if batch_tensors.max() > max_i:
-                max_i = batch_tensors.max()
-            print(i,end=',')
+    max_i = 0
+    for path in list(inds_dict.keys()):
+        img,_ = nrrd.read(path)
+        if img.max() > max_i:
+            max_i = img.max()
             
-    print('\n Max intensity of batches:%d'% max_i)
+    print('\nMax intensity of batches:%d'% max_i)
     
     # since we are not sure what the maximum 
     # intensity is, we leave the right end open
@@ -638,7 +713,8 @@ def get_mean_var(batches,
         # update the total histogram
         hist=prev_c*hist + new_hist/float(cnt)
         
-        print(i,end=',')
+        if i%50==0:
+            print(i,end=',')
         
     return bin_seq,hist
     
