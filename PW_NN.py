@@ -31,15 +31,15 @@ def train_pw_model(patch_shape,
     train_imgs = [0,1,2]
     inds_dict, mask_dict = pw_dataset.generate_samples(
         train_imgs, [100,100,50],.2, 'axial')
-    train_batches = pw_dataset.get_batches(
-        inds_dict,batch_size)
+    train_batches = get_batches(inds_dict,
+                                batch_size)
     
     # validation
     valid_imgs = [3]
     vinds_dict, vmask_dict = pw_dataset.generate_samples(
         valid_imgs, [50,50,10],.2, 'axial')
-    valid_batches = pw_dataset.get_batches(
-        vinds_dict,batch_size)
+    valid_batches = get_batches(vinds_dict,
+                                batch_size)
     
     """Creating the model
     """
@@ -78,14 +78,15 @@ def train_pw_model(patch_shape,
             for batch in train_batches:
                 # loading the batch
                 (batch_tensors,
-                 batch_labels) = pw_dataset.get_batch_vars(
+                 batch_labels) = get_batch_vars(
                      inds_dict,
                      mask_dict,
                      batch,
                      patch_shape)
 
                 # normalizing intensities
-                batch_tensors = (batch_tensors-mu)/sigma
+                batch_tensors = (
+                    batch_tensors-mu)/sigma
 
                 # batch gradient step
                 summary,_,preds = sess.run(
@@ -118,13 +119,14 @@ def train_pw_model(patch_shape,
                     t_corrpreds = 0
                     for vbatch in valid_batches:
                         (vbatch_tensors,
-                         vbatch_labels)=pw_dataset.get_batch_vars(
+                         vbatch_labels)=get_batch_vars(
                              vinds_dict,
                              vmask_dict,
                              vbatch,
                              patch_shape)
                         
-                        vbatch_tensors = (vbatch_tensors-mu)/sigma
+                        vbatch_tensors = (
+                            vbatch_tensors-mu)/sigma
                         
                         vloss, preds = sess.run(
                             [model.loss, model.prediction],
@@ -157,12 +159,177 @@ def train_pw_model(patch_shape,
                         vAcc_summary, cnt)
                     
                 cnt += 1
+
+def active_finetune(model,
+                    learning_rate,
+                    dropout_rate,
+                    patch_shape,
+                    batch_size,
+                    qbatch_size,
+                    stats):
+    """Finetuning a pre-trained model
+    by querying from a given sample-set
+    of a target data set
+    """
+    
+    # path to data
+    img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
+    
+    # class of data
+    pw_dataset = patch_utils.PatchBinaryData(
+        img_addrs,mask_addrs)
+
+    # creating a single large dictionary
+    # for the whole data set
+    inds_dict, mask_dict = pw_dataset.generate_samples(
+        np.arange(40), [100,100,5],.2, 'axial')
+    
+    # getting relative pool and test indices
+    all_paths = list(inds_dict.keys())
+    npool = np.sum([len(inds_dict[path]) for
+                    path in all_paths[:20]])
+    ntest = np.sum([len(inds_dict[path]) for
+                    path in all_paths[20:]])
+    pool_inds = np.arange(npool)
+    
+    
+    """An initial fine-tuning
+    """
+    print("Initial fine-tuning..")
+    init_epochs = 5
+    mu = stats[0]
+    sigma = stats[1]
+    with tf.Session() as sess:
+        # start by taking 100 random samples 
+        # in the beginning
+        q_init = PW_NNAL.CNN_query(
+            mode,
+            pool_dict,
+            'random',
+            500,
+            sess)
+        
+        # initial fine-tuning
+        for i in range(init_epochs):
+            if i==init_epochs-1:
+                test_inds = np.arange(
+                    npool, npool+ntest)
                 
+                tepreds = PW_train_step(
+                    model,
+                    dropout_rate,
+                    inds_dict,
+                    mask_dict,
+                    q_init,
+                    patch_shape,
+                    batch_size,
+                    sess,
+                    test_inds)
+                
+                # computing the F-measure
+                
+            else:
+                PW_train_step(
+                    model,
+                    dropout_rate,
+                    inds_dict,
+                    mask_dict,
+                    q_init,
+                    patch_shape,
+                    batch_size,
+                    sess)
+            
+
+def PW_train_step(model,
+                  dropout_rate,
+                  inds_dict,
+                  mask_dict,
+                  train_inds,
+                  patch_shape,
+                  batch_size,
+                  stats,
+                  sess,
+                  test_inds=None):
+    """Completing one training epoch based on a
+    patch-wise data set; and return the accuracy
+    over the same or different data
+    """
+    
+    # forming sub-dictionaries for 
+    # data and mask of training 
+    sub_dict = patch_utils.locate_in_dict(
+        inds_dict, train_inds)
+    trinds_dict = {}
+    for path in list(sub_dict.keys()):
+        # indices sub-dictionary
+        trinds_dict[path] = inds_dict[path][
+            sub_dict[path]]
+        # mask sub-dictionary
+        trmask_dict[path] = mask_dict[path][
+            sub_dict[path]]
+
+    tr_batches = patch_utils.get_batches(
+        train_dict,batch_size)
+
+    mu = stats[0]
+    sigma = stats[1]
+    for batch in tr_batches:
+        (batch_tensors,
+         batch_labels) = patch_utils.get_batch_vars(
+             trinds_dict,
+             trmask_dict,
+             batch,
+             patch_shape)
+
+        batch_tensors = (
+            batch_tensors-mu)/sigma
+
+        # batch gradient step
+        sess.run(
+            model.train_step,
+            feed_dict={
+                model.x: batch_tensors,
+                model.y_: batch_labels,
+                model.keep_prob:dropout_rate})
+
+        # if a test set of indices are provided,
+        # compute accuracies based on them
+        if test_inds:
+            sub_dict = patch_utils.get_batches(
+                inds_dict,test_inds)
+            teinds_dict = {}
+            for path in list(sub_dict.keys()):
+                # indices sub-dictionary
+                teinds_dict[path] = inds_dict[path][
+                    sub_dict[path]]
+                # mask sub-dictionary
+                temask_dict[path] = mask_dict[path][
+                    sub_dict[path]]
+                
+            te_batches = patch_utils.get_batches(
+                teinds_dict, btach_size)
+
+            # prediction for test samples
+            tepreds_dict,_ = get_prediction(
+                model, 
+                teinds_dict,
+                patch_shape,
+                stats,
+                sess,
+                'pred')
+                
+            Fm = get_Fmeasure(
+                tepreds_dict,
+                temask_dict)
+            
+            return 
+
 
 def get_model(nclass,
               dropout_rate,
               learning_rate,
-              patch_shape):
+              patch_shape,
+              batch_size):
     """Creating a model for patch-wise
     segmentatio of medical images
     """
@@ -198,15 +365,17 @@ def get_model(nclass,
     
     return model
 
-def get_prediction(model, 
-                   inds_dict,
-                   patch_shape,
-                   stats,
-                   sess,
-                   pp_flag):
-    """evaluating a list of tensorflow
-    variables with batches over a set of 
-    samples from different images
+def batch_eval(model, 
+               inds_dict,
+               patch_shape,
+               batch_size,
+               stats,
+               sess,
+               varnames,
+               mask_dict=None):
+    """evaluating a list of variables over
+    a set of samples from different images
+    in a batch-wise format
     
     :Parameters:
     
@@ -233,7 +402,7 @@ def get_prediction(model,
 
         **sess** : TF session
 
-        **pp_flag** : list of strings
+        **varnames** : list of strings
             a flag determining which one
             of posterior (`post`) or
             prediction (`pred`), or both
@@ -254,10 +423,12 @@ def get_prediction(model,
     
     # taking path of the images
     imgs_path = list(inds_dict.keys())
-    preds_dict = {path:[] 
-                  for path in imgs_path}
+    if not(isinstance(varnames, list)):
+        varnames = [varnames]
+    var_dicts = [] 
+    for i in range(len(varnames)):
+        var_dicts += [{}]
 
-    batch_size = 200
     mu = stats[0]
     sigma = stats[1]
     for img_path in imgs_path:
@@ -271,41 +442,76 @@ def get_prediction(model,
                 batch_ends, n)
             
         # going through batches
-        posts = np.zeros(n)
-        preds = np.zeros(n)
         for i in range(1,len(batch_ends)):
             # getting the chunk of indices
             batch_inds = np.arange(
                 batch_ends[i-1],batch_ends[i])
+            b = len(batch_inds)
             # loading tensors
+            # (not to be confused with 
+            # patch_utils.get_batches())
             batch_tensors = get_patches(
                 img, 
                 np.array(inds_dict[
                     img_path])[batch_inds],
                 patch_shape)
-
             batch_tensors = (
                 batch_tensors-mu)/sigma
 
-            # evaluating the flagged variabels
-            if 'pred' in pp_flag:
-                preds[batch_inds] = sess.run(
-                    model.prediction,
-                    feed_dict={model.x:batch_tensors,
-                               model.keep_prob: 1.})
-            if 'post' in pp_flag:
-                post_array = sess.run(
-                    model.posteriors,
-                    feed_dict={model.x:batch_tensors,
-                               model.keep_prob: 1.})
-                # keeping only posterior probability
-                # of being maksed
-                posts[batch_inds] = post_array[1,:]
+            # evaluating the listed variabels
+            for j,var in enumerate(varnames):
+                # create the array for this image
+                # and this variable in the first
+                # iteration
+                if i==1:
+                    var_dicts[j][img_path] = np.zeros(n)
+                    
+                # evaluate variable for this batch
+                model_var = getattr(model, var)
+                if var=='loss':
+                    """if loss to be evaluated,
+                    load the batch labels"""
+                    # ---------------------------\
+                    if not(mask_dict):
+                        raise ValueError(
+                            'If loss '+
+                            'is to be evaluated '+
+                            'the mask dictionary '+
+                            'should be given.')
+                    batch_labels = np.array(mask_dict[
+                        img_path])[batch_inds]
+                    hotbatch_labels = np.zeros((2,b))
+                    hotbatch_labels[0,batch_labels==0]=1
+                    hotbatch_labels[1,batch_labels==1]=1
+
+                    batch_vals = sess.run(
+                        model_var,
+                        feed_dict={model.x:batch_tensors,
+                                   model.y_:hotbatch_labels,
+                                   model.keep_prob: 1.})
+                else:
+                    """evaluating variables with no need
+                    to batch labels
+                    """
+                    batch_vals = sess.run(
+                        model_var,
+                        feed_dict={model.x:batch_tensors,
+                                   model.keep_prob: 1.})
+            
+                if var=='posteriors':
+                    # keeping only posterior probability
+                    # of being maksed
+                    var_dicts[j][img_path][
+                        batch_inds] = batch_vals[1,:]
+                else:
+                    var_dicts[j][img_path][
+                        batch_inds] = batch_vals
 
             if i%50==0:
                 print(i,end=',')
+                
             
-    return preds, posts
+    return var_dicts
 
 def get_slice_prediction(model,
                          img_path,
@@ -392,6 +598,7 @@ def get_slice_prediction(model,
 
     return slice_evals
 
+
 def get_accuracy(preds, labels):
     
     n = len(preds)
@@ -399,6 +606,19 @@ def get_accuracy(preds, labels):
     
     return np.sum(preds==labels) / float(n)
 
+def get_Fmeasure(preds,labels):
+    
+    TP = np.sum(np.logical_and(
+        preds>0, labels>0))
+    TPFP = np.sum(preds>0)
+    P = np.sum(labels>0)
+    
+    # precision and recall
+    Pr = TP / TPFP
+    Rc = TP / P
+    
+    # F measure
+    return 2/(1/Pr + 1/Rc)
 
 def get_patches(img, inds, patch_shape):
     """Extacting patches around a given 
