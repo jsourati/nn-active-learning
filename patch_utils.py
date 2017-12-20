@@ -33,7 +33,7 @@ class PatchBinaryData(object):
         the images whose indices are given
         in terms of `self.img_addrs`
         """
-        
+
         inds_dict = {self.img_addrs[i]:[] 
                      for i in img_inds}
         labels_dict = {self.img_addrs[i]:[] 
@@ -61,15 +61,17 @@ class PatchBinaryData(object):
             for j in range(len(ratios)):
                 if view_id==0:
                     mask_vol = np.sum(mask[j,:,:])
+                    total_vol = np.prod(img.shape[1:])
                 elif view_id==1:
                     mask_vol = np.sum(mask[:,j,:])
+                    total_vol = img.shape[0]*img.shape[2]
                 elif view_id==2:
                     mask_vol = np.sum(mask[:,:,j])
+                    total_vol = np.prod(img.shape[:-1])
 
-                ratios[j] = float(
-                    mask_vol) / float(
-                        np.prod(img.shape[1:]))
-                
+                ratios[j] = float(mask_vol) / \
+                            float(total_vol)
+
             slices = np.where(
                 ratios>ratio_thr)[0]
             
