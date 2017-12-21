@@ -7,6 +7,7 @@ import pdb
 import os
 
 import NNAL_tools
+import PW_NN
 import patch_utils
 
 
@@ -14,7 +15,9 @@ def CNN_query(model,
               pool_dict,
               method_name,
               qbatch_size,
-              session):
+              patch_shape,
+              stats,
+              sess):
     """Querying strategies for active
     learning of patch-wise model
     """
@@ -27,6 +30,30 @@ def CNN_query(model,
         q = np.random.permutation(n)[
             :qbatch_size]
 
+        q_dict = patch_utils.locate_in_dict(
+            pool_dict, q)
+        
+    if method_name=='entropy':
+        # posteriors
+        batch_size = 200
+        posts = PW_NN.batch_eval(
+            model, 
+            pool_dict,
+            patch_shape,
+            batch_size,
+            stats,
+            sess,
+            'posteriors')[0]
+        
+        # vectories everything
+        ttposts = []
+        for path in list(posts.keys()):
+            ttposts += list(posts[path])
+            
+        # k most uncertain
+        q = np.argsort(np.array(
+            ttposts))[:qbatch_size]
+        
         q_dict = patch_utils.locate_in_dict(
             pool_dict, q)
         
