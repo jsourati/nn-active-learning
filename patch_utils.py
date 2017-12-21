@@ -92,116 +92,114 @@ class PatchBinaryData(object):
             
         return inds_dict, labels_dict
 
-    def get_batches(self, 
-                    inds_dict,
-                    batch_size):
-        """Divide a given set of image indices and
-        their labels into batches of specified
-        size
-        """
-        
-        # get the total size of the generated
-        # samples
-        imgs = list(inds_dict.keys())
-        n = np.sum([len(inds_dict[img])
-                    for img in imgs])
-        
-        
-        batches = NN.gen_batch_inds(
-            n, batch_size)
-        
-        return batches
-        
-    def get_batch_vars(self,
-                       inds_dict,
-                       labels_dict,
-                       batch_inds,
-                       patch_shape):
-        """Creating tensors of data and labels
-        for a model with batch-learning (such
-        as CNN object) given a batch of
-        indices
+def get_batches(inds_dict,
+                batch_size):
+    """Divide a given set of image indices and
+    their labels into batches of specified
+    size
+    """
 
-        CAUTIOUS: the input `patch_shape` should
-        have odd elements so that the radious 
-        along each direction will be an integer
-        and no shape mismatch will happen.
-        """
-        
-        # initializing variables
-        b = len(batch_inds)
-        batch_tensors = np.zeros(
-            (b,)+patch_shape)
-        batch_labels = np.zeros((2,b))
-        
-        # locating batch indices inside
-        # the data dictionaries
-        sub_dict = locate_in_dict(inds_dict,
-                                  batch_inds)
-        # calculating radii of the patch
-        rads = np.zeros(3,dtype=int)
-        for i in range(3):
-            rads[i] = int((patch_shape[i]-1)/2.)
-        
-        # extracting patches from the image
-        cnt = 0
-        for img_path in list(sub_dict.keys()):
-            img,_ = nrrd.read(img_path)
-            # padding with the patch radius 
-            # so that all patch indices 
-            # fall in the limits of the image
-            # (skip the z-direction, for now)
-            padded_img = np.pad(
-                img, 
-                ((rads[0],rads[0]),
-                 (rads[1],rads[1]),
-                 (rads[2],rads[2])),
-                'constant')
-            
-            # indices in the batch that belong
-            # to the `img_path` (sub-batch inds)
-            subbatch_inds = sub_dict[img_path]
-            b_i = len(subbatch_inds)
-            
-            # adding one-hot labels
-            sub_labels = np.array(labels_dict[
-                img_path])[subbatch_inds]
-            subhot = np.zeros((2,b_i))
-            subhot[0,sub_labels==0]=1
-            subhot[1,sub_labels==1]=1
-            batch_labels[
-                :,cnt:cnt+b_i] = subhot
-            
-            # converting to multiple-3D indicse
-            imgbatch_inds = np.array(inds_dict[
-                img_path])[subbatch_inds]
-            multi_inds3D = np.unravel_index(
-                imgbatch_inds, img.shape)
-            
-            # extracting tensors 
-            for i in range(b_i):
-                # multiple-indices of the
-                # centers change in the padded
-                # image; 
-                # an adjustment is needed 
-                center_vox = [
-                    multi_inds3D[0][i]+rads[0],
-                    multi_inds3D[1][i]+rads[1],
-                    multi_inds3D[2][i]+rads[2]]
-                    
-                patch = padded_img[
-                    center_vox[0]-rads[0]:
-                    center_vox[0]+rads[0]+1,
-                    center_vox[1]-rads[1]:
-                    center_vox[1]+rads[1]+1,
-                    center_vox[2]-rads[2]:
-                    center_vox[2]+rads[2]+1]
+    # get the total size of the generated
+    # samples
+    imgs = list(inds_dict.keys())
+    n = np.sum([len(inds_dict[img])
+                for img in imgs])
 
-                batch_tensors[cnt,:,:,:] = patch
-                
-                cnt += 1
-            
-        return batch_tensors, batch_labels
+
+    batches = NN.gen_batch_inds(
+        n, batch_size)
+
+    return batches
+
+def get_batch_vars(inds_dict,
+                   labels_dict,
+                   batch_inds,
+                   patch_shape):
+    """Creating tensors of data and labels
+    for a model with batch-learning (such
+    as CNN object) given a batch of
+    indices
+
+    CAUTIOUS: the input `patch_shape` should
+    have odd elements so that the radious 
+    along each direction will be an integer
+    and no shape mismatch will happen.
+    """
+
+    # initializing variables
+    b = len(batch_inds)
+    batch_tensors = np.zeros(
+        (b,)+patch_shape)
+    batch_labels = np.zeros((2,b))
+
+    # locating batch indices inside
+    # the data dictionaries
+    sub_dict = locate_in_dict(inds_dict,
+                              batch_inds)
+    # calculating radii of the patch
+    rads = np.zeros(3,dtype=int)
+    for i in range(3):
+        rads[i] = int((patch_shape[i]-1)/2.)
+
+    # extracting patches from the image
+    cnt = 0
+    for img_path in list(sub_dict.keys()):
+        img,_ = nrrd.read(img_path)
+        # padding with the patch radius 
+        # so that all patch indices 
+        # fall in the limits of the image
+        # (skip the z-direction, for now)
+        padded_img = np.pad(
+            img, 
+            ((rads[0],rads[0]),
+             (rads[1],rads[1]),
+             (rads[2],rads[2])),
+            'constant')
+
+        # indices in the batch that belong
+        # to the `img_path` (sub-batch inds)
+        subbatch_inds = sub_dict[img_path]
+        b_i = len(subbatch_inds)
+
+        # adding one-hot labels
+        sub_labels = np.array(labels_dict[
+            img_path])[subbatch_inds]
+        subhot = np.zeros((2,b_i))
+        subhot[0,sub_labels==0]=1
+        subhot[1,sub_labels==1]=1
+        batch_labels[
+            :,cnt:cnt+b_i] = subhot
+
+        # converting to multiple-3D indicse
+        imgbatch_inds = np.array(inds_dict[
+            img_path])[subbatch_inds]
+        multi_inds3D = np.unravel_index(
+            imgbatch_inds, img.shape)
+
+        # extracting tensors 
+        for i in range(b_i):
+            # multiple-indices of the
+            # centers change in the padded
+            # image; 
+            # an adjustment is needed 
+            center_vox = [
+                multi_inds3D[0][i]+rads[0],
+                multi_inds3D[1][i]+rads[1],
+                multi_inds3D[2][i]+rads[2]]
+
+            patch = padded_img[
+                center_vox[0]-rads[0]:
+                center_vox[0]+rads[0]+1,
+                center_vox[1]-rads[1]:
+                center_vox[1]+rads[1]+1,
+                center_vox[2]-rads[2]:
+                center_vox[2]+rads[2]+1]
+
+            batch_tensors[cnt,:,:,:] = patch
+
+            cnt += 1
+
+    return batch_tensors, batch_labels
             
 
 def ravel_binary_mask(mask):
