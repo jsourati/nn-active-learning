@@ -8,6 +8,7 @@ import pdb
 import os
 
 import NN
+import PW_NNAL
 import patch_utils
 
 
@@ -166,7 +167,8 @@ def active_finetune(model,
                     patch_shape,
                     batch_size,
                     qbatch_size,
-                    stats):
+                    stats,
+                    init_weights_path):
     """Finetuning a pre-trained model
     by querying from a given sample-set
     of a target data set
@@ -177,103 +179,156 @@ def active_finetune(model,
     
     # class of data
     pw_dataset = patch_utils.PatchBinaryData(
-        img_addrs,mask_addrs)
+        img_addrs[:2],mask_addrs[:2])
+    nimg = len(pw_dataset.img_addrs)
 
     # creating a single large dictionary
     # for the whole data set
     inds_dict, mask_dict = pw_dataset.generate_samples(
-        np.arange(40), [100,100,5],.2, 'axial')
+        np.arange(nimg), [100,100,5],.2, 'axial')
     
+    """preparing pool and test samples"""
+    """-------------------------------"""
     # getting relative pool and test indices
     all_paths = list(inds_dict.keys())
     npool = np.sum([len(inds_dict[path]) for
-                    path in all_paths[:20]])
+                    path in all_paths[:int(nimg/2)]])
     ntest = np.sum([len(inds_dict[path]) for
-                    path in all_paths[20:]])
+                    path in all_paths[int(nimg/2):]])
+    
+    # creating test and pool dictionary
+    # pool indices and mask dictionary
     pool_inds = np.arange(npool)
-    
-    
+    prel_dict = patch_utils.locate_in_dict(
+        inds_dict, pool_inds)
+    pinds_dict = {}
+    pmask_dict = {}
+    for path in list(prel_dict.keys()):
+        pmask_dict[path] = np.array(mask_dict[path])[
+            prel_dict[path]]
+        pinds_dict[path] = np.array(inds_dict[path])[
+            prel_dict[path]]
+        
+    # test indices and mask dictionary
+    test_inds = np.arange(npool, npool+ntest)
+    tsrel_dict = patch_utils.locate_in_dict(
+        inds_dict, test_inds)
+    tsmask_dict = {}
+    tsinds_dict = {}
+    for path in list(tsrel_dict.keys()):
+        tsmask_dict[path] = np.array(mask_dict[path])[
+            tsrel_dict[path]]
+        tsinds_dict[path] = np.array(inds_dict[path])[
+            tsrel_dict[path]]
+        
     """An initial fine-tuning
     """
     print("Initial fine-tuning..")
     init_epochs = 5
-    mu = stats[0]
-    sigma = stats[1]
+    model = get_model(2,
+                      dropout_rate,
+                      learning_rate,
+                      patch_shape)
     with tf.Session() as sess:
-        # start by taking 100 random samples 
-        # in the beginning
-        q_init = PW_NNAL.CNN_query(
-            mode,
-            pool_dict,
-            'random',
-            500,
-            sess)
+        # initialization
+        sess.run(tf.global_variables_initializer())
+        model.load_weights(init_weights_path,
+                           sess)
         
-        # initial fine-tuning
-        for i in range(init_epochs):
-            if i==init_epochs-1:
-                test_inds = np.arange(
-                    npool, npool+ntest)
+        # inital F-measure
+        tspreds_dict = batch_eval(
+            model,
+            tsinds_dict,
+            patch_shape,
+            batch_size,
+            stats,
+            sess,
+            'prediction')[0]
                 
-                tepreds = PW_train_step(
-                    model,
-                    dropout_rate,
-                    inds_dict,
-                    mask_dict,
-                    q_init,
-                    patch_shape,
-                    batch_size,
-                    sess,
-                    test_inds)
-                
-                # computing the F-measure
-                
-            else:
-                PW_train_step(
-                    model,
-                    dropout_rate,
-                    inds_dict,
-                    mask_dict,
-                    q_init,
-                    patch_shape,
-                    batch_size,
-                    sess)
-            
+        Fm = get_Fmeasure(tspreds_dict,
+                          tsmask_dict)
+        
+        Fvec = np.zeros(5+1)
+        Fvec[0] = Fm
+        print('\n:::::: Initial F-measure: %f'
+              % (Fvec[0]))
+        
+        trinds_dict = {}
+        trmask_dict = {}
+        """Starting the querying iterations"""
+        for t in range(5):
+            qrel_dict = PW_NNAL.CNN_query(
+                model,
+                pinds_dict,
+                'random',
+                500,
+                sess)
+
+            # modifying dictionaries
+            (trinds_dict,
+             trmask_dict,
+             pinds_dict,
+             pmask_dict)=expand_train_dicts(
+                 qrel_dict,
+                 pinds_dict,
+                 pmask_dict,
+                 trinds_dict,
+                 trmask_dict,)
+
+
+            # initial fine-tuning
+            for i in range(init_epochs):
+                if i==init_epochs-1:
+                    Fm = PW_train_step(
+                        model,
+                        dropout_rate,
+                        trinds_dict,
+                        trmask_dict,
+                        patch_shape,
+                        batch_size,
+                        stats,
+                        sess,
+                        tsinds_dict,
+                        tsmask_dict)
+                else:
+                    PW_train_step(
+                        model,
+                        dropout_rate,
+                        trinds_dict,
+                        trmask_dict,
+                        patch_shape,
+                        batch_size,
+                        stats,
+                        sess)
+                    print(i,end=',')
+                    
+            Fvec[t+1] = Fm
+            print(':::::: F-measure: %f'
+                  % (Fvec[t+1]))
+
+    return Fvec
 
 def PW_train_step(model,
                   dropout_rate,
-                  inds_dict,
-                  mask_dict,
-                  train_inds,
+                  trinds_dict,
+                  trmask_dict,
                   patch_shape,
                   batch_size,
                   stats,
                   sess,
-                  test_inds=None):
+                  tsinds_dict=None,
+                  tsmask_dict=None):
     """Completing one training epoch based on a
     patch-wise data set; and return the accuracy
     over the same or different data
     """
     
-    # forming sub-dictionaries for 
-    # data and mask of training 
-    sub_dict = patch_utils.locate_in_dict(
-        inds_dict, train_inds)
-    trinds_dict = {}
-    for path in list(sub_dict.keys()):
-        # indices sub-dictionary
-        trinds_dict[path] = inds_dict[path][
-            sub_dict[path]]
-        # mask sub-dictionary
-        trmask_dict[path] = mask_dict[path][
-            sub_dict[path]]
-
-    tr_batches = patch_utils.get_batches(
-        train_dict,batch_size)
+    trbatches = patch_utils.get_batches(
+        trinds_dict,batch_size)
 
     mu = stats[0]
     sigma = stats[1]
-    for batch in tr_batches:
+    for batch in trbatches:
         (batch_tensors,
          batch_labels) = patch_utils.get_batch_vars(
              trinds_dict,
@@ -294,42 +349,31 @@ def PW_train_step(model,
 
         # if a test set of indices are provided,
         # compute accuracies based on them
-        if test_inds:
-            sub_dict = patch_utils.get_batches(
-                inds_dict,test_inds)
-            teinds_dict = {}
-            for path in list(sub_dict.keys()):
-                # indices sub-dictionary
-                teinds_dict[path] = inds_dict[path][
-                    sub_dict[path]]
-                # mask sub-dictionary
-                temask_dict[path] = mask_dict[path][
-                    sub_dict[path]]
+        if tsinds_dict:
                 
-            te_batches = patch_utils.get_batches(
-                teinds_dict, btach_size)
+            tsbatches = patch_utils.get_batches(
+                tsinds_dict, batch_size)
 
             # prediction for test samples
-            tepreds_dict,_ = get_prediction(
+            tspreds_dict = batch_eval(
                 model, 
-                teinds_dict,
+                tsinds_dict,
                 patch_shape,
+                batch_size,
                 stats,
                 sess,
-                'pred')
+                'prediction')[0]
                 
-            Fm = get_Fmeasure(
-                tepreds_dict,
-                temask_dict)
+            Fm = get_Fmeasure(tspreds_dict,
+                              tsmask_dict)
             
-            return 
+            return Fm
 
 
 def get_model(nclass,
               dropout_rate,
               learning_rate,
-              patch_shape,
-              batch_size):
+              patch_shape):
     """Creating a model for patch-wise
     segmentatio of medical images
     """
@@ -337,11 +381,11 @@ def get_model(nclass,
     pw_dict = {'conv1':[24, 'conv', [5,5]],
                'conv2':[32, 'conv', [5,5]],
                'max1': [[2,2], 'pool'],
-               'conv3':[32, 'conv', [3,3]],
-               'conv4':[48, 'conv', [3,3]],
-               'max2' :[[2,2], 'pool'],
-               'conv5':[48, 'conv', [3,3]],
-               'conv6':[96, 'conv', [3,3]],
+               #'conv3':[32, 'conv', [3,3]],
+               #'conv4':[48, 'conv', [3,3]],
+               #'max2' :[[2,2], 'pool'],
+               'conv3':[48, 'conv', [3,3]],
+               'conv4':[96, 'conv', [3,3]],
                'max2' :[[2,2], 'pool'],
                'fc1':[4096,'fc'],
                'fc2':[4096,'fc'],
@@ -365,6 +409,61 @@ def get_model(nclass,
     
     return model
 
+def expand_train_dicts(qrel_dict,
+                       pinds_dict,
+                       pmask_dict,
+                       trinds_dict,
+                       trmask_dict):
+    """Expanding a given training dictionary
+    with a set of queries given in form of
+    relative indices with respect to the pool
+    dictionaries
+    
+    All the keys of `qrel_dict` should exist
+    in the pool dictionary too, but not
+    necessarily in the training dictionaries
+    """
+    
+    tr_paths = list(trinds_dict.keys())
+    q_paths = list(qrel_dict.keys())
+
+    for path in q_paths:
+        # extracting from pool
+        sel_pinds = np.array(pinds_dict[
+            path])[qrel_dict[path]]
+        sel_pmask = np.array(pmask_dict[
+            path])[qrel_dict[path]]
+
+        # transferring to the training
+        if not(path in tr_paths):
+            trinds_dict[path] = []
+            trmask_dict[path] = []
+        trinds_dict[path] += list(
+            sel_pinds)
+        trmask_dict[path] += list(
+            sel_pmask)
+        
+        # removing from the pool
+        # indices
+        new_pinds = np.array(
+            pinds_dict[path])
+        new_pinds = np.delete(
+            new_pinds, 
+            qrel_dict[path])
+        pinds_dict[path] = list(
+            new_pinds)
+        # mask
+        new_pmask = np.array(
+            pmask_dict[path])
+        new_pmask = np.delete(
+            new_pmask, 
+            qrel_dict[path])
+        pmask_dict[path] = list(
+            new_pmask)
+        
+    return (trinds_dict,trmask_dict,
+            pinds_dict, pmask_dict)
+        
 def batch_eval(model, 
                inds_dict,
                patch_shape,
@@ -606,12 +705,28 @@ def get_accuracy(preds, labels):
     
     return np.sum(preds==labels) / float(n)
 
-def get_Fmeasure(preds,labels):
+def get_Fmeasure(preds, mask):
     
-    TP = np.sum(np.logical_and(
-        preds>0, labels>0))
-    TPFP = np.sum(preds>0)
-    P = np.sum(labels>0)
+    # computing total TPs, Ps, and
+    # TPFPs (all positives)
+    if isinstance(preds, dict):
+        P  = 0
+        TP = 0
+        TPFP = 0
+        for img_path in list(preds.keys()):
+            ipreds = preds[img_path]
+            imask = np.array(mask[img_path])
+            
+            P  += np.sum(imask>0)
+            TP += np.sum(np.logical_and(
+                ipreds>0, imask>0))
+            TPFP += np.sum(ipreds>0)
+    else:
+        
+        P  += np.sum(mask>0)
+        TP += np.sum(np.logical_and(
+            preds>0, mask>0))
+        TPFP += np.sum(preds>0)
     
     # precision and recall
     Pr = TP / TPFP
