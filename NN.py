@@ -248,7 +248,12 @@ class CNN(object):
                 ", 'conv' or 'pool'.")
                 
                 
-    def add_conv(self, layer_specs, name, flatten=True):
+    def add_conv(self, 
+                 layer_specs, 
+                 name, 
+                 flatten=True,
+                 strides = [1,1],
+                 padding='SAME',):
         """Adding a convolutional layer to the graph given 
         the specifications
         """
@@ -273,20 +278,25 @@ class CNN(object):
         output = tf.nn.conv2d(
             self.output, 
             self.var_dict[name][0], 
-            strides=[1,1,1,1],
-            padding='SAME') + self.var_dict[name][1]
+            strides= [1,] + strides + [1,],
+            padding=padding) + self.var_dict[name][1]
         self.output = tf.nn.relu(output)
         
-        # if the flatten flag is True, flatten the output tensor
-        # into a 2D array, where each column has a vectorized
-        # tensor in it
+        # if the flatten flag is True, 
+        # flatten the output tensor
+        # into a 2D array, where each column 
+        # has a vectorized tensor in it
         if flatten:
             out_size = np.prod(
                 self.output.get_shape()[1:]).value
             self.output = tf.reshape(
-                tf.transpose(self.output), [out_size, -1])
+                tf.transpose(self.output), 
+                [out_size, -1])
     
-    def add_fc(self, layer_specs, name, activation=True):
+    def add_fc(self, 
+               layer_specs, 
+               name, 
+               activation=True):
         """Adding a fully-connected layer with a given 
         specification to the graph
         """
@@ -521,7 +531,7 @@ class CNN(object):
         
         # optimizer
         if len(train_layers)==0:
-            self.train_step = tf.train.AdamOptimizer(
+            self.train_step = tf.train.GradientDescentOptimizer(
                 learning_rate).minimize(
                     self.loss, name='train_step')
         else:
@@ -532,7 +542,7 @@ class CNN(object):
             for layer in train_layers:
                 var_list += self.var_dict[layer]
             
-            self.train_step = tf.train.AdamOptimizer(
+            self.train_step = tf.train.GradientDescentOptimizer(
                 learning_rate).minimize(
                     self.loss, var_list=var_list)
         
@@ -1136,21 +1146,26 @@ def train_CNN_MNIST(epochs, batch_size):
     
 
 def CNN_layers(W_dict, b_dict, x):
-    """Creating the output of CNN layers and return them as TF variables
+    """Creating the output of CNN layers 
+    and return them as TF variables
     
-    Each layer consists of a convolution, following by a max-pooling and
+    Each layer consists of a convolution, 
+    following by a max-pooling and
     a ReLu activation.
-    The number of channels of the input, should match the number of
-    input channels to the first layer based on the parameter dictionary.
+    The number of channels of the input, 
+    should match the number of
+    input channels to the first layer based 
+    on the parameter dictionary.
     """
     
     L = len(W_dict)
     
     output = x
     for i in range(L):
-        output = tf.nn.conv2d(output, W_dict[str(i)], 
-                              strides=[1, 1, 1, 1], 
-                              padding='SAME') + b_dict[str(i)]
+        output = tf.nn.conv2d(
+            output, W_dict[str(i)], 
+            strides=[1, 1, 1, 1], 
+            padding='SAME') + b_dict[str(i)]
         output = tf.nn.relu(output)
         output = max_pool(output, 2, 2)
         
@@ -1161,26 +1176,40 @@ def CNN_variables(kernel_dims, layer_list):
     """Creating the CNN variables
     
     We should have `depth_lists[0] = in_channels`.
-    In the i-th layer, dimensionality of of the kernel `W` would be
-    `(kernel_dims[i],kernel_dims[i])`, and the number of them (that is,
-    the number of filters) would be `layer_list[i+1]`. Moreover, the number
+    In the i-th layer, dimensionality 
+    of the kernel `W` would be
+    `(kernel_dims[i],kernel_dims[i])`, and the 
+    number of them (that is, the number
+     of filters) would be `layer_list[i+1]`. 
+    Moreover, the number
     of its input channels is `layer_list[i]`.
     """
     
     if not(len(layer_list)==len(kernel_dims)+1):
-        raise ValueError("List of  layers should have one more"+
-                         "element than the list of kernel dimensions.")
+        raise ValueError(
+            "List of  layers should have one more"+
+            "element than the list of kernel dimensions.")
     
     W_dict = {}
     b_dict = {}
     
     layer_num = len(layer_list)
-    # size of W should be [filter_height, filter_width, in_channels, out_channels]
-    # here filter_height = filter_width = kernel_dim
+    # size of W should be 
+    # [filter_height, filter_width, 
+    # in_channels, out_channels]
+    # here, filter_height = 
+    #       filter_width = 
+    #       kernel_dim
     for i in range(layer_num-1):
-        W_dict.update({str(i):weight_variable([kernel_dims[i], kernel_dims[i], 
-                                               layer_list[i], layer_list[i+1]])})
-        b_dict.update({str(i): bias_variable([layer_list[i+1]])})
+        W_dict.update(
+            {str(i):weight_variable(
+                [kernel_dims[i], 
+                 kernel_dims[i], 
+                 layer_list[i], 
+                 layer_list[i+1]])})
+        b_dict.update(
+            {str(i): bias_variable(
+                [layer_list[i+1]])})
         
     return W_dict, b_dict
 
