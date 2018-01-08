@@ -161,12 +161,12 @@ def train_pw_model(patch_shape,
                     
                 cnt += 1
 
-def active_finetune(model,
-                    learning_rate,
+def active_finetune(learning_rate,
                     dropout_rate,
                     patch_shape,
                     batch_size,
                     qbatch_size,
+                    method_name,
                     stats,
                     init_weights_path):
     """Finetuning a pre-trained model
@@ -179,13 +179,13 @@ def active_finetune(model,
     
     # class of data
     pw_dataset = patch_utils.PatchBinaryData(
-        img_addrs[:2],mask_addrs[:2])
+        img_addrs[:6],mask_addrs[:6])
     nimg = len(pw_dataset.img_addrs)
 
     # creating a single large dictionary
     # for the whole data set
     inds_dict, mask_dict = pw_dataset.generate_samples(
-        np.arange(nimg), [100,100,5],.2, 'axial')
+        np.arange(nimg), [10,100,10],.2, 'axial')
     
     """preparing pool and test samples"""
     """-------------------------------"""
@@ -223,24 +223,25 @@ def active_finetune(model,
         
     """An initial fine-tuning
     """
-    print("Initial fine-tuning..")
-    init_epochs = 5
+    fine_epochs = 20
     model = get_model(2,
                       dropout_rate,
                       learning_rate,
                       patch_shape)
+    model.add_assign_ops(init_weights_path)
+
     with tf.Session() as sess:
-        # initialization
         sess.run(tf.global_variables_initializer())
-        model.load_weights(init_weights_path,
-                           sess)
+        sess.graph.finalize()
+        # loading the initial weights
+        model.perform_assign_ops(sess)
         
         # inital F-measure
         tspreds_dict = batch_eval(
             model,
             tsinds_dict,
             patch_shape,
-            batch_size,
+            5000,
             stats,
             sess,
             'prediction')[0]
@@ -248,7 +249,7 @@ def active_finetune(model,
         Fm = get_Fmeasure(tspreds_dict,
                           tsmask_dict)
         
-        Fvec = np.zeros(5+1)
+        Fvec = np.zeros(10+1)
         Fvec[0] = Fm
         print('\n:::::: Initial F-measure: %f'
               % (Fvec[0]))
@@ -256,12 +257,14 @@ def active_finetune(model,
         trinds_dict = {}
         trmask_dict = {}
         """Starting the querying iterations"""
-        for t in range(5):
+        for t in range(10):
             qrel_dict = PW_NNAL.CNN_query(
                 model,
                 pinds_dict,
-                'random',
-                500,
+                method_name,
+                qbatch_size,
+                patch_shape,
+                stats,
                 sess)
 
             # modifying dictionaries
@@ -273,12 +276,13 @@ def active_finetune(model,
                  pinds_dict,
                  pmask_dict,
                  trinds_dict,
-                 trmask_dict,)
+                 trmask_dict)
 
 
-            # initial fine-tuning
-            for i in range(init_epochs):
-                if i==init_epochs-1:
+            # fine-tuning
+            model.perform_assign_ops(sess)
+            for i in range(fine_epochs):
+                if i==fine_epochs-1:
                     Fm = PW_train_step(
                         model,
                         dropout_rate,
@@ -305,6 +309,12 @@ def active_finetune(model,
             Fvec[t+1] = Fm
             print(':::::: F-measure: %f'
                   % (Fvec[t+1]))
+            ntr = np.sum([
+                len(trinds_dict[path])
+                for path in 
+                list(trinds_dict.keys())])
+            print('Current train-size: %d'
+                  % ntr)
 
     return Fvec
 
@@ -359,7 +369,7 @@ def PW_train_step(model,
                 model, 
                 tsinds_dict,
                 patch_shape,
-                batch_size,
+                5000,
                 stats,
                 sess,
                 'prediction')[0]
