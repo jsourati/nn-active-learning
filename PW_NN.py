@@ -682,10 +682,10 @@ def get_Fmeasure(preds, mask):
     
     # computing total TPs, Ps, and
     # TPFPs (all positives)
+    P  = 0
+    TP = 0
+    TPFP = 0
     if isinstance(preds, dict):
-        P  = 0
-        TP = 0
-        TPFP = 0
         for img_path in list(preds.keys()):
             ipreds = preds[img_path]
             imask = np.array(mask[img_path])

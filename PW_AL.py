@@ -202,9 +202,19 @@ class Experiment(object):
                 
             # save the predictions 
             np.savetxt(os.path.join(run_path, 
-                                    'predicts.txt'), 
+                                    'init_predicts.txt'), 
                        np.expand_dims(ts_preds,axis=0),
                        fmt='%d')
+            
+            # initial, performance evaluation
+            ts_labels = read_label_lines(
+                label_opath, test_inds)
+            Fmeas = PW_NN.get_Fmeasure(ts_preds, 
+                                       ts_labels)
+            perf_eval_path = os.path.join(
+                run_path, 'init_perf_eval.txt')
+            with open(perf_eval_path, 'w') as f:
+                f.write('%f\n'% Fmeas)
                 
     def add_method(self, method_name, run):
         """Adding a method to a given run of the experiment
@@ -227,16 +237,12 @@ class Experiment(object):
                               'queries'))
 
         # copying the following files:
-        # init_train_inds -->   curr_train
-        # pool_inds       -->   curr_pool
-        # init_predicts   -->   predicts
-        # saved_model/    -->   curr_model/
+        # pool_inds            -->   curr_pool
+        # init_predicts        -->   predicts
+        # `init_weights_path`  -->   curr_weights.h5
+        # init_perf_eval       -->   perf_evals
         method_path = os.path.join(run_path, method_name)
 
-        shutil.copy(
-            os.path.join(run_path,'init_inds.txt'),
-            os.path.join(method_path,'curr_train.txt')
-            )
         shutil.copy(
             os.path.join(run_path,'pool_inds.txt'),
             os.path.join(method_path,'curr_pool.txt')
@@ -246,21 +252,13 @@ class Experiment(object):
             os.path.join(method_path,'predicts.txt')
             )
         shutil.copy(
-            os.path.join(run_path,'init_weights.h5'),
+            self.pars['init_weights_path'],
             os.path.join(method_path,'curr_weights.h5')
             )
-        
-        # also, computing the first accuracy for the 
-        # method
-        test_inds = np.int32(np.loadtxt(
-            os.path.join(run_path, 'test_inds.txt')))
-        predicts = np.loadtxt(
-            os.path.join(method_path,'predicts.txt'))
-        init_acc = get_accuracy(
-            predicts, self.labels_file, test_inds)
-        np.savetxt(
-            os.path.join(method_path,'accs.txt'),
-            [init_acc])
+        shutil.copy(
+            os.path.join(run_path,'init_perf_eval.txt'),
+            os.path.join(method_path,'perf_evals.txt')
+            )
         
     def run_method(self, method_name, run, max_queries):
         """Running a querying method in a run until a 
@@ -712,3 +710,17 @@ def batch_eval_winds(expr,
 
     return eval_array
     
+def read_label_lines(labels_path, line_inds):
+    """Reading several lines of a label
+    file, which is stored in a format consistent
+    with that of pw-experiment run's labels.txt
+    """
+    
+    labels_array = np.zeros(len(line_inds),
+                            dtype=int)
+    for i in range(len(line_inds)):
+        labels_array[i] = int(linecache.getline(
+            labels_path, 
+            line_inds[i]).splitlines()[0])
+        
+    return labels_array
