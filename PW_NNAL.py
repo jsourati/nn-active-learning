@@ -11,47 +11,34 @@ import PW_NN
 import patch_utils
 
 
-def CNN_query(model,
-              pool_dict,
+def CNN_query(expr,
+              run,
+              model,
+              pool_inds,
               method_name,
-              qbatch_size,
-              patch_shape,
-              stats,
               sess):
     """Querying strategies for active
     learning of patch-wise model
     """
-    
-    if method_name=='random':
-        n = np.sum([
-            len(pool_dict[path]) 
-            for path in 
-            list(pool_dict.keys())])
-        q = np.random.permutation(n)[
-            :qbatch_size]
 
-        
-        
+    if method_name=='random':
+        n = len(pool_inds)
+        q = np.random.permutation(n)[
+            :expr.pars['k']]
+
     if method_name=='entropy':
         # posteriors
-        posts = PW_NN.batch_eval(
-            model, 
-            pool_dict,
-            patch_shape,
-            5000,
-            stats,
-            sess,
-            'posteriors')[0]
+        posts = PW_AL.batch_eval_winds(
+            expr,
+            run,
+            model,
+            pool_inds,
+            'posteriors',
+            sess)
         
-        # vectories everything
-        ttposts = []
-        for path in list(posts.keys()):
-            ttposts += list(posts[path])
-            
         # k most uncertain (binary classes)
-        q = np.argsort(np.abs(np.array(
-            ttposts)-.5))[:qbatch_size]
-        
+        q = np.argsort(np.abs(posts)-.5)[
+            :expr.pars['k']]
         
     if method_name=='rep-entropy':
         # posteriors
@@ -88,12 +75,8 @@ def CNN_query(model,
                                    expr,
                                    session)
         
-
-    # returning the sub-dictionary
-    q_dict = patch_utils.locate_in_dict(
-        pool_dict, q)
     
-    return q_dict
+    return q
 
 
 def binary_uncertainty_filter(posts, B):

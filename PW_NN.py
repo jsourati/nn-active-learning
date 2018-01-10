@@ -244,7 +244,7 @@ def active_finetune(pars_dict,
             model.perform_assign_ops(sess)
             for i in range(pars_dict['fine_epochs']):
                 if i==pars_dict['fine_epochs']-1:
-                    Fm = PW_train_step(
+                    Fm = PW_train_epoch(
                         model,
                         pars_dict['dropout_rate'],
                         trinds_dict,
@@ -256,7 +256,7 @@ def active_finetune(pars_dict,
                         tsinds_dict,
                         tsmask_dict)
                 else:
-                    PW_train_step(
+                    PW_train_epoch(
                         model,
                         pars_dict['dropout_rate'],
                         trinds_dict,
@@ -279,7 +279,7 @@ def active_finetune(pars_dict,
 
     return Fvec
 
-def PW_train_step(model,
+def PW_train_epoch(model,
                   dropout_rate,
                   trinds_dict,
                   trmask_dict,

@@ -11,6 +11,7 @@ import os
 
 import tensorflow as tf
 import patch_utils
+import PW_NNAL
 import PW_NN
 import NNAL
 import NN
@@ -265,8 +266,12 @@ class Experiment(object):
         given number of queries are drawn
         """
         
-        run_path = os.path.join(self.root_dir,str(run))
-        method_path = os.path.join(run_path, method_name)
+        run_path = os.path.join(self.root_dir,
+                                str(run))
+        method_path = os.path.join(run_path, 
+                                   method_name)
+        labels_path = os.path.join(run_path, 
+                                   'labels.txt')
         
         # count how many queries have been 
         # selected before
@@ -280,15 +285,18 @@ class Experiment(object):
             n_oldqueries += len(Qs)
             iter_cnt += 1
         
-        # preparing the indices
+        # preparing the (line) indices
         test_inds = np.int32(
             np.loadtxt(os.path.join(
                 run_path, 'test_inds.txt')
                    ))
-        curr_train = np.int32(
-            np.loadtxt(os.path.join(
-                method_path, 'curr_train.txt')
-                   ))
+        train_path = os.path.join(
+            method_path, 'curr_train.txt')
+        if os.path.exists(train_path):
+            curr_train = np.int32(
+                np.loadtxt(train_path))
+        else:
+            curr_train = []
         curr_pool = np.int32(
             np.loadtxt(os.path.join(
                 method_path, 'curr_pool.txt')
@@ -309,43 +317,24 @@ class Experiment(object):
             self.nclass, 
             self.pars['learning_rate'], 
             self.pars['grad_layers'],
-            self.pars['train_layers'])
+            self.pars['train_layers'],
+            self.pars['patch_shape'])
         model.add_assign_ops(os.path.join(
             method_path, 'curr_weights.h5'))
         
         
-        if self.pars['model_name']=='Alex':
-            # for AlexNet there are two main
-            # differences: name of keep-
-            # probability variable is KEEP_PROB
-            # and the output is row-wise,
-            # hence the column flag (col_flag)
-            # should be False
-            extra_feed_dict = {
-                model.KEEP_PROB: 1.}
-            col_flag = False
-        else:
-            extra_feed_dict = {
-                model.keep_prob: 1.}
-            col_flag = True
+        #extra_feed_dict = {
+        #    model.keep_prob: 1.}
+        #col_flag = True
         
         # printing the accuracies so far:
-        curr_accs = np.loadtxt(os.path.join(
-            method_path, 'accs.txt'))
-        if curr_accs.size==1:
-            curr_accs = [curr_accs]
-        print("Current accuracies: ", end='')
-        print(*curr_accs, sep=', ')
+        curr_fmeas = np.loadtxt(os.path.join(
+            method_path, 'perf_evals.txt'))
+        if curr_fmeas.size==1:
+            curr_fmeas = [curr_fmeas]
+        print("Current F-measures: ", end='')
+        print(*curr_fmeas, sep=', ')
 
-        #merged_summ = tf.summary.merge_all()
-        #train_writer = tf.summary.FileWriter(
-        #    os.path.join(
-        #        '/common/external/rawabd/Jamshid/train_log'),sess.graph)
-        #TB_opt = {'summs':merged_summ,
-        #          'writer': train_writer,
-        #          'epoch_id': 0,
-        #          'tag': 'initial'}
-        TB_opt = {}
         
         with tf.Session() as sess:
             # loading the stored weights
@@ -356,22 +345,24 @@ class Experiment(object):
             print("Starting the iterations for %s"%
                   method_name)
             nqueries = 0
-            #iter_cnt = 0
             while nqueries < max_queries:
                 model.perform_assign_ops(sess)
                 
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
                 """ querying """
-                Q_inds = NNAL.CNN_query(
-                    model, 
+                Q_inds = PW_NNAL.CNN_query(
                     self,
+                    run,
+                    model,
                     curr_pool,
                     method_name,
-                    sess, 
-                    col_flag,
-                    extra_feed_dict
-                )
+                    sess)
+
+                if self.pars['k']==1:
+                    Q = [curr_pool[Q_inds]]
+                else:
+                    Q = curr_pool[Q_inds]
 
                 # save the queries
                 np.savetxt(os.path.join(
@@ -379,73 +370,72 @@ class Experiment(object):
                         'queries',
                         '%d.txt'% (
                             iter_cnt)
-                        ), curr_pool[Q_inds])
+                        ), Q, fmt='%d')
                 
-                # preparing the new training sampels
-                old_ratio = 1.
-                nold_train = int(np.floor(
-                    len(curr_train)*old_ratio))
-                rand_inds = np.random.permutation(
-                    len(curr_train))[:nold_train]
-                old_train = curr_train[rand_inds]
-                update_inds = np.append(
-                    old_train, curr_pool[Q_inds])
-
                 # update the indices
-                curr_train = np.append(
-                    curr_train, curr_pool[Q_inds])
+                if len(curr_train)==0:
+                    curr_train = Q
+                else:
+                    curr_train = np.append(
+                        curr_train, Q)
                 curr_pool = np.delete(
-                    curr_pool, Q_inds)
+                    curr_pool, Q)
                 
                 """ updating the model """
                 for i in range(self.pars['epochs']):
-                    model.train_graph_one_epoch(
+                    PW_train_epoch_winds(
+                        model,
                         self,
-                        update_inds,
-                        sess,
-                        TB_opt)
+                        run,
+                        curr_train,
+                        sess)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
-                predicts = model.predict(
-                    self, test_inds, sess)
-                # loading the previous predictions,
-                # appending the new ones to them,
-                # and save them back
+                ts_preds = batch_eval_winds(self,
+                                            run,
+                                            model,
+                                            test_inds,
+                                            'prediction',
+                                            sess)
+                # saving the predictions
                 curr_predicts = np.loadtxt(
                     os.path.join(method_path, 
                                  'predicts.txt'))
+                # loading the previous predictions,
+                # appending the new ones to them,
+                # and save them back
                 if curr_predicts.ndim<2:
                     curr_predicts = np.expand_dims(
                         curr_predicts, axis=0)
                 new_predicts = np.append(
                     curr_predicts, 
-                    np.expand_dims(predicts, axis=0),
+                    np.expand_dims(ts_preds, axis=0),
                     axis=0)
                 np.savetxt(os.path.join(
-                    method_path, 
-                    'predicts.txt'), new_predicts)
-
-                # computing the accuracies
-                acc = get_accuracy(
-                    predicts, 
-                    self.labels_file,
-                    test_inds)
+                    method_path, 'predicts.txt'), 
+                           new_predicts, fmt='%d')
+            
+                # performance evaluation
+                ts_labels = read_label_lines(
+                    labels_path, test_inds)
+                Fmeas = PW_NN.get_Fmeasure(
+                    ts_preds, ts_labels)
                                    
                 with open(os.path.join(
                         method_path, 
-                        'accs.txt'), 'a') as f:
-                    f.write('%f\n'% acc)
+                        'perf_evals.txt'), 'a') as f:
+                    f.write('%f\n'% Fmeas)
+                    
+                    # update the loop variables
+                    nqueries += len(Q_inds)
+                    iter_cnt += 1
                 
-                # update the loop variables
-                nqueries += len(Q_inds)
-                iter_cnt += 1
-                
-                print('\n\t', end='')
-                print("Total queries: %d"% 
-                      (nqueries + n_oldqueries),
-                      end='\n\t')
-                print("Accuracy: %.2f"% acc)
+                    print('\n\t', end='')
+                    print("Total queries: %d"% 
+                          (nqueries + n_oldqueries),
+                          end='\n\t')
+                    print("F-measure: %.4f"% Fmeas)
                 
             # when querying is done..
             # save the current training and pool
@@ -453,8 +443,7 @@ class Experiment(object):
                 method_path, 'curr_pool'), 
                        curr_pool,
                        fmt='%d')
-            np.savetxt(os.path.join(
-                method_path, 'curr_train'), 
+            np.savetxt(train_path, 
                        curr_train,
                        fmt='%d')
             # save the current weights
@@ -710,6 +699,38 @@ def batch_eval_winds(expr,
 
     return eval_array
     
+def PW_train_epoch_winds(model,
+                        expr,
+                        run,
+                        line_inds,
+                        sess):
+    """Running one epoch of trianing 
+    with training (line) indices with respect
+    to a run of pw-experiment
+    """
+    
+    inds_path = os.path.join(
+        expr.root_dir, str(run), 'inds.txt')
+    labels_path = os.path.join(
+        expr.root_dir, str(run), 'labels.txt')
+    
+    inds_dict, labels_dict, locs_dict = create_dict(
+        inds_path, line_inds, labels_path)
+    
+    # now that we have the index- and labels-
+    # dictionaries, we can feed it to 
+    # PW_NN.PW_train_epoch()
+    PW_NN.PW_train_epoch(
+        model,
+        expr.pars['dropout_rate'],
+        inds_dict,
+        labels_dict,
+        expr.pars['patch_shape'],
+        expr.pars['b'],
+        expr.pars['stats'],
+        sess)
+    
+
 def read_label_lines(labels_path, line_inds):
     """Reading several lines of a label
     file, which is stored in a format consistent
