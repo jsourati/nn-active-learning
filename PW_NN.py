@@ -161,14 +161,9 @@ def train_pw_model(patch_shape,
                     
                 cnt += 1
 
-def active_finetune(learning_rate,
-                    dropout_rate,
+def active_finetune(pars_dict,
                     patch_shape,
-                    batch_size,
-                    qbatch_size,
-                    method_name,
-                    stats,
-                    init_weights_path):
+                    method_name):
     """Finetuning a pre-trained model
     by querying from a given sample-set
     of a target data set
@@ -177,58 +172,25 @@ def active_finetune(learning_rate,
     # path to data
     img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
     
-    # class of data
-    pw_dataset = patch_utils.PatchBinaryData(
+    # data set
+    D = patch_utils.PatchBinaryData(
         img_addrs[:6],mask_addrs[:6])
-    nimg = len(pw_dataset.img_addrs)
-
-    # creating a single large dictionary
-    # for the whole data set
-    inds_dict, mask_dict = pw_dataset.generate_samples(
-        np.arange(nimg), [10,100,10],.2, 'axial')
+    # sampling from test images
+    tsinds_dict, tsmask_dict = D.generate_samples(
+        np.arange(3), pars_dict['test_ratio'],.2, 'axial')
+    # sampling from pool images
+    pinds_dict, pmask_dict = D.generate_samples(
+        np.arange(3,6), pars_dict['pool_ratio'],.2, 'axial')
     
-    """preparing pool and test samples"""
-    """-------------------------------"""
-    # getting relative pool and test indices
-    all_paths = list(inds_dict.keys())
-    npool = np.sum([len(inds_dict[path]) for
-                    path in all_paths[:int(nimg/2)]])
-    ntest = np.sum([len(inds_dict[path]) for
-                    path in all_paths[int(nimg/2):]])
-    
-    # creating test and pool dictionary
-    # pool indices and mask dictionary
-    pool_inds = np.arange(npool)
-    prel_dict = patch_utils.locate_in_dict(
-        inds_dict, pool_inds)
-    pinds_dict = {}
-    pmask_dict = {}
-    for path in list(prel_dict.keys()):
-        pmask_dict[path] = np.array(mask_dict[path])[
-            prel_dict[path]]
-        pinds_dict[path] = np.array(inds_dict[path])[
-            prel_dict[path]]
-        
-    # test indices and mask dictionary
-    test_inds = np.arange(npool, npool+ntest)
-    tsrel_dict = patch_utils.locate_in_dict(
-        inds_dict, test_inds)
-    tsmask_dict = {}
-    tsinds_dict = {}
-    for path in list(tsrel_dict.keys()):
-        tsmask_dict[path] = np.array(mask_dict[path])[
-            tsrel_dict[path]]
-        tsinds_dict[path] = np.array(inds_dict[path])[
-            tsrel_dict[path]]
-        
     """An initial fine-tuning
     """
-    fine_epochs = 20
+    tf.reset_default_graph()
     model = get_model(2,
-                      dropout_rate,
-                      learning_rate,
+                      pars_dict['dropout_rate'],
+                      pars_dict['learning_rate'],
                       patch_shape)
-    model.add_assign_ops(init_weights_path)
+    model.add_assign_ops(
+        pars_dict['init_weights_path'])
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -242,14 +204,14 @@ def active_finetune(learning_rate,
             tsinds_dict,
             patch_shape,
             5000,
-            stats,
+            pars_dict['stats'],
             sess,
             'prediction')[0]
                 
         Fm = get_Fmeasure(tspreds_dict,
                           tsmask_dict)
         
-        Fvec = np.zeros(10+1)
+        Fvec = np.zeros(pars_dict['iters']+1)
         Fvec[0] = Fm
         print('\n:::::: Initial F-measure: %f'
               % (Fvec[0]))
@@ -257,14 +219,14 @@ def active_finetune(learning_rate,
         trinds_dict = {}
         trmask_dict = {}
         """Starting the querying iterations"""
-        for t in range(10):
+        for t in range(pars_dict['iters']):
             qrel_dict = PW_NNAL.CNN_query(
                 model,
                 pinds_dict,
                 method_name,
-                qbatch_size,
+                pars_dict['k'],
                 patch_shape,
-                stats,
+                pars_dict['stats'],
                 sess)
 
             # modifying dictionaries
@@ -278,31 +240,30 @@ def active_finetune(learning_rate,
                  trinds_dict,
                  trmask_dict)
 
-
             # fine-tuning
             model.perform_assign_ops(sess)
-            for i in range(fine_epochs):
-                if i==fine_epochs-1:
+            for i in range(pars_dict['fine_epochs']):
+                if i==pars_dict['fine_epochs']-1:
                     Fm = PW_train_step(
                         model,
-                        dropout_rate,
+                        pars_dict['dropout_rate'],
                         trinds_dict,
                         trmask_dict,
                         patch_shape,
-                        batch_size,
-                        stats,
+                        pars_dict['b'],
+                        pars_dict['stats'],
                         sess,
                         tsinds_dict,
                         tsmask_dict)
                 else:
                     PW_train_step(
                         model,
-                        dropout_rate,
+                        pars_dict['dropout_rate'],
                         trinds_dict,
                         trmask_dict,
                         patch_shape,
-                        batch_size,
-                        stats,
+                        pars_dict['b'],
+                        pars_dict['stats'],
                         sess)
                     print(i,end=',')
                     
@@ -405,17 +366,19 @@ def get_model(nclass,
     x = tf.placeholder(
         tf.float32,
         [None, 
-         patch_shape[0], 
-         patch_shape[1], 
+         patch_shape[0],
+         patch_shape[1],
          patch_shape[2]],
-                       name='input')
+        name='input')
     feature_layer = len(pw_dict) - 2
     
     # the model
     model = NN.CNN(x, pw_dict, 'PatchWise', 
                    feature_layer, dropout)
-    # including optimizers
+    # optimizers
     model.get_optimizer(learning_rate)
+    # gradients
+    model.get_gradients()
     
     return model
 
@@ -559,7 +522,7 @@ def batch_eval(model,
             # loading tensors
             # (not to be confused with 
             # patch_utils.get_batches())
-            batch_tensors = get_patches(
+            batch_tensors = patch_utils.get_patches(
                 img, 
                 np.array(inds_dict[
                     img_path])[batch_inds],
@@ -744,51 +707,3 @@ def get_Fmeasure(preds, mask):
     
     # F measure
     return 2/(1/Pr + 1/Rc)
-
-def get_patches(img, inds, patch_shape):
-    """Extacting patches around a given 
-    set of 3D indices 
-    """
-    
-    # padding the image with radii
-    rads = np.zeros(3,dtype=int)
-    for i in range(3):
-        rads[i] = int((patch_shape[i]-1)/2.)
-            
-    padded_img = np.pad(
-        img, 
-        ((rads[0],rads[0]),
-         (rads[1],rads[1]),
-         (rads[2],rads[2])),
-        'constant')
-
-    # computing 3D coordinates of the samples
-    # in terms of the original image shape
-    multi_inds = np.unravel_index(
-        inds, img.shape)
-    
-    b = len(inds)
-    batch = np.zeros((b,)+patch_shape)
-    for i in range(b):
-        # adjusting the multi-coordinates 
-        # WITH padded margins
-        center = [
-            multi_inds[0][i]+rads[0],
-            multi_inds[1][i]+rads[1],
-            multi_inds[2][i]+rads[2]]
-        
-        patch = padded_img[
-            center[0]-rads[0]:
-            center[0]+rads[0]+1,
-            center[1]-rads[1]:
-            center[1]+rads[1]+1,
-            center[2]-rads[2]:
-            center[2]+rads[2]+1]
-        
-        batch[i,:,:,:] = patch
-        
-    return batch
-
-
-
-    
