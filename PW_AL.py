@@ -131,9 +131,7 @@ class Experiment(object):
                           os.path.join(self.root_dir, str(i)))
                 
         
-    def add_run(self, 
-                pool_imgs, test_imgs,
-                pool_ratio, test_ratio):
+    def add_run(self):
         """Adding a run to this experiment
         
         Each run will have its pool and test
@@ -155,15 +153,17 @@ class Experiment(object):
         # preparing the indices
         # -----------------------
         img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
-        inds_opath = os.path.join(
+        inds_path = os.path.join(
             run_path,'inds.txt')
-        label_opath = os.path.join(
+        labels_path = os.path.join(
             run_path,'labels.txt')
         pool_inds, test_inds = newborn_prep_dat(
             img_addrs, mask_addrs,
-            pool_imgs, test_imgs, 
-            pool_ratio, test_ratio,
-            inds_opath, label_opath,
+            self.pars['pool_img_inds'],
+            self.pars['test_img_inds'],
+            self.pars['pool_ratio'],
+            self.pars['test_ratio'],
+            inds_path, labels_path,
             self.pars['mask_ratio'])
         
         # saving indices into the run's folder
@@ -209,7 +209,7 @@ class Experiment(object):
             
             # initial, performance evaluation
             ts_labels = read_label_lines(
-                label_opath, test_inds)
+                labels_path, test_inds)
             Fmeas = PW_NN.get_Fmeasure(ts_preds, 
                                        ts_labels)
             perf_eval_path = os.path.join(
