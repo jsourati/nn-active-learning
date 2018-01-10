@@ -431,7 +431,42 @@ def sample_masked_volume(img,
                 np.zeros(N[2],dtype=int))
             
     return sel_inds, sel_labels
+
+def get_sample_type(ratios,
+                    local_ind):
+    """Determining type a sample in an
+    image and with a given sample ratio
+    
+    `local_ind` is the index of the sample
+    within the set of all samples drawn
+    from the same image. That is, the location
+    of the sample in the array of samples
+    associated with same image in the 
+    samples dictionary (say, `inds_dict`).
+    
+    We know that for each slice of the image
+    how many samples are drawn (cumulative
+    summation of samples drawn from each 
+    region, `cumsum(ratio)`. Also we know
+    the order of copying the samples
+    into the sample set in each slice.
+    Hence, we first find the slice
+    from which this sample is drawn
+    and then find the group to which
+    it belongs using the given ratios.
+    """
+    
+    slice_ind, sample_ind = np.divmod(
+        local_ind, sum(ratios))
+    
+    if sample_ind < ratios[0]:
+        stype = "masked"
+    elif ratios[0]<=sample_ind<sum(ratios[:2]):
+        stype = "s-nonmaksed"
+    elif sum(ratios[:2]) <= sample_ind:
+        stype = "ns-nonmaksed"
         
+    return stype, slice_ind
 
 def partition_2d_indices(img,mask):
     """Partitioning an image into three
@@ -734,3 +769,47 @@ def generate_rgb_mask(img,mask):
     tmp[mask>0] = 200.
     
     return img_rgb
+
+def get_patches(img, inds, patch_shape):
+    """Extacting patches around a given 
+    set of 3D indices 
+    """
+    
+    # padding the image with radii
+    rads = np.zeros(3,dtype=int)
+    for i in range(3):
+        rads[i] = int((patch_shape[i]-1)/2.)
+            
+    padded_img = np.pad(
+        img, 
+        ((rads[0],rads[0]),
+         (rads[1],rads[1]),
+         (rads[2],rads[2])),
+        'constant')
+
+    # computing 3D coordinates of the samples
+    # in terms of the original image shape
+    multi_inds = np.unravel_index(
+        inds, img.shape)
+    
+    b = len(inds)
+    batch = np.zeros((b,)+patch_shape)
+    for i in range(b):
+        # adjusting the multi-coordinates 
+        # WITH padded margins
+        center = [
+            multi_inds[0][i]+rads[0],
+            multi_inds[1][i]+rads[1],
+            multi_inds[2][i]+rads[2]]
+        
+        patch = padded_img[
+            center[0]-rads[0]:
+            center[0]+rads[0]+1,
+            center[1]-rads[1]:
+            center[1]+rads[1]+1,
+            center[2]-rads[2]:
+            center[2]+rads[2]+1]
+        
+        batch[i,:,:,:] = patch
+        
+    return batch
