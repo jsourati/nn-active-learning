@@ -10,6 +10,7 @@ import cv2
 import os
 
 import NNAL_tools
+import PW_NN
 import AL
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
@@ -976,22 +977,29 @@ class AlexNet_CNN(AlexNet):
 
 def create_model(model_name,
                  dropout_rate, 
-                 n_class,
+                 nclass,
                  learning_rate, 
                  grad_layers=[],
-                 train_layers=[]):
+                 train_layers=[],
+                 patch_shape=None):
     
     if model_name=='Alex':
         model = create_Alex(dropout_rate, 
-                            n_class,
+                            nclass,
                             learning_rate, 
                             starting_layer)
     elif model_name=='VGG19':
         model = create_VGG19(dropout_rate, 
                              learning_rate,
-                             n_class, 
+                             nclass, 
                              grad_layers,
                              train_layers)
+        
+    elif model_name=='PW':
+        model = PW_NN.get_model(nclass,
+                                dropout_rate,
+                                learning_rate,
+                                patch_shape)
         
     return model
 
