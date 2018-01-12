@@ -499,7 +499,8 @@ class CNN(object):
                     
         
     def get_optimizer(self, learning_rate, 
-                      train_layers=[]):
+                      train_layers=[], 
+                      optimizer_name='SGD'):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -532,9 +533,14 @@ class CNN(object):
         
         # optimizer
         if len(train_layers)==0:
-            self.train_step = tf.train.GradientDescentOptimizer(
-                learning_rate).minimize(
-                    self.loss, name='train_step')
+            if optimizer_name=='SGD':
+                self.train_step = tf.train.GradientDescentOptimizer(
+                    learning_rate).minimize(
+                        self.loss)
+            elif optimizer_name=='Adam':
+                self.train_step = tf.train.AdamOptimizer(
+                    learning_rate).minimize(
+                        self.loss)
         else:
             self.train_layers = train_layers
             # if some layers are specified, only
@@ -542,10 +548,15 @@ class CNN(object):
             var_list = []
             for layer in train_layers:
                 var_list += self.var_dict[layer]
-            
-            self.train_step = tf.train.GradientDescentOptimizer(
-                learning_rate).minimize(
-                    self.loss, var_list=var_list)
+
+            if optimizer_name=='SGD':
+                self.train_step = tf.train.GradientDescentOptimizer(
+                    learning_rate).minimize(
+                        self.loss, var_list=var_list)
+            elif optimizer_name=='Adam':
+                self.train_step = tf.train.AdamOptimizer(
+                    learning_rate).minimize(
+                        self.loss, var_list=var_list)
         
         # define the accuracy
         self.prediction = tf.argmax(
@@ -981,6 +992,7 @@ def create_model(model_name,
                  learning_rate, 
                  grad_layers=[],
                  train_layers=[],
+                 optimizer_name='SGD',
                  patch_shape=None):
     
     if model_name=='Alex':
@@ -996,10 +1008,11 @@ def create_model(model_name,
                              train_layers)
         
     elif model_name=='PW':
-        model = PW_NN.get_model(nclass,
-                                dropout_rate,
-                                learning_rate,
-                                patch_shape)
+        model = create_PW1(nclass,
+                            dropout_rate,
+                            learning_rate,
+                            optimizer_name,
+                            patch_shape)
         
     return model
 
@@ -1074,6 +1087,47 @@ def create_VGG19(dropout_rate, learning_rate,
     model.get_gradients(grad_layers)
 
     return model
+
+def create_PW1(nclass,
+               dropout_rate,
+               learning_rate,
+               optimizer_name,
+               patch_shape):
+    """Creating a model for patch-wise
+    segmentatio of medical images
+    """
+
+    pw_dict = {'conv1':[24, 'conv', [5,5]],
+               'conv2':[32, 'conv', [5,5]],
+               'max1': [[2,2], 'pool'],
+               'conv3':[48, 'conv', [3,3]],
+               'conv4':[96, 'conv', [3,3]],
+               'max2' :[[2,2], 'pool'],
+               'fc1':[4096,'fc'],
+               'fc2':[4096,'fc'],
+               'fc3':[nclass,'fc']}
+    
+    dropout = [[9,10], dropout_rate]
+    x = tf.placeholder(
+        tf.float32,
+        [None, 
+         patch_shape[0],
+         patch_shape[1],
+         patch_shape[2]],
+        name='input')
+    feature_layer = len(pw_dict) - 2
+    
+    # the model
+    model = CNN(x, pw_dict, 'PatchWise', 
+                   feature_layer, dropout)
+    # optimizers
+    model.get_optimizer(learning_rate, [],
+                        optimizer_name)
+    # gradients
+    model.get_gradients()
+    
+    return model
+
     
 def train_CNN_MNIST(epochs, batch_size):
     """Trianing a classification network for MNIST data set which includes

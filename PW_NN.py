@@ -344,6 +344,7 @@ def PW_train_epoch(model,
 def get_model(nclass,
               dropout_rate,
               learning_rate,
+              optimizer_name,
               patch_shape):
     """Creating a model for patch-wise
     segmentatio of medical images
@@ -376,7 +377,8 @@ def get_model(nclass,
     model = NN.CNN(x, pw_dict, 'PatchWise', 
                    feature_layer, dropout)
     # optimizers
-    model.get_optimizer(learning_rate)
+    model.get_optimizer(learning_rate, 
+                        optimizer_name)
     # gradients
     model.get_gradients()
     
