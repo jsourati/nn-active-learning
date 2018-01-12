@@ -157,6 +157,8 @@ class Experiment(object):
             run_path,'inds.txt')
         labels_path = os.path.join(
             run_path,'labels.txt')
+        # OUT-DATED because of adding types_dict to
+        # the Experiment.generate_sample()
         #pool_inds, test_inds = newborn_prep_dat(
         #    img_addrs, mask_addrs,
         #    self.pars['pool_img_inds'],
@@ -193,6 +195,7 @@ class Experiment(object):
             self.pars['learning_rate'],
             self.pars['grad_layers'],
             self.pars['train_layers'],
+            self.pars['optimizer_name'],
             self.pars['patch_shape'])
 
         # start a session to do the training
@@ -331,6 +334,7 @@ class Experiment(object):
             self.pars['learning_rate'], 
             self.pars['grad_layers'],
             self.pars['train_layers'],
+            self.pars['optimizer_name'],
             self.pars['patch_shape'])
         model.add_assign_ops(os.path.join(
             method_path, 'curr_weights.h5'))
@@ -465,6 +469,32 @@ class Experiment(object):
                     method_path,
                     'curr_weights.h5'))
 
+    def finetune_wpool(self, run, tb_files=[]):
+        """Finetuning the initial model of an
+        experiment with all the pool samples of
+        a given run
+        """
+        
+        pool_inds = np.int32(np.loadtxt(
+            os.path.join(self.root_dir,str(run),
+                         'pool_inds.txt')))
+        test_inds = np.int32(np.loadtxt(
+            os.path.join(self.root_dir,str(run),
+                         'test_inds.txt')))
+        
+        pool_Fmeas = fintune_winds(
+            self, run,
+            pool_inds,
+            test_inds,
+            tb_files)
+        
+        print('Pool  F-measure: %f'% pool_Fmeas)
+        save_path = os.path.join(
+            self.root_dir, str(run),
+            'pooltrain_eval.txt')
+        with open(save_path, 'w') as f:
+            f.write('%f\n'% pool_Fmeas)
+
 def target_prep_dat(img_addrs, mask_addrs,
                     pool_imgs, test_imgs, 
                     pool_ratio, test_ratio,
@@ -562,7 +592,7 @@ def prep_target_indiv(img_addr, mask_addr,
         [img_addr], [mask_addr])
 
     # sampling from test images
-    inds_dict, mask_dict = D.generate_samples(
+    inds_dict, mask_dict, types_dict = D.generate_samples(
         [0], sample_ratio, mask_ratio, 'axial')
 
     # divide slices
@@ -576,20 +606,16 @@ def prep_target_indiv(img_addr, mask_addr,
     """write the text files"""
     with open(dat_opath,'w') as f, open(
             label_opath,'w') as g:
-        for path in list(inds_dict.keys()):
-            for i in range(len(inds_dict[path])):
-                # determining type of this sample
-                stype,_ = patch_utils.get_sample_type(
-                    sample_ratio, i)
-                # data file
-                f.write(
-                    '%s, %d, %s\n'
-                    % (path,
-                       inds_dict[path][i],
-                       stype))
-                # label file
-                g.write(
-                    '%d\n'%(mask_dict[path][i]))
+        for i in range(len(inds_dict[img_addr])):
+            # data file
+            f.write(
+                '%s, %d, %s\n'
+                % (img_addr,
+                   inds_dict[img_addr][i],
+                   types_dict[img_addr][i]))
+            # label file
+            g.write(
+                '%d\n'%(mask_dict[img_addr][i]))
 
     return even_slices+1, odd_slices+1
 
@@ -809,9 +835,9 @@ def read_label_lines(labels_path, line_inds):
     return labels_array
 
 def fintune_winds(expr, run,
-                  model,
-                  pool_inds,
-                  test_inds):
+                  tr_inds,
+                  ts_inds,
+                  tb_files=[]):
     """Finetuning a given model, with a given set
     of indices, and then evaluate the resulting
     model on a set of test samples
@@ -819,14 +845,24 @@ def fintune_winds(expr, run,
     
     # preparing the model
     model = NN.create_model(
-            expr.pars['model_name'],
-            expr.pars['dropout_rate'], 
-            expr.nclass, 
-            expr.pars['learning_rate'], 
-            expr.pars['grad_layers'],
-            expr.pars['train_layers'],
-            expr.pars['patch_shape'])
+        expr.pars['model_name'],
+        expr.pars['dropout_rate'], 
+        expr.nclass, 
+        expr.pars['learning_rate'], 
+        expr.pars['grad_layers'],
+        expr.pars['train_layers'],
+        expr.pars['optimizer_name'],
+        expr.pars['patch_shape'])
     
+    # labels of test and training samples
+    labels_path = os.path.join(
+        expr.root_dir, str(run), 
+        'labels.txt')
+    ts_labels = read_label_lines(
+        labels_path, ts_inds)
+    tr_labels = read_label_lines(
+        labels_path, tr_inds)
+
     with tf.Session() as sess:
         # loading the stored weights
         model.initialize_graph(sess)
@@ -835,29 +871,92 @@ def fintune_winds(expr, run,
             sess)
         sess.graph.finalize()
 
+        if len(tb_files)>0:
+            tb_writers = [
+                tf.summary.FileWriter(tb_files[0]),
+                tf.summary.FileWriter(tb_files[1])]
+
         # finetuning epochs
-        for i in range(self.pars['epochs']):
+        for i in range(expr.pars['epochs']):
             PW_train_epoch_winds(
                 model,
-                self,
+                expr,
                 run,
-                curr_train,
+                tr_inds,
                 sess)
             print('%d'% i, end=',')
+
+            """ TensorBaord variables """
+            if len(tb_files)>0:
+                # training/loss
+                tr_losses = batch_eval_winds(
+                    expr,
+                    run,
+                    model,
+                    tr_inds,
+                    'loss',
+                    sess)
+                loss_summ = tf.Summary()
+                loss_summ.value.add(
+                    tag='Loss',
+                    simple_value=np.mean(tr_losses))
+                tb_writers[0].add_summary(
+                    loss_summ, i)
+                # training/F-measure
+                tr_preds = batch_eval_winds(
+                    expr,
+                    run,
+                    model,
+                    tr_inds,
+                    'prediction',
+                    sess)
+                Fmeas = PW_NN.get_Fmeasure(
+                    tr_preds, tr_labels)
+                Fmeas_summ = tf.Summary()
+                Fmeas_summ.value.add(
+                    tag='F-measure',
+                    simple_value=Fmeas)
+                tb_writers[0].add_summary(
+                    Fmeas_summ, i)
+                # test/loss
+                ts_losses = batch_eval_winds(
+                    expr,
+                    run,
+                    model,
+                    ts_inds,
+                    'loss',
+                    sess)
+                loss_summ = tf.Summary()
+                loss_summ.value.add(
+                    tag='Loss',
+                    simple_value=np.mean(ts_losses))
+                tb_writers[1].add_summary(
+                    loss_summ, i)
+                # test/F-measure
+                ts_preds = batch_eval_winds(
+                    expr,
+                    run,
+                    model,
+                    ts_inds,
+                    'prediction',
+                    sess)
+                Fmeas = PW_NN.get_Fmeasure(
+                    ts_preds, ts_labels)
+                Fmeas_summ = tf.Summary()
+                Fmeas_summ.value.add(
+                    tag='F-measure',
+                    simple_value=Fmeas)
+                tb_writers[1].add_summary(
+                    Fmeas_summ, i)
                     
-        # evluation
+        # final evaluation over test 
         ts_preds = batch_eval_winds(
-            self,
+            expr,
             run,
             model,
-            test_inds,
+            ts_inds,
             'prediction',
             sess)
-        labels_path = os.path.join(
-            expr.root_dir, str(run), 
-            'labels.txt')
-        ts_labels = read_label_lines(
-            labels_path, test_inds)
         Fmeas = PW_NN.get_Fmeasure(
             ts_preds, ts_labels)
         
