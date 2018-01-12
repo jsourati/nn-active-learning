@@ -38,6 +38,8 @@ class PatchBinaryData(object):
                      for i in img_inds}
         labels_dict = {self.img_addrs[i]:[] 
                      for i in img_inds}
+        types_dict = {self.img_addrs[i]:[] 
+                     for i in img_inds}
         # corresponding integer to the view
         # sagittal : 0
         # coronal  : 1
@@ -84,13 +86,14 @@ class PatchBinaryData(object):
                 
             print('Sampling %d slices from image %d' 
                   % (len(slices), i))
-            sel_inds,sel_labels=sample_masked_volume(
+            sel_inds,sel_labels,sel_types=sample_masked_volume(
                 img, mask, slices, N, view)
 
             inds_dict[self.img_addrs[i]] = sel_inds
             labels_dict[self.img_addrs[i]]=sel_labels
+            types_dict[self.img_addrs[i]]=sel_types
             
-        return inds_dict, labels_dict
+        return inds_dict, labels_dict, types_dict
 
 def get_batches(inds_dict,
                 batch_size):
@@ -366,6 +369,7 @@ def sample_masked_volume(img,
     
     sel_inds = []
     sel_labels = []
+    sel_types = []
     for s in slices:
         if view=='axial':
             img_slice = img[:,:,s]
@@ -401,36 +405,42 @@ def sample_masked_volume(img,
             sel_labels += list(
                 np.ones(len(gmasked),
                      dtype=int))
+            sel_types += [0]*len(gmasked)
         else:
             r_inds = np.random.permutation(
                 len(gmasked))[:N[0]]
             sel_inds += list(gmasked[r_inds])
             sel_labels += list(
                 np.ones(N[0],dtype=int))
+            sel_types += [0]*N[0]
         # ------ non-masked structured
         if N[1] > len(gHvar):
             sel_inds += list(gHvar)
             sel_labels += list(np.zeros(
                 len(gHvar),dtype=int))
+            sel_types += [1]*len(gHvar)
         else:
             r_inds = np.random.permutation(
                 len(gHvar))[:N[1]]
             sel_inds += list(gHvar[r_inds])
             sel_labels += list(
                 np.zeros(N[1],dtype=int))
+            sel_types += [1]*N[1]
         # ------ non-masked non-structured
         if N[2] > len(gLvar):
             sel_inds += list(gLvar)
             sel_labels += list(np.zeros(
                 len(gLvar),dtype=int))
+            sel_types += [2]*len(gLvar)
         else:
             r_inds = np.random.permutation(
                 len(gLvar))[:N[2]]
             sel_inds += list(gLvar[r_inds])
             sel_labels += list(
                 np.zeros(N[2],dtype=int))
+            sel_types += [2]*N[2]
             
-    return sel_inds, sel_labels
+    return sel_inds, sel_labels, sel_types
 
 def get_sample_type(ratios,
                     local_ind):
