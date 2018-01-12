@@ -8,6 +8,7 @@ import os
 
 import NNAL_tools
 import PW_NN
+import PW_AL
 import patch_utils
 
 
@@ -37,7 +38,7 @@ def CNN_query(expr,
             sess)
         
         # k most uncertain (binary classes)
-        q = np.argsort(np.abs(posts)-.5)[
+        q = np.argsort(np.abs(posts-.5))[
             :expr.pars['k']]
         
     if method_name=='rep-entropy':
@@ -75,7 +76,6 @@ def CNN_query(expr,
                                    expr,
                                    session)
         
-    
     return q
 
 
