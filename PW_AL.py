@@ -157,13 +157,23 @@ class Experiment(object):
             run_path,'inds.txt')
         labels_path = os.path.join(
             run_path,'labels.txt')
-        pool_inds, test_inds = newborn_prep_dat(
-            img_addrs, mask_addrs,
-            self.pars['pool_img_inds'],
-            self.pars['test_img_inds'],
-            self.pars['pool_ratio'],
-            self.pars['test_ratio'],
+        #pool_inds, test_inds = newborn_prep_dat(
+        #    img_addrs, mask_addrs,
+        #    self.pars['pool_img_inds'],
+        #    self.pars['test_img_inds'],
+        #    self.pars['pool_ratio'],
+        #    self.pars['test_ratio'],
+        #    inds_path, labels_path,
+        #    self.pars['mask_ratio'])
+        indiv_img_addr = img_addrs[
+            self.pars['indiv_img_ind']]
+        indiv_mask_addr = mask_addrs[
+            self.pars['indiv_img_ind']]
+        pool_inds, test_inds = prep_target_indiv(
+            indiv_img_addr,
+            indiv_mask_addr,
             inds_path, labels_path,
+            self.pars['sample_ratio'],
             self.pars['mask_ratio'])
         
         # saving indices into the run's folder
@@ -212,6 +222,7 @@ class Experiment(object):
                 labels_path, test_inds)
             Fmeas = PW_NN.get_Fmeasure(ts_preds, 
                                        ts_labels)
+            print("Initial F-measure: %f"% Fmeas)
             perf_eval_path = os.path.join(
                 run_path, 'init_perf_eval.txt')
             with open(perf_eval_path, 'w') as f:
@@ -301,6 +312,8 @@ class Experiment(object):
             np.loadtxt(os.path.join(
                 method_path, 'curr_pool.txt')
                    ))
+        print('Pool-size: %d'% (len(curr_pool)))
+        print('Test-size: %d'% (len(test_inds)))
 
         tf.reset_default_graph()
         
@@ -379,7 +392,7 @@ class Experiment(object):
                     curr_train = np.append(
                         curr_train, Q)
                 curr_pool = np.delete(
-                    curr_pool, Q)
+                    curr_pool, Q_inds)
                 
                 """ updating the model """
                 for i in range(self.pars['epochs']):
@@ -433,7 +446,7 @@ class Experiment(object):
                 
                     print('\n\t', end='')
                     print("Total queries: %d"% 
-                          (nqueries + n_oldqueries),
+                          (len(curr_train)),
                           end='\n\t')
                     print("F-measure: %.4f"% Fmeas)
                 
@@ -452,11 +465,11 @@ class Experiment(object):
                     method_path,
                     'curr_weights.h5'))
 
-def newborn_prep_dat(img_addrs, mask_addrs,
-                     pool_imgs, test_imgs, 
-                     pool_ratio, test_ratio,
-                     dat_opath, label_opath,
-                     mask_ratio):
+def target_prep_dat(img_addrs, mask_addrs,
+                    pool_imgs, test_imgs, 
+                    pool_ratio, test_ratio,
+                    dat_opath, label_opath,
+                    mask_ratio):
     """Preparing test and pool image data
     sets, by giving separate images for 
     test-sampling and pool-sampling
@@ -530,6 +543,55 @@ def newborn_prep_dat(img_addrs, mask_addrs,
                 cnt += 1
     
     return np.arange(npool)+1, np.arange(npool,cnt)+1
+
+def prep_target_indiv(img_addr, mask_addr,
+                      dat_opath, label_opath,
+                      sample_ratio, mask_ratio):
+    """Preparing the target data set, including
+    unlabeled pool and test samples for running
+    an active learning experiment, based on a 
+    single subject
+    
+    The pool and test will be tried to be selected
+    from similar slices. Hence, one strategy is to
+    draw samples from the even slices for the pool,
+    and from the odd slices for the test data set.
+    """
+
+    D = patch_utils.PatchBinaryData(
+        [img_addr], [mask_addr])
+
+    # sampling from test images
+    inds_dict, mask_dict = D.generate_samples(
+        [0], sample_ratio, mask_ratio, 'axial')
+
+    # divide slices
+    img,_ = nrrd.read(img_addr)
+    multinds = np.unravel_index(inds_dict[img_addr],
+                                img.shape)
+    # take the even slices
+    even_slices = np.where(multinds[2]%2==0)[0]
+    odd_slices = np.where(multinds[2]%2==1)[0]
+    
+    """write the text files"""
+    with open(dat_opath,'w') as f, open(
+            label_opath,'w') as g:
+        for path in list(inds_dict.keys()):
+            for i in range(len(inds_dict[path])):
+                # determining type of this sample
+                stype,_ = patch_utils.get_sample_type(
+                    sample_ratio, i)
+                # data file
+                f.write(
+                    '%s, %d, %s\n'
+                    % (path,
+                       inds_dict[path][i],
+                       stype))
+                # label file
+                g.write(
+                    '%d\n'%(mask_dict[path][i]))
+
+    return even_slices+1, odd_slices+1
 
 def load_patches(expr, 
                  run, 
@@ -745,3 +807,58 @@ def read_label_lines(labels_path, line_inds):
             line_inds[i]).splitlines()[0])
         
     return labels_array
+
+def fintune_winds(expr, run,
+                  model,
+                  pool_inds,
+                  test_inds):
+    """Finetuning a given model, with a given set
+    of indices, and then evaluate the resulting
+    model on a set of test samples
+    """
+    
+    # preparing the model
+    model = NN.create_model(
+            expr.pars['model_name'],
+            expr.pars['dropout_rate'], 
+            expr.nclass, 
+            expr.pars['learning_rate'], 
+            expr.pars['grad_layers'],
+            expr.pars['train_layers'],
+            expr.pars['patch_shape'])
+    
+    with tf.Session() as sess:
+        # loading the stored weights
+        model.initialize_graph(sess)
+        model.load_weights(
+            expr.pars['init_weights_path'],
+            sess)
+        sess.graph.finalize()
+
+        # finetuning epochs
+        for i in range(self.pars['epochs']):
+            PW_train_epoch_winds(
+                model,
+                self,
+                run,
+                curr_train,
+                sess)
+            print('%d'% i, end=',')
+                    
+        # evluation
+        ts_preds = batch_eval_winds(
+            self,
+            run,
+            model,
+            test_inds,
+            'prediction',
+            sess)
+        labels_path = os.path.join(
+            expr.root_dir, str(run), 
+            'labels.txt')
+        ts_labels = read_label_lines(
+            labels_path, test_inds)
+        Fmeas = PW_NN.get_Fmeasure(
+            ts_preds, ts_labels)
+        
+    return Fmeas
