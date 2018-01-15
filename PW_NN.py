@@ -341,48 +341,6 @@ def PW_train_epoch(model,
             return Fm
 
 
-def get_model(nclass,
-              dropout_rate,
-              learning_rate,
-              optimizer_name,
-              patch_shape):
-    """Creating a model for patch-wise
-    segmentatio of medical images
-    """
-
-    pw_dict = {'conv1':[24, 'conv', [5,5]],
-               'conv2':[32, 'conv', [5,5]],
-               'max1': [[2,2], 'pool'],
-               #'conv3':[32, 'conv', [3,3]],
-               #'conv4':[48, 'conv', [3,3]],
-               #'max2' :[[2,2], 'pool'],
-               'conv3':[48, 'conv', [3,3]],
-               'conv4':[96, 'conv', [3,3]],
-               'max2' :[[2,2], 'pool'],
-               'fc1':[4096,'fc'],
-               'fc2':[4096,'fc'],
-               'fc3':[nclass,'fc']}
-    
-    dropout = [[9,10], dropout_rate]
-    x = tf.placeholder(
-        tf.float32,
-        [None, 
-         patch_shape[0],
-         patch_shape[1],
-         patch_shape[2]],
-        name='input')
-    feature_layer = len(pw_dict) - 2
-    
-    # the model
-    model = NN.CNN(x, pw_dict, 'PatchWise', 
-                   feature_layer, dropout)
-    # optimizers
-    model.get_optimizer(learning_rate, 
-                        optimizer_name)
-    # gradients
-    model.get_gradients()
-    
-    return model
 
 def expand_train_dicts(qrel_dict,
                        pinds_dict,
@@ -538,7 +496,11 @@ def batch_eval(model,
                 # and this variable in the first
                 # iteration
                 if i==1:
-                    var_dicts[j][img_path] = np.zeros(n)
+                    if var=='feature_layer':
+                        fdim = model.feature_layer.shape[0].value
+                        var_dicts[j][img_path] = np.zeros((fdim,n))
+                    else:
+                        var_dicts[j][img_path] = np.zeros(n)
                     
                 # evaluate variable for this batch
                 model_var = getattr(model, var)
@@ -571,12 +533,15 @@ def batch_eval(model,
                         model_var,
                         feed_dict={model.x:batch_tensors,
                                    model.keep_prob: 1.})
-            
+                
                 if var=='posteriors':
                     # keeping only posterior probability
                     # of being maksed
                     var_dicts[j][img_path][
                         batch_inds] = batch_vals[1,:]
+                elif var=='feature_layer':
+                    var_dicts[j][img_path][:,
+                        batch_inds] = batch_vals
                 else:
                     var_dicts[j][img_path][
                         batch_inds] = batch_vals

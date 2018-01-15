@@ -495,6 +495,46 @@ class Experiment(object):
         with open(save_path, 'w') as f:
             f.write('%f\n'% pool_Fmeas)
 
+    def load_results(self, run):
+        """Loading performance evaluations
+        for all the methods in a given
+        run of the experiment
+        """
+        
+        methods = os.listdir(os.path.join(
+            self.root_dir, str(run)))
+        methods = [
+            f for f in methods 
+            if os.path.isdir(os.path.join(
+                    self.root_dir,
+                    str(run),f))]
+        
+        # load performance evaluations
+        # together with number of queries
+        # in each method
+        Q_lens = []
+        perf_evals = []
+        for method in methods:
+            method_path = os.path.join(
+                self.root_dir, str(run),
+                method)
+            # performance evaluation
+            F = np.loadtxt(os.path.join(
+                method_path, 'perf_evals.txt'))
+            perf_evals += [F]
+            # length of the queries
+            Q_path = os.path.join(
+                method_path,'queries')
+            Q_files = os.listdir(Q_path)
+            L = [0]
+            for f in Q_files:
+                Qs = np.loadtxt(os.path.join(
+                    Q_path, f))
+                L += [len(Qs)]
+            Q_lens += [L]
+
+        return perf_evals, Q_lens, methods
+
 def target_prep_dat(img_addrs, mask_addrs,
                     pool_imgs, test_imgs, 
                     pool_ratio, test_ratio,
@@ -780,10 +820,17 @@ def batch_eval_winds(expr,
     # and finally, copy the resulting values
     # in their right places that corresponds to
     # the original array of line-indices
-    eval_array = np.zeros(len(line_inds))
-    for path in list(eval_dict.keys()):
-        locs = locs_dict[path]
-        eval_array[locs] = eval_dict[path]
+    if varname=='feature_layer':
+        fdim = model.feature_layer.shape[0].value
+        eval_array = np.zeros((fdim, len(line_inds)))
+        for path in list(eval_dict.keys()):
+            locs = locs_dict[path]
+            eval_array[:,locs] = eval_dict[path]
+    else:
+        eval_array = np.zeros(len(line_inds))
+        for path in list(eval_dict.keys()):
+            locs = locs_dict[path]
+            eval_array[locs] = eval_dict[path]
 
     return eval_array
     
@@ -961,3 +1008,5 @@ def fintune_winds(expr, run,
             ts_preds, ts_labels)
         
     return Fmeas
+
+
