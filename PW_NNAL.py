@@ -281,3 +281,52 @@ def extract_features(model,
     batches = patch_utils.get_batches(
         sub_dict,1000)
     
+
+def get_confident_samples(expr,
+                          run,
+                          model,
+                          pool_inds,
+                          num,
+                          sess):
+    """Generating a set of confident samples
+    together with their labels
+    """
+    
+    # posteriors
+    posts = PW_AL.batch_eval_winds(
+        expr,
+        run,
+        model,
+        pool_inds,
+        'posteriors',
+        sess)
+        
+    # most confident samples
+    conf_loc_inds = np.argsort(
+        -np.abs(posts-.5))[:num]
+    conf_inds = pool_inds[conf_loc_inds]
+    
+    # preparing their labels
+    conf_labels = np.zeros(num, 
+                           dtype=int)
+    conf_labels[posts[conf_loc_inds]>.9]=1
+    
+    # counting number of mis-labeling
+    inds_path = os.path.join(
+        expr.root_dir, str(run), 'inds.txt')
+    labels_path = os.path.join(
+        expr.root_dir, str(run), 'labels.txt')
+    inds_dict, labels_dict, locs_dict = PW_AL.create_dict(
+        inds_path, conf_inds, labels_path)
+    true_labels=[]
+    for path in list(labels_dict.keys()):
+        true_labels += list(labels_dict[path][
+            locs_dict[path]])
+
+    mis_labels = np.sum(~(
+        true_labels==conf_labels))
+    
+    return conf_inds, conf_labels, mis_labels
+        
+        
+        

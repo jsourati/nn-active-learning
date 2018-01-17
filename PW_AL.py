@@ -1,4 +1,5 @@
 from matplotlib import pyplot as plt
+import tensorflow as tf
 import numpy as np
 import linecache
 import shutil
@@ -9,7 +10,7 @@ import yaml
 import pdb
 import os
 
-import tensorflow as tf
+import PW_analyze_results
 import patch_utils
 import PW_NNAL
 import PW_NN
@@ -398,13 +399,35 @@ class Experiment(object):
                 curr_pool = np.delete(
                     curr_pool, Q_inds)
                 
+                # adding several confident points
+                conf_inds, conf_labels, misses = PW_NNAL.get_confident_samples(
+                    self, run, model, 
+                    curr_pool, 50, sess)
+                conf_types = np.array(
+                    PW_analyze_results.get_sample_type(
+                        self, run, conf_inds))
+                print("Confident labels:")
+                print("\t%d masked, %d s-masked, %d ns-masked"%
+                      (np.sum(conf_types==0),
+                       np.sum(conf_types==1),
+                       np.sum(conf_types==2)))
+                print("\tMislabeling: %d"% misses)
+                
                 """ updating the model """
                 for i in range(self.pars['epochs']):
-                    PW_train_epoch_winds(
+                    #PW_train_epoch_winds(
+                    #    model,
+                    #    self,
+                    #    run,
+                    #    curr_train,
+                    #    sess)
+                    PW_train_epoch_winds_wconf(
                         model,
                         self,
                         run,
                         curr_train,
+                        conf_inds,
+                        conf_labels,
                         sess)
                     print('%d'% i, end=',')
                     
@@ -457,7 +480,7 @@ class Experiment(object):
             # when querying is done..
             # save the current training and pool
             np.savetxt(os.path.join(
-                method_path, 'curr_pool'), 
+                method_path, 'curr_pool.txt'), 
                        curr_pool,
                        fmt='%d')
             np.savetxt(train_path, 
@@ -482,7 +505,7 @@ class Experiment(object):
             os.path.join(self.root_dir,str(run),
                          'test_inds.txt')))
         
-        pool_Fmeas = fintune_winds(
+        pool_Fmeas = finetune_winds(
             self, run,
             pool_inds,
             test_inds,
@@ -864,6 +887,59 @@ def PW_train_epoch_winds(model,
         expr.pars['b'],
         expr.pars['stats'],
         sess)
+
+def PW_train_epoch_winds_wconf(model,
+                               expr,
+                               run,
+                               trline_inds,
+                               conf_inds,
+                               conf_labels,
+                               sess):
+    """Running one epoch of trianing 
+    with training (line) indices with respect
+    to a run of pw-experiment
+    """
+    
+    inds_path = os.path.join(
+        expr.root_dir, str(run), 'inds.txt')
+    labels_path = os.path.join(
+        expr.root_dir, str(run), 'labels.txt')
+    
+    inds_dict, labels_dict, locs_dict = create_dict(
+        inds_path, trline_inds, labels_path)
+    
+    # adding the confident samples
+    # with given labels (not the true ones)
+    conf_inds_dict, conf_locs_dict = create_dict(
+        inds_path, conf_inds)
+
+    for path in list(conf_inds_dict.keys()):
+        if not(path in inds_dict):
+            inds_dict[path] = []
+            labels_dict[path] = []
+        else:
+            inds_dict[path] = list(
+                inds_dict[path])
+            labels_dict[path] = list(
+                labels_dict[path])
+
+        inds_dict[path] += list(
+            conf_inds_dict[path])
+        labels_dict[path] += list(
+            conf_labels[conf_locs_dict[path]])
+
+    # now that we have the index- and labels-
+    # dictionaries, we can feed it to 
+    # PW_NN.PW_train_epoch()
+    PW_NN.PW_train_epoch(
+        model,
+        expr.pars['dropout_rate'],
+        inds_dict,
+        labels_dict,
+        expr.pars['patch_shape'],
+        expr.pars['b'],
+        expr.pars['stats'],
+        sess)
     
 
 def read_label_lines(labels_path, line_inds):
@@ -881,7 +957,7 @@ def read_label_lines(labels_path, line_inds):
         
     return labels_array
 
-def fintune_winds(expr, run,
+def finetune_winds(expr, run,
                   tr_inds,
                   ts_inds,
                   tb_files=[]):
