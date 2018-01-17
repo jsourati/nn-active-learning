@@ -442,42 +442,6 @@ def sample_masked_volume(img,
             
     return sel_inds, sel_labels, sel_types
 
-def get_sample_type(ratios,
-                    local_ind):
-    """Determining type a sample in an
-    image and with a given sample ratio
-    
-    `local_ind` is the index of the sample
-    within the set of all samples drawn
-    from the same image. That is, the location
-    of the sample in the array of samples
-    associated with same image in the 
-    samples dictionary (say, `inds_dict`).
-    
-    We know that for each slice of the image
-    how many samples are drawn (cumulative
-    summation of samples drawn from each 
-    region, `cumsum(ratio)`. Also we know
-    the order of copying the samples
-    into the sample set in each slice.
-    Hence, we first find the slice
-    from which this sample is drawn
-    and then find the group to which
-    it belongs using the given ratios.
-    """
-    
-    slice_ind, sample_ind = np.divmod(
-        local_ind, sum(ratios))
-    
-    if sample_ind < ratios[0]:
-        stype = "masked"
-    elif ratios[0]<=sample_ind<sum(ratios[:2]):
-        stype = "s-nonmaksed"
-    elif sum(ratios[:2]) <= sample_ind:
-        stype = "ns-nonmaksed"
-        
-    return stype, slice_ind
-
 def partition_2d_indices(img,mask):
     """Partitioning an image into three
     different groups, based on the masked
