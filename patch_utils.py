@@ -95,6 +95,81 @@ class PatchBinaryData(object):
             
         return inds_dict, labels_dict, types_dict
 
+
+def generate_grid_samples(img_addr, mask_addr,
+                          grid_spacing):
+    """Taking samples from a grid from an image
+    and its mask
+    
+    NTOE: this is working only for 'axial' view
+    at this time.
+    """
+    
+    img,_ = nrrd.read(img_addr)
+    mask,_ = nrrd.read(mask_addr)
+    s = img.shape
+
+    # x,y coordinates of the grid
+    Y, X = np.meshgrid(np.arange(s[0]),
+                       np.arange(s[1]))
+    X = np.ravel(X)
+    Y = np.ravel(Y)
+    ind_locs = np.logical_and(
+        X%grid_spacing==0,
+        Y%grid_spacing==0)
+    sel_X = X[ind_locs]
+    sel_Y = Y[ind_locs]
+    
+    # getting 3D indices of the
+    # grid points
+    inds_3D = []
+    labels = []
+    types = []
+    for i in range(s[2]):
+        sel_Z = np.ones(
+            len(sel_X), dtype=int)*i
+        grid_inds_3D = np.ravel_multi_index(
+            (np.array(sel_X),
+             np.array(sel_Y),
+             sel_Z), img.shape)
+        inds_3D += list(grid_inds_3D)
+        # saving the mask
+        grid_labels = mask[
+            np.array(sel_X),
+            np.array(sel_Y),
+            sel_Z]
+        labels += list(grid_labels)
+        # determining the type
+        # 0 : masked
+        # 1 : s-masked
+        # 2 : ns-masked 
+        grid_types = np.ones(
+            len(grid_labels),
+            dtype=int)
+        grid_types[grid_labels==1]=0
+        
+        _,Hvar,Lvar = partition_2d_indices(
+            img[:,:,i], 
+            mask[:,:,i])
+        # those that are in Lvar 
+        # should be changed to 2
+        slice_inds_2D = np.ravel_multi_index(
+            (sel_X,sel_Y), img.shape[:2])
+        mask_2D = mask[:,:,i]
+        mask_2D = mask_2D[sel_X,sel_Y]
+        nmask_inds_2D = slice_inds_2D[
+            mask_2D==0]
+        for ind in set(nmask_inds_2D)-set(Hvar):
+            grid_types[slice_inds_2D==ind]=2
+        
+        types += list(grid_types)
+        
+    inds_dict = {img_addr: inds_3D}
+    labels_dict = {img_addr: labels}
+    types_dict = {img_addr: types}
+    
+    return inds_dict, labels_dict, types_dict
+
 def get_batches(inds_dict,
                 batch_size):
     """Divide a given set of image indices and
@@ -787,3 +862,5 @@ def get_patches(img, inds, patch_shape):
         batch[i,:,:,:] = patch
         
     return batch
+
+

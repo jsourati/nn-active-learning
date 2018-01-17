@@ -153,7 +153,6 @@ class Experiment(object):
         
         # preparing the indices
         # -----------------------
-        img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
         inds_path = os.path.join(
             run_path,'inds.txt')
         labels_path = os.path.join(
@@ -168,16 +167,10 @@ class Experiment(object):
         #    self.pars['test_ratio'],
         #    inds_path, labels_path,
         #    self.pars['mask_ratio'])
-        indiv_img_addr = img_addrs[
-            self.pars['indiv_img_ind']]
-        indiv_mask_addr = mask_addrs[
-            self.pars['indiv_img_ind']]
         pool_inds, test_inds = prep_target_indiv(
-            indiv_img_addr,
-            indiv_mask_addr,
-            inds_path, labels_path,
-            self.pars['sample_ratio'],
-            self.pars['mask_ratio'])
+            self,
+            inds_path, 
+            labels_path)
         
         # saving indices into the run's folder
         np.savetxt('%s/test_inds.txt'% run_path, 
@@ -637,9 +630,9 @@ def target_prep_dat(img_addrs, mask_addrs,
     
     return np.arange(npool)+1, np.arange(npool,cnt)+1
 
-def prep_target_indiv(img_addr, mask_addr,
-                      dat_opath, label_opath,
-                      sample_ratio, mask_ratio):
+def prep_target_indiv(expr,
+                      dat_opath, 
+                      label_opath):
     """Preparing the target data set, including
     unlabeled pool and test samples for running
     an active learning experiment, based on a 
@@ -650,13 +643,21 @@ def prep_target_indiv(img_addr, mask_addr,
     draw samples from the even slices for the pool,
     and from the odd slices for the test data set.
     """
-
+    
+    img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
+    img_addr = img_addrs[expr.pars['indiv_img_ind']]
+    mask_addr = mask_addrs[expr.pars['indiv_img_ind']]
+    
     D = patch_utils.PatchBinaryData(
         [img_addr], [mask_addr])
 
     # sampling from test images
-    inds_dict, mask_dict, types_dict = D.generate_samples(
-        [0], sample_ratio, mask_ratio, 'axial')
+    # sample_ratio = expr.pars['sample_ratio']
+    # mask_ratio = expr.pars['mask_ratio']
+    #inds_dict, mask_dict, types_dict = D.generate_samples(
+    #    [0], sample_ratio, mask_ratio, 'axial')
+    inds_dict, mask_dict, types_dict = patch_utils.generate_grid_samples(
+        img_addr, mask_addr, expr.pars['grid_spacing'])
 
     # divide slices
     img,_ = nrrd.read(img_addr)
