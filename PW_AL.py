@@ -1003,15 +1003,7 @@ def finetune_winds(expr, run,
                 tf.summary.FileWriter(tb_files[1])]
 
         # finetuning epochs
-        for i in range(expr.pars['epochs']):
-            PW_train_epoch_winds(
-                model,
-                expr,
-                run,
-                tr_inds,
-                sess)
-            print('%d'% i, end=',')
-
+        for i in range(expr.pars['epochs']+1):
             """ TensorBaord variables """
             if len(tb_files)>0:
                 # training/loss
@@ -1074,7 +1066,18 @@ def finetune_winds(expr, run,
                     simple_value=Fmeas)
                 tb_writers[1].add_summary(
                     Fmeas_summ, i)
-                    
+                
+            if i==expr.pars['epochs']:
+                break
+
+            PW_train_epoch_winds(
+                model,
+                expr,
+                run,
+                tr_inds,
+                sess)
+            print('%d'% i, end=',')
+
         # final evaluation over test 
         ts_preds = batch_eval_winds(
             expr,
