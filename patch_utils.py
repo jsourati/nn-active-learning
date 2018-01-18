@@ -97,7 +97,7 @@ class PatchBinaryData(object):
 
 
 def generate_grid_samples(img_addr, mask_addr,
-                          grid_spacing):
+                          grid_spacing, offset):
     """Taking samples from a grid from an image
     and its mask
     
@@ -114,18 +114,34 @@ def generate_grid_samples(img_addr, mask_addr,
                        np.arange(s[1]))
     X = np.ravel(X)
     Y = np.ravel(Y)
-    ind_locs = np.logical_and(
+    # grid for even slices
+    ind_locs_even = np.logical_and(
         X%grid_spacing==0,
         Y%grid_spacing==0)
-    sel_X = X[ind_locs]
-    sel_Y = Y[ind_locs]
-    
+    # grid for odd slices
+    ind_locs_odd = np.logical_and(
+        X%grid_spacing==offset,
+        Y%grid_spacing==offset)
+
+    even_sel_X = X[ind_locs_even]
+    even_sel_Y = Y[ind_locs_even]
+    odd_sel_X = X[ind_locs_odd]
+    odd_sel_Y = Y[ind_locs_odd]
+
     # getting 3D indices of the
     # grid points
     inds_3D = []
     labels = []
     types = []
     for i in range(s[2]):
+        # get the appropriate grid
+        if i%2==0:
+            sel_X = even_sel_X
+            sel_Y = even_sel_Y
+        else:
+            sel_X = odd_sel_X
+            sel_Y = odd_sel_Y
+
         sel_Z = np.ones(
             len(sel_X), dtype=int)*i
         grid_inds_3D = np.ravel_multi_index(
@@ -163,7 +179,7 @@ def generate_grid_samples(img_addr, mask_addr,
             grid_types[slice_inds_2D==ind]=2
         
         types += list(grid_types)
-        
+    
     inds_dict = {img_addr: inds_3D}
     labels_dict = {img_addr: labels}
     types_dict = {img_addr: types}

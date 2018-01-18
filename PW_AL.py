@@ -657,7 +657,9 @@ def prep_target_indiv(expr,
     #inds_dict, mask_dict, types_dict = D.generate_samples(
     #    [0], sample_ratio, mask_ratio, 'axial')
     inds_dict, mask_dict, types_dict = patch_utils.generate_grid_samples(
-        img_addr, mask_addr, expr.pars['grid_spacing'])
+        img_addr, mask_addr, 
+        expr.pars['grid_spacing'], 
+        expr.pars['grid_offset'])
 
     # divide slices
     img,_ = nrrd.read(img_addr)
