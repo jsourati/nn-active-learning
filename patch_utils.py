@@ -110,8 +110,8 @@ def generate_grid_samples(img_addr, mask_addr,
     s = img.shape
 
     # x,y coordinates of the grid
-    Y, X = np.meshgrid(np.arange(s[0]),
-                       np.arange(s[1]))
+    Y, X = np.meshgrid(np.arange(s[1]),
+                       np.arange(s[0]))
     X = np.ravel(X)
     Y = np.ravel(Y)
     # grid for even slices
