@@ -644,18 +644,19 @@ def prep_target_indiv(expr,
     and from the odd slices for the test data set.
     """
     
-    img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
+    if expr.pars['data']=='adults':
+        img_addrs, mask_addrs = patch_utils.extract_Hakims_data_path()
+    elif expr.pars['data']=='newborn':
+        img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
+
     img_addr = img_addrs[expr.pars['indiv_img_ind']]
     mask_addr = mask_addrs[expr.pars['indiv_img_ind']]
     
     D = patch_utils.PatchBinaryData(
         [img_addr], [mask_addr])
 
-    # sampling from test images
-    # sample_ratio = expr.pars['sample_ratio']
-    # mask_ratio = expr.pars['mask_ratio']
-    #inds_dict, mask_dict, types_dict = D.generate_samples(
-    #    [0], sample_ratio, mask_ratio, 'axial')
+    """Sampling from the slices"""
+    # grid sampling
     inds_dict, mask_dict, types_dict = patch_utils.generate_grid_samples(
         img_addr, mask_addr, 
         expr.pars['grid_spacing'], 
