@@ -667,7 +667,7 @@ def get_Fmeasure(preds, mask):
         TP += np.sum(np.logical_and(
             preds>0, mask>0))
         TPFP += np.sum(preds>0)
-    
+
     # precision and recall
     Pr = TP / TPFP
     Rc = TP / P

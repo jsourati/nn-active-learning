@@ -71,3 +71,51 @@ def get_sample_type(expr, run, inds):
         )[0].split(',')[-1])]
 
     return stypes
+
+def get_slice_preds(expr,
+                    run,
+                    model,
+                    inds,
+                    slice_,
+                    sess):
+    """Getting the results of 
+    class prediction of a set of indexed
+    voxels in a given slices of the 
+    image
+    """
+    
+    # take only indices of the 
+    # given slice
+    if expr.pars['data']=='adults':
+        img_addrs, mask_addrs = patch_utils.extract_Hakims_data_path()
+    elif expr.pars['data']=='newborn':
+        img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
+
+    img_addr = img_addrs[expr.pars[
+        'indiv_img_ind']]
+    img,_ = nrrd.read(img_addr)
+
+    inds_path = os.path.join(expr.root_dir,
+                             str(run),
+                             'inds.txt')
+    samples_dict,_ = PW_AL.create_dict(
+        inds_path, inds)
+    multinds = np.unravel_index(
+        samples_dict[img_addr], 
+        img.shape)
+    slice_indics = multinds[2]==slice_
+    slice_multinds = (
+        multinds[0][slice_indics],
+        multinds[1][slice_indics])
+    slice_inds = inds[slice_indics]
+    
+    # prediction
+    preds = PW_AL.batch_eval_winds(
+        expr,
+        run,
+        model,
+        slice_inds,
+        'prediction',
+        sess)
+    
+    return preds, slice_multinds
