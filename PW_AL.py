@@ -131,7 +131,7 @@ class Experiment(object):
                 os.rename(os.path.join(self.root_dir, name),
                           os.path.join(self.root_dir, str(i)))
                 
-        
+
     def add_run(self):
         """Adding a run to this experiment
         
@@ -191,6 +191,11 @@ class Experiment(object):
             self.pars['train_layers'],
             self.pars['optimizer_name'],
             self.pars['patch_shape'])
+
+        #  computing pool statistics
+        mu, sigma = get_statistics(
+            self, n)
+        self.pars['stats'] = [mu, sigma]
 
         # start a session to do the training
         with tf.Session() as sess:
@@ -334,10 +339,6 @@ class Experiment(object):
             method_path, 'curr_weights.h5'))
         
         
-        #extra_feed_dict = {
-        #    model.keep_prob: 1.}
-        #col_flag = True
-        
         # printing the accuracies so far:
         curr_fmeas = np.loadtxt(os.path.join(
             method_path, 'perf_evals.txt'))
@@ -356,8 +357,8 @@ class Experiment(object):
             print("Starting the iterations for %s"%
                   method_name)
             nqueries = 0
+            model.perform_assign_ops(sess)
             while nqueries < max_queries:
-                model.perform_assign_ops(sess)
                 
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
@@ -689,7 +690,7 @@ def prep_target_indiv(expr,
 
 def load_patches(expr, 
                  run, 
-                 inds, 
+                 line_inds, 
                  label_flag=False):
     """Loading a set of patches and their
     labels that are specified by the line
@@ -701,17 +702,17 @@ def load_patches(expr,
         expr.root_dir,str(run),'inds.txt')
 
     img_paths = []
-    inds_array = np.zeros(len(inds), dtype=int)
+    inds_array = np.zeros(len(line_inds), dtype=int)
 
-    for i in range(len(inds)):
+    for i in range(len(line_inds)):
         line = linecache.getline(
-            inds_path, inds[i]).splitlines()[0]
+            inds_path, line_inds[i]).splitlines()[0]
         img_paths += [line.split(',')[0]]
         inds_array[i] = int(line.split(',')[1])
         
     # start loading the patches in the same order
     # as is determined in `inds`
-    patches = np.zeros((len(inds),) + 
+    patches = np.zeros((len(line_inds),) + 
                        expr.pars['patch_shape'])
     # load patches of same images at the 
     # same time
@@ -726,18 +727,50 @@ def load_patches(expr,
         patches[indics,:,:,:] = img_patches
 
     if label_flag:
-        labels = np.zeros(len(inds), 
+        labels = np.zeros(len(line_inds), 
                           dtype=bool)
-        for i in range(len(inds)):
+        for i in range(len(line_inds)):
             labels[i] = linecache.getline(
                 inds_path, 
-                inds[i]).splitlines()[0]
+                line_inds[i]).splitlines()[0]
             
         return patches, labels
         
     # if labels_flag is off, only returns
     # the patches
     return patches
+
+def get_statistics(expr, run, hist_flag=False):
+    """Getting statistics of intensity values
+    of the pool samples in an experiment's 
+    run
+    """
+
+    pool_inds = np.int32(np.loadtxt(
+        os.path.join(expr.root_dir,
+                     str(run),
+                     'pool_inds.txt')))
+    pool_patches = load_patches(
+        expr, run, pool_inds)
+
+    # mean and std
+    mu = np.mean(pool_patches)
+    sigma = np.std(pool_patches)
+    
+    if hist_flag:
+        npool = np.prod(pool_patches.shape)
+        # preparing histogram bins
+        M = pool_patches.max()
+        nbin = 100
+        bin_seq = np.linspace(0, M, nbin)
+
+        # histogram of intensities
+        hist = np.histogram(
+            pool_patches, bin_seq)[0]/npool
+
+        return mu, sigma, bin_seq, hist
+
+    return mu, sigma
     
 def create_dict(inds_path,
                 line_inds,
