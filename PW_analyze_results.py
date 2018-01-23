@@ -119,3 +119,85 @@ def get_slice_preds(expr,
         sess)
     
     return preds, slice_multinds
+
+def visualize_methods(expr,
+                      run,
+                      methods=[],
+                      colors=[]):
+    """Visualize performance evaluations
+    of a set of methods in an experiment's
+    run
+
+    Size of the color vector `colors` should
+    be the number of included path plus
+    one (if there also exists the performance
+    metric value for the full pool data set)
+    """
+
+    run_path = os.path.join(expr.root_dir,
+                            str(run))
+    if len(methods)==0:
+        methods = [f for f in os.listdir(run_path) 
+                   if os.path.isdir(os.path.join(
+                           run_path, f))]
+
+    # maximum number of queries among methods
+    M = 0
+    for i, method_name in enumerate(methods):
+        # vector of evaluation metrics
+        F = np.loadtxt(os.path.join(
+            run_path, 
+            method_name,
+            'perf_evals.txt'))
+
+        # vector of numbre of observed
+        # labels at each query iterations
+        Qset = get_queries(expr, run, 
+                           method_name)
+        Qsizes = [0] + [len(Q) for Q in Qset]
+        Qsizes = np.cumsum(Qsizes)
+
+        # if the last iteration is still not
+        # evaluated, ignore the queries
+        if len(Qsizes)==len(F)+1:
+            Qsizes = Qsizes[:-1]
+
+        M = max(M, Qsizes[-1])
+        # plotting this curve
+        if len(colors)>0:
+            plt.plot(Qsizes, F, 
+                     linewidth=2,
+                     color=colors[i],
+                     label=method_name)
+        else:
+            plt.plot(Qsizes, F, 
+                     linewidth=2,
+                     label=method_name)
+
+    # get the full performance 
+    if os.path.exists(os.path.join(
+            run_path, 
+            'pooltrain_eval.txt')):
+        full_F = np.loadtxt(os.path.join(
+            run_path, 
+            'pooltrain_eval.txt'))
+
+        if len(colors)>0:
+            plt.plot([0,M], 
+                     [full_F, full_F],
+                     linewidth=2,
+                     color=colors[i],
+                     label='Pool-training')
+        else:
+            plt.plot([0,M], 
+                     [full_F, full_F], 
+                     linewidth=2,
+                     label='Pool-training')
+
+    plt.legend(fontsize=15)
+    plt.grid()
+
+        
+        
+        
+        
