@@ -367,6 +367,7 @@ class Experiment(object):
                     run,
                     model,
                     curr_pool,
+                    curr_train,
                     method_name,
                     sess)
 
@@ -393,35 +394,35 @@ class Experiment(object):
                     curr_pool, Q_inds)
                 
                 # adding several confident points
-                conf_inds, conf_labels, misses = PW_NNAL.get_confident_samples(
-                    self, run, model, 
-                    curr_pool, 50, sess)
-                conf_types = np.array(
-                    PW_analyze_results.get_sample_type(
-                        self, run, conf_inds))
-                print("Confident labels:")
-                print("\t%d masked, %d s-masked, %d ns-masked"%
-                      (np.sum(conf_types==0),
-                       np.sum(conf_types==1),
-                       np.sum(conf_types==2)))
-                print("\tMislabeling: %d"% misses)
+                #conf_inds, conf_labels, misses = PW_NNAL.get_confident_samples(
+                #    self, run, model, 
+                #    curr_pool, 50, sess)
+                #conf_types = np.array(
+                #    PW_analyze_results.get_sample_type(
+                #        self, run, conf_inds))
+                #print("Confident labels:")
+                #print("\t%d masked, %d s-masked, %d ns-masked"%
+                #      (np.sum(conf_types==0),
+                #       np.sum(conf_types==1),
+                #       np.sum(conf_types==2)))
+                #print("\tMislabeling: %d"% misses)
                 
                 """ updating the model """
                 for i in range(self.pars['epochs']):
-                    #PW_train_epoch_winds(
-                    #    model,
-                    #    self,
-                    #    run,
-                    #    curr_train,
-                    #    sess)
-                    PW_train_epoch_winds_wconf(
+                    PW_train_epoch_winds(
                         model,
                         self,
                         run,
                         curr_train,
-                        conf_inds,
-                        conf_labels,
                         sess)
+                    #PW_train_epoch_winds_wconf(
+                    #    model,
+                    #    self,
+                    #    run,
+                    #    curr_train,
+                    #    conf_inds,
+                    #    conf_labels,
+                    #    sess)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
@@ -470,20 +471,20 @@ class Experiment(object):
                           end='\n\t')
                     print("F-measure: %.4f"% Fmeas)
                 
-            # when querying is done..
-            # save the current training and pool
-            np.savetxt(os.path.join(
-                method_path, 'curr_pool.txt'), 
-                       curr_pool,
-                       fmt='%d')
-            np.savetxt(train_path, 
-                       curr_train,
-                       fmt='%d')
-            # save the current weights
-            model.save_weights(
-                os.path.join(
-                    method_path,
-                    'curr_weights.h5'))
+                # when querying is done..
+                # save the current training and pool
+                np.savetxt(os.path.join(
+                    method_path, 'curr_pool.txt'), 
+                           curr_pool,
+                           fmt='%d')
+                np.savetxt(train_path, 
+                           curr_train,
+                           fmt='%d')
+                # save the current weights
+                model.save_weights(
+                    os.path.join(
+                        method_path,
+                        'curr_weights.h5'))
 
     def finetune_wpool(self, run, tb_files=[]):
         """Finetuning the initial model of an
