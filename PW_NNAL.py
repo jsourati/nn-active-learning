@@ -1,3 +1,4 @@
+from skimage.measure import regionprops
 import tensorflow as tf
 import numpy as np
 import warnings
@@ -16,6 +17,7 @@ def CNN_query(expr,
               run,
               model,
               pool_inds,
+              tr_inds,
               method_name,
               sess):
     """Querying strategies for active
@@ -245,6 +247,103 @@ def CNN_query(expr,
             replacement=True)
         q = sel_inds[Q_inds]
 
+    elif method_name=='prob-entropy':
+        # posteriors
+        posts = PW_AL.batch_eval_winds(
+            expr,
+            run,
+            model, 
+            pool_inds,
+            'posteriors',
+            sess)
+
+        # extracting features
+        pdb.set_trace()
+        pool_F = PW_AL.batch_eval_winds(
+            expr,
+            run,
+            model,
+            pool_inds,
+            'feature_layer',
+            sess)
+
+        if len(tr_inds)>0:
+            tr_F = PW_AL.batch_eval_winds(
+                expr,
+                run,
+                model,
+                tr_inds,
+                'feature_layer',
+                sess)
+        else:
+            tr_F = []
+
+        # self-similarities
+        U_self_sims = get_self_sims(pool_F)
+        # unlabeled-labeled similarities
+        if tr_F:
+            UL_sims = get_cross_sims(pool_F,
+                                     tr_F)
+        
+        # forming the distributions
+        P_1 =  np.exp(-pis[0]*(posts-0.5)**2)
+        P_1 = P_1 / np.sum(P_1)
+        P_2 = np.exp(-pis[1]*U_self_sims)
+        P_2 = P_2 / np.sum(P_2)
+        if tr_F:
+            P_3 = np.exp(-pis[2]/UL_sims)
+            P_3 = P_3 / np.sum(P_3)
+        else:
+            P_3 = 1.
+
+        # multiplicative mixture
+        pis = expr.pars['q_mixing_coeffs']
+        logq = np.log(P_1) + \
+               np.log(P_2) + \
+               np.log(P_3)
+        q = np.exp(logq)
+        # taking care of zero values
+        z_indic = np.logical_or(
+            P_1==0,P_2==0)
+        z_indic = np.logical_or(
+            z_indic, P_3==0)
+        q[z_indic] = 0
+        # re-normalization
+        q = q / np.sum(q)
+
+        # now sampling from this distribution
+        # -----
+        # update the distribution every `b`
+        # samples to incorporate diversity
+        b = 50
+        k = expr.pars['k']
+        prior = []
+        draw_inds = np.arange(0, k, b)
+        if not(draw_inds[-1]==k):
+            draw_inds = np.append(
+                draw_inds, k)
+
+        Q_inds = np.zeros(k)
+        for i in range(len(draw_inds)-1):
+            iter_draws = draw_queries(
+                qdist, priors)
+            Q_inds[draw_inds[i]:
+                   draw_inds[i+1]] = iter_draws
+            
+            if i<len(draw_inds)-2:
+                # updating the prior using the
+                # similarity between the pool
+                # and samples that are selected
+                # so far
+                F_Q = pool_F[:,iter_draws]
+                QU_sims = get_cross_sims(
+                    pool_F, F_Q)
+                prior = np.exp(-pis[1]*QU_sim)
+                prior[iter_draws] = 0
+                prior = prior / np.sum(prior)
+            
+        q = Q_inds
+        
     return q
 
 
@@ -260,27 +359,120 @@ def binary_uncertainty_filter(posts, B):
     return np.argsort(np.abs(
         np.array(posts)-0.5))[:B]
 
-def extract_features(model,
-                     pool_dict, 
-                     inds,
-                     stats,
-                     sess):
-    """Extracting features for some patches
-    that are indexed from within a dictionary
+def draw_queries(qdist, prior, k,
+                 replacement=False):
+    """Drawing query samples from a query
+    distribution, and possible a prior
+    priobability
     """
     
-    # make a sub-dictionary for given indices
-    inds_dict = patch_utils.locate_in_dict(
-            pool_dict, inds)
-    sub_dict = {}
-    for path in list(inds_dict.keys()):
-        sub_dict[path] = pool_dict[path][
-            inds_dict[path]]
-        
-    # start computing the features
-    batches = patch_utils.get_batches(
-        sub_dict,1000)
+    if len(prior)==0:
+        pies = qdist
+    else:
+        pies = qdist*prior
+
+    # returning sampled indices
+    Q_inds = NNAL_tools.sample_query_dstr(
+        pies, k, replacement)
+
+    return Q_inds
+
+def get_self_sims(F):
+    """Computing representativeness of
+    all members of a set described by
+    the given feature vectors
+
+    The given argument should be a 2D
+    matrix, such that the i'th column
+    represents features of the i'th 
+    sample in the set.
+    """
     
+    # size of the chunk for computing
+    # pairwise similarities
+    b = 5000
+    n = F.shape[1]
+    
+    # dividing indices into chunks
+    ind_chunks = np.arange(
+        0, n, b)
+    if not(ind_chunks[-1]==n):
+        ind_chunks = np.append(
+            ind_chunks, n)
+
+    reps = np.zeros(n)
+    for i in range(len(ind_chunks)-1):
+        Fp = F[:,ind_chunks[i]:
+               ind_chunks[i+1]]
+        chunk_size = ind_chunks[i+1]-\
+                     ind_chunks[i]
+        
+        norms_p = np.sqrt(np.sum(
+            Fp**2, axis=0))
+        norms = np.sqrt(np.sum(
+            F**2, axis=0))
+        # inner product
+        dots = np.dot(Fp.T, F)
+        # outer-product of norms to
+        # be used in the denominator
+        norms_outer = np.outer(
+            norms_p, norms)
+        sims = dots / norms_outer
+        
+        # make the self-similarity 
+        # -inf to ignore it
+        sims[np.arange(chunk_size),
+             np.arange(
+                 ind_chunks[i],
+                 ind_chunks[i+1])] = -np.inf
+        
+        # loading similarities
+        reps[ind_chunks[i]:
+             ind_chunks[i+1]] = np.max(
+                 sims, axis=1)
+
+    return reps
+
+def get_cross_sims(F1, F2):
+    """Computing similarities between
+    individual members of  one set and 
+    another set
+    """
+
+    b  = 5000
+    n1 = F1.shape[1]
+    n2 = F2.shape[1]
+
+    # dividing indices into chunks
+    ind_chunks = np.arange(
+        0, n1, b)
+    if not(ind_chunks[-1]==n1):
+        ind_chunks = np.append(
+            ind_chunks, n1)
+
+    reps = np.zeros(n1)
+    for i in range(len(ind_chunks)-1):
+        Fp1 = F1[:,ind_chunks[i]:
+                 ind_chunks[i+1]]
+        
+        norms_p1 = np.sqrt(np.sum(
+            Fp1**2, axis=0))
+        norms_2 = np.sqrt(np.sum(
+            F2**2, axis=0))
+        # inner product
+        dots = np.dot(Fp1.T, F2)
+        # outer-product of norms to
+        # be used in the denominator
+        norms_outer = np.outer(
+            norms_p1, norms_2)
+        sims = dots / norms_outer
+
+        # loading the parameters
+        reps[ind_chunks[i]:
+             ind_chunks[i+1]] = np.max(
+                 sims, axis=1)
+
+    return reps    
 
 def get_confident_samples(expr,
                           run,
