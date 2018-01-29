@@ -347,6 +347,65 @@ def CNN_query(expr,
     return q
 
 
+def SuPix_query(expr,
+                run,
+                model,
+                pool_lines,
+                tr_lines,
+                overseg_img,
+                method_name,
+                sess):
+    """Querying strategies for active
+    learning of patch-wise model
+    """
+
+    k = expr.pars['k']
+
+    if method_name=='random':
+        n = len(pool_lines)
+        q = np.random.permutation(n)[:k]
+
+    if method_name=='entropy':
+        # posteriors
+        posts = PW_AL.batch_eval_winds(
+            expr,
+            run,
+            model,
+            pool_lines,
+            'posteriors',
+            sess)
+        
+        # explicit entropy scores
+        scores = np.abs(posts-.5)
+
+        # super-pixel scores
+        inds_path = os.path.join(
+            expr.root_dir, str(run),
+            'inds.txt')
+        inds_dict, locs_dict = PW_AL.create_dict(
+            inds_path, pool_lines)
+        pool_inds = inds_dict[list(
+            inds_dict.keys())[0]]
+        SuPix_scores = superpix_scoring(
+            overseg_img, pool_inds, scores)
+        
+        # argsort-ing is not sensitive to 
+        # NaN's, so invert np.inf to np.nan
+        SuPix_scores[
+            SuPix_scores==np.inf]=np.nan
+        qSuPix = np.unravel_index(
+            np.argsort(-np.ravel(SuPix_scores)), 
+            SuPix_scores.shape)
+        qSuPix = np.array([qSuPix[0][:k],
+                           qSuPix[1][:k]])
+
+    # when the superpixels are selecte, 
+    # extract their grid-points too
+    qSuPix_inds = PW_AL.get_SuPix_inds(
+        overseg_img, qSuPix)
+
+    return qSuPix, qSuPix_inds
+
 def binary_uncertainty_filter(posts, B):
     """Uncertainty filtering for binary class
     label distribution
@@ -359,6 +418,50 @@ def binary_uncertainty_filter(posts, B):
     return np.argsort(np.abs(
         np.array(posts)-0.5))[:B]
 
+def superpix_scoring(overseg_img,
+                     inds,
+                     scores):
+    """Extending scores of a set of pixels
+    represented by line numbers in index file,
+    to a set of overpixels in a given
+    oversegmentation
+    """
+    
+    # multi-indices of pixel indices
+    s = overseg_img.shape
+    multinds = np.unravel_index(inds, s)
+    Z = np.unique(multinds[2])
+    
+    SuPix_scores = np.zeros(
+        (s[2], 
+         int(overseg_img.max()+1)))
+    for z in Z:
+        slice_ = overseg_img[:,:,z]
+
+        # creatin an image with 
+        # values on the location of 
+        # pixels
+        score_img = np.ones(slice_.shape)*\
+                    np.inf
+        slice_indic = multinds[2]==z
+        score_img[
+            multinds[0][slice_indic],
+            multinds[1][slice_indic]]=scores[
+                slice_indic]
+        # now take the properties of 
+        # superpixels according to the
+        # score image
+        props = regionprops(slice_, 
+                            score_img)
+        # storing the summary score
+        for i in range(len(props)):
+            # specify which property to keep
+            # as the scores summary
+            SuPix_scores[z,props[i]['label']] \
+                = props[i]['min_intensity']
+
+    return SuPix_scores
+    
 def draw_queries(qdist, prior, k,
                  replacement=False):
     """Drawing query samples from a query
