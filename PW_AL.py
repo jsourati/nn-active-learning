@@ -1,3 +1,5 @@
+from skimage.measure import regionprops
+from skimage.segmentation import slic
 from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
@@ -7,6 +9,7 @@ import pickle
 import scipy
 import nrrd
 import yaml
+import copy
 import pdb
 import os
 
@@ -18,7 +21,8 @@ import NNAL
 import NN
 
 class Experiment(object):
-    """class of an active learning experiments
+    """class of an active learning experiments with 
+    voxel-wise querying
     """
     
     def __init__(self,
@@ -43,6 +47,7 @@ class Experiment(object):
         """
         
         self.root_dir = root_dir
+        self.nclass=2
         if not(os.path.exists(root_dir)):
             os.mkdir(root_dir)
         
@@ -81,7 +86,7 @@ class Experiment(object):
                 self.root_dir,
                 'parameters.txt'),'w') as f:
             
-            self.pars = pars
+            self.pars = copy.deepcopy(pars)
             yaml.dump(pars, f)
                     
     def load_parameters(self):
@@ -167,10 +172,11 @@ class Experiment(object):
         #    self.pars['test_ratio'],
         #    inds_path, labels_path,
         #    self.pars['mask_ratio'])
-        pool_inds, test_inds = prep_target_indiv(
+        pool_inds, test_inds, sub_id = prep_target_indiv(
             self,
             inds_path, 
             labels_path)
+        self.subject_id = sub_id
         
         # saving indices into the run's folder
         np.savetxt('%s/test_inds.txt'% run_path, 
@@ -354,7 +360,7 @@ class Experiment(object):
             sess.graph.finalize()
 
             # starting the iterations
-            print("Starting the iterations for %s"%
+            print("Starting iterations of %s"%
                   method_name)
             nqueries = 0
             model.perform_assign_ops(sess)
@@ -363,6 +369,13 @@ class Experiment(object):
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
                 """ querying """
+                # decide the number of queries 
+                # for this iteration (only to 
+                # be used fro non-fi algorithms)
+                if 'iter_k' in self.pars:
+                    self.pars['k'] = self.pars[
+                        'iter_k'][iter_cnt]
+                
                 Q_inds = PW_NNAL.CNN_query(
                     self,
                     run,
@@ -393,21 +406,7 @@ class Experiment(object):
                         curr_train, Q)
                 curr_pool = np.delete(
                     curr_pool, Q_inds)
-                
-                # adding several confident points
-                #conf_inds, conf_labels, misses = PW_NNAL.get_confident_samples(
-                #    self, run, model, 
-                #    curr_pool, 50, sess)
-                #conf_types = np.array(
-                #    PW_analyze_results.get_sample_type(
-                #        self, run, conf_inds))
-                #print("Confident labels:")
-                #print("\t%d masked, %d s-masked, %d ns-masked"%
-                #      (np.sum(conf_types==0),
-                #       np.sum(conf_types==1),
-                #       np.sum(conf_types==2)))
-                #print("\tMislabeling: %d"% misses)
-                
+                                
                 """ updating the model """
                 for i in range(self.pars['epochs']):
                     PW_train_epoch_winds(
@@ -416,14 +415,6 @@ class Experiment(object):
                         run,
                         curr_train,
                         sess)
-                    #PW_train_epoch_winds_wconf(
-                    #    model,
-                    #    self,
-                    #    run,
-                    #    curr_train,
-                    #    conf_inds,
-                    #    conf_labels,
-                    #    sess)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
@@ -553,6 +544,234 @@ class Experiment(object):
 
         return perf_evals, Q_lens, methods
 
+
+class SuPixExperiment(Experiment):
+    """Active learning experiment with 
+    super-pixel queries
+    """
+    
+    def __init__(self, root_dir, 
+                 pars=None):
+        """Constructor
+        """
+        
+        Experiment.__init__(self, 
+                            root_dir,
+                            pars={})
+        
+    def add_run(self):
+        """Adding a run to the
+        experiment
+        """
+        
+        Experiment.add_run(self)
+        nrun = len(self.get_runs())-1
+        
+        # now preparing the super-pixels
+        pool_inds = np.int32(np.loadtxt(
+            os.path.join(self.root_dir,
+                         str(nrun),
+                         'pool_inds.txt')))
+        pool_multinds = get_multinds(
+            self, nrun, pool_inds)
+        pool_slices = np.unique(pool_multinds[2])
+
+        img_path,_ = get_expr_paths(self)
+        img,_ = nrrd.read(img_path)
+        # over-segmentation has the same 
+        # shape as the original image, but
+        # includes oversegmentation only in
+        # pool slices (and not test)
+        overseg_img = np.zeros(img.shape,
+                               dtype=int)
+        for z in pool_slices:
+            slice_ = img[:,:,z]
+            if slice_.max()>0:
+                slice_ /= slice_.max()
+
+            # exclude label zero from the
+            # oversegmentation image
+            overseg_img[:,:,z] = slic(
+                slice_, 
+                n_segments=750, 
+                compactness=1e-1, 
+                max_iter=50, 
+                sigma=0) + 1
+            
+        # saving the image in the run
+        np.save(os.path.join(
+            self.root_dir, str(nrun),
+            'oversegs.npy'), overseg_img)
+
+    def run_method(self, 
+                   method_name, 
+                   run,
+                   max_queries):
+        """running a querying method 
+        in a run
+        """
+
+        run_path = os.path.join(self.root_dir,
+                                str(run))
+        inds_path = os.path.join(self.root_dir,
+                                 str(run),
+                                 'inds.txt')
+        method_path = os.path.join(run_path, 
+                                   method_name)
+        labels_path = os.path.join(run_path, 
+                                   'labels.txt')
+        
+        # count how many queries have been 
+        # selected before
+        n_oldqueries = 0
+        iter_cnt = 0
+        Q_path = os.path.join(method_path,'queries')
+        Q_files = os.listdir(Q_path)
+        for f in Q_files:
+            Qs = np.loadtxt(os.path.join(
+                Q_path, f))
+            n_oldqueries += len(Qs)
+            iter_cnt += 1
+        
+        # preparing the (line) indices
+        test_inds = np.int32(
+            np.loadtxt(os.path.join(
+                run_path, 'test_inds.txt')
+                   ))
+        train_path = os.path.join(
+            method_path, 'curr_train.txt')
+        if os.path.exists(train_path):
+            curr_train = np.int32(
+                np.loadtxt(train_path))
+        else:
+            curr_train = []
+        curr_pool = np.int32(
+            np.loadtxt(os.path.join(
+                method_path, 'curr_pool.txt')
+                   ))
+        # for the pool, get the pixel indices
+        img_path,_ = get_expr_paths(self)
+        currpool_inds,currpool_locs = create_dict(
+            inds_path, curr_pool)
+        currpool_inds = currpool_inds[img_path]
+        currpool_locs = currpool_locs[img_path]
+
+        print('Pool-size: %d'% (len(curr_pool)))
+        print('Test-size: %d'% (len(test_inds)))
+
+        tf.reset_default_graph()
+        
+        if not(hasattr(self, 'pars')):
+            self.load_parameters()
+        
+        """ Loading the model """
+        print("Loading the current model..")
+        # create a model-holder
+        model = NN.create_model(
+            self.pars['model_name'],
+            self.pars['dropout_rate'], 
+            self.nclass, 
+            self.pars['learning_rate'], 
+            self.pars['grad_layers'],
+            self.pars['train_layers'],
+            self.pars['optimizer_name'],
+            self.pars['patch_shape'])
+        model.add_assign_ops(os.path.join(
+            method_path, 'curr_weights.h5'))
+        
+        # printing the accuracies so far:
+        curr_fmeas = np.loadtxt(os.path.join(
+            method_path, 'perf_evals.txt'))
+        if curr_fmeas.size==1:
+            curr_fmeas = [curr_fmeas]
+        print("Current F-measures: ", end='')
+        print(*curr_fmeas, sep=', ')
+
+        # preparing super-pixel indices
+        overseg = np.load(os.path.join(
+            self.root_dir, str(run),
+            'oversegs.npy'))
+
+        with tf.Session() as sess:
+            # loading the stored weights
+            model.initialize_graph(sess)
+            sess.graph.finalize()
+
+            # starting the iterations
+            print("Starting iterations of %s"%
+                  method_name)
+            nqueries = 0
+            model.perform_assign_ops(sess)
+            while nqueries < max_queries:
+                
+                print("Iter. %d: "% iter_cnt,
+                      end='\n\t')
+                """ querying """
+                # decide the number of queries 
+                # for this iteration (only to 
+                # be used fro non-fi algorithms)
+                if 'iter_k' in self.pars:
+                    self.pars['k'] = self.pars[
+                        'iter_k'][iter_cnt]
+                
+                (qSuPix,
+                 qSuPix_inds) = PW_NNAL.SuPix_query(
+                     self,
+                     run,
+                     model,
+                     curr_pool,
+                     curr_train,
+                     overseg,
+                     method_name,
+                     sess)
+
+                # save the queries
+                #np.savetxt(os.path.join(
+                #        method_path, 
+                #        'queries',
+                #        '%d.txt'% (
+                #            iter_cnt)
+                #        ), Q, fmt='%d')
+                
+                """Update the Indices"""
+                # removing grid points inside the
+                # superpixels
+                currpool_set = set(currpool_inds)
+                curr_pool = list(curr_pool)
+                for SPinds in qSuPix_inds:
+                    SP_gridpts = set.intersection(
+                        set(SPinds), currpool_set)
+                    # remove the indices from 
+                    # curr_pool (because this is
+                    # what is fed to the querying
+                    # function)
+                    for pts in SP_gridpts:
+                        # find location of this point;
+                        # this indiex is the same for 
+                        # pixel and line indices as
+                        # there is only one image in
+                        # this experiment
+                        indic = np.where(
+                            currpool_inds==pts)[0][0]
+                        currpool_inds = np.delete(
+                            currpool_inds, indic)
+                        del curr_pool[indic]
+
+                curr_pool = np.array(curr_pool)
+                pdb.set_trace()
+
+                """ updating the model """
+                for i in range(self.pars['epochs']):
+                    PW_train_epoch_winds(
+                        model,
+                        self,
+                        run,
+                        curr_train,
+                        sess)
+                    print('%d'% i, end=',')
+        
+            
+
 def target_prep_dat(img_addrs, mask_addrs,
                     pool_imgs, test_imgs, 
                     pool_ratio, test_ratio,
@@ -653,6 +872,7 @@ def prep_target_indiv(expr,
 
     img_addr = img_addrs[expr.pars['indiv_img_ind']]
     mask_addr = mask_addrs[expr.pars['indiv_img_ind']]
+    subject_id = img_addr.split('/')[6]
     
     D = patch_utils.PatchBinaryData(
         [img_addr], [mask_addr])
@@ -686,7 +906,7 @@ def prep_target_indiv(expr,
             g.write(
                 '%d\n'%(mask_dict[img_addr][i]))
 
-    return even_slices+1, odd_slices+1
+    return even_slices+1, odd_slices+1, subject_id
 
 def load_patches(expr, 
                  run, 
@@ -1126,4 +1346,108 @@ def finetune_winds(expr, run,
         
     return Fmeas
 
+def get_SuPix_inds(overseg_img,
+                   SuPix_codes):
+    """Getting pixel indices of a give
+    set of super-pixels in an 
+    oversegmentation image
+    
+    Output pixel indices are generated
+    in a list with the same order as
+    the given codes of superpixels
+    """
 
+    s = overseg_img.shape
+
+    SuPix_inds = [[]] * SuPix_codes.shape[1]
+    SuPix_slices = np.unique(SuPix_codes[0,:])
+    for z in SuPix_slices:
+        slice_ = overseg_img[:,:,z]
+        slice_props = regionprops(slice_)
+        slice_labels = np.unique(slice_)
+
+        # take all superpixels of a slice
+        # and store their order in the input
+        # super-pixel codes
+        SP_locinds = np.array(np.where(
+            SuPix_codes[0,:]==z)[0])
+        for ind in SP_locinds:
+            label = SuPix_codes[1, ind]
+            # extracting 2D multi-indices
+            # of the current super-pixel
+            # -------------------------
+            # ASSUMPTION:
+            # the order of labels in the 
+            # region-properties list 
+            # (output of regionprops)
+            # is the same as the order 
+            # of `np.unique` of the 
+            # oversegmentation slice
+            prop_ind = np.where(
+                slice_labels==label)[0][0]
+            if not(slice_props[prop_ind][
+                    'label']==label):
+                raise ValueError(
+                    "The super-pixel's label"+
+                    " is different than the "+
+                    "extracted property's class")
+
+            # 2D multi-index
+            multinds_2D = slice_props[
+                prop_ind]['coords']
+            # 2D multi-index --> 2D index
+            inds_2D = np.ravel_multi_index(
+                (multinds_2D[:,0],
+                 multinds_2D[:,1]), s[:2])
+            # 2D index --> 3D index
+            inds_3D = patch_utils.\
+                      expand_raveled_inds(
+                          inds_2D, z, 2, s)
+            
+            SuPix_inds[ind] = list(inds_3D)
+
+    return SuPix_inds
+
+
+def get_multinds(expr, run, 
+                  line_inds):
+    """Returning slice indices of 
+    a given set of indices (in terms
+    of line numbers of `inds.txt`)
+    """
+
+    inds_path = os.path.join(
+        expr.root_dir, str(run), 
+        'inds.txt')
+    inds_dict,_ = create_dict(
+        inds_path, line_inds)
+    
+    # turning to multiple
+    img_path = list(
+        inds_dict.keys())[0]
+    inds = inds_dict[img_path]
+    img,_ = nrrd.read(img_path)
+    multinds = np.unravel_index(
+        inds, img.shape)
+
+    return multinds
+
+def get_expr_paths(expr):
+    """Getting path where the 
+    experiment's image is saved
+    
+    """
+
+    if expr.pars['data']=='newborn':
+        img_addrs, mask_addrs = patch_utils.\
+                              extract_newborn_data_path()
+    elif expr.pars['data']=='adults':
+        img_addrs, mask_addrs = patch_utils.\
+                              extract_Hakims_data_path()
+
+    img_path = img_addrs[expr.pars[
+        'indiv_img_ind']]
+    mask_path = mask_addrs[expr.pars[
+        'indiv_img_ind']]
+
+    return img_path, mask_path
