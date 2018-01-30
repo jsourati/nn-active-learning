@@ -179,9 +179,9 @@ class Experiment(object):
         self.subject_id = sub_id
         
         # saving indices into the run's folder
-        np.savetxt('%s/test_inds.txt'% run_path, 
+        np.savetxt('%s/test_lines.txt'% run_path, 
                    test_inds, fmt='%d')
-        np.savetxt('%s/pool_inds.txt'% run_path, 
+        np.savetxt('%s/init_pool_lines.txt'% run_path, 
                    pool_inds, fmt='%d')
 
         # evaluating the initial performance
@@ -264,8 +264,8 @@ class Experiment(object):
         method_path = os.path.join(run_path, method_name)
 
         shutil.copy(
-            os.path.join(run_path,'pool_inds.txt'),
-            os.path.join(method_path,'curr_pool.txt')
+            os.path.join(run_path,'init_pool_lines.txt'),
+            os.path.join(method_path,'pool_lines.txt')
             )
         shutil.copy(
             os.path.join(run_path,'init_predicts.txt'),
@@ -305,23 +305,23 @@ class Experiment(object):
             iter_cnt += 1
         
         # preparing the (line) indices
-        test_inds = np.int32(
+        test_lines = np.int32(
             np.loadtxt(os.path.join(
-                run_path, 'test_inds.txt')
+                run_path, 'test_lines.txt')
                    ))
         train_path = os.path.join(
-            method_path, 'curr_train.txt')
+            method_path, 'train_lines.txt')
         if os.path.exists(train_path):
-            curr_train = np.int32(
+            train_lines = np.int32(
                 np.loadtxt(train_path))
         else:
             curr_train = []
-        curr_pool = np.int32(
+        pool_lines = np.int32(
             np.loadtxt(os.path.join(
-                method_path, 'curr_pool.txt')
+                method_path, 'pool_lines.txt')
                    ))
-        print('Pool-size: %d'% (len(curr_pool)))
-        print('Test-size: %d'% (len(test_inds)))
+        print('Pool-size: %d'% (len(pool_lines)))
+        print('Test-size: %d'% (len(test_lines)))
 
         tf.reset_default_graph()
         
@@ -380,15 +380,15 @@ class Experiment(object):
                     self,
                     run,
                     model,
-                    curr_pool,
-                    curr_train,
+                    pool_lines,
+                    train_lines,
                     method_name,
                     sess)
 
                 if self.pars['k']==1:
-                    Q = [curr_pool[Q_inds]]
+                    Q = [pool_lines[Q_inds]]
                 else:
-                    Q = curr_pool[Q_inds]
+                    Q = pool_lines[Q_inds]
 
                 # save the queries
                 np.savetxt(os.path.join(
@@ -399,21 +399,21 @@ class Experiment(object):
                         ), Q, fmt='%d')
                 
                 # update the indices
-                if len(curr_train)==0:
-                    curr_train = Q
+                if len(train_lines)==0:
+                    train_lines = Q
                 else:
-                    curr_train = np.append(
-                        curr_train, Q)
-                curr_pool = np.delete(
-                    curr_pool, Q_inds)
+                    train_lines = np.append(
+                        train_lines, Q)
+                pool_lines = np.delete(
+                    pool_lines, Q_inds)
                                 
                 """ updating the model """
                 for i in range(self.pars['epochs']):
-                    PW_train_epoch_winds(
+                    PW_train_epoch_wlines(
                         model,
                         self,
                         run,
-                        curr_train,
+                        train_lines,
                         sess)
                     print('%d'% i, end=',')
                     
@@ -421,7 +421,7 @@ class Experiment(object):
                 ts_preds = batch_eval_winds(self,
                                             run,
                                             model,
-                                            test_inds,
+                                            test_lines,
                                             'prediction',
                                             sess)
                 # saving the predictions
@@ -444,7 +444,7 @@ class Experiment(object):
             
                 # performance evaluation
                 ts_labels = read_label_lines(
-                    labels_path, test_inds)
+                    labels_path, test_lines)
                 Fmeas = PW_NN.get_Fmeasure(
                     ts_preds, ts_labels)
                                    
@@ -467,10 +467,10 @@ class Experiment(object):
                 # save the current training and pool
                 np.savetxt(os.path.join(
                     method_path, 'curr_pool.txt'), 
-                           curr_pool,
+                           pool_lines,
                            fmt='%d')
                 np.savetxt(train_path, 
-                           curr_train,
+                           train_lines,
                            fmt='%d')
                 # save the current weights
                 model.save_weights(
@@ -610,54 +610,69 @@ class SuPixExperiment(Experiment):
         """running a querying method 
         in a run
         """
-
+        
         run_path = os.path.join(self.root_dir,
                                 str(run))
-        inds_path = os.path.join(self.root_dir,
-                                 str(run),
+        inds_path = os.path.join(run_path,
                                  'inds.txt')
+        labels_path = os.path.join(run_path,
+                                 'labels.txt')
         method_path = os.path.join(run_path, 
                                    method_name)
-        labels_path = os.path.join(run_path, 
-                                   'labels.txt')
         
-        # count how many queries have been 
-        # selected before
-        n_oldqueries = 0
-        iter_cnt = 0
-        Q_path = os.path.join(method_path,'queries')
+        # loading the image's oversegmentation
+        overseg_img = np.load(os.path.join(
+            run_path, 'oversegs.npy'))
+        
+        # count the previously queries super-
+        # pixels and zeroing them out from the 
+        # oversegmented image
+        iter_cnt = 0  # querying iterations
+        nSuPix = 0 # labeled super-pixels
+        nPix = 0   # labeled pixels
+        Q_path = os.path.join(method_path,
+                              'queries')
         Q_files = os.listdir(Q_path)
         for f in Q_files:
-            Qs = np.loadtxt(os.path.join(
-                Q_path, f))
-            n_oldqueries += len(Qs)
+            qSuPix = np.int32(np.loadtxt(
+                os.path.join(Q_path, f)))
             iter_cnt += 1
-        
-        # preparing the (line) indices
-        test_inds = np.int32(
+            nSups = qSuPix.shape[1]
+            nSuPix += nSups
+            # zero-ing out
+            for i in range(nSups):
+                tmp = overseg_img[:,:,
+                                  qSuPix[0,i]]
+                nPix += np.sum(tmp==qSuPix[1,i])
+                tmp[tmp==qSuPix[1,i]] = 0
+            
+        """Prearing the Indices"""
+        test_lines = np.int32(
             np.loadtxt(os.path.join(
-                run_path, 'test_inds.txt')
-                   ))
+                run_path, 'test_lines.txt')))
+
         train_path = os.path.join(
-            method_path, 'curr_train.txt')
+            method_path, 'train_inds.txt')
         if os.path.exists(train_path):
-            curr_train = np.int32(
+            train_inds = np.int32(
                 np.loadtxt(train_path))
         else:
-            curr_train = []
-        curr_pool = np.int32(
-            np.loadtxt(os.path.join(
-                method_path, 'curr_pool.txt')
-                   ))
-        # for the pool, get the pixel indices
-        img_path,_ = get_expr_paths(self)
-        currpool_inds,currpool_locs = create_dict(
-            inds_path, curr_pool)
-        currpool_inds = currpool_inds[img_path]
-        currpool_locs = currpool_locs[img_path]
+            train_inds = np.array([],
+                                  dtype=int)
 
-        print('Pool-size: %d'% (len(curr_pool)))
-        print('Test-size: %d'% (len(test_inds)))
+        pool_lines = np.int32(
+            np.loadtxt(os.path.join(
+                method_path, 'pool_lines.txt')))
+        # for the pool, get the pixel indices
+        img_path,mask_path = get_expr_paths(self)
+        pool_inds,pool_locs = create_dict(
+            inds_path, pool_lines)
+        pool_inds = pool_inds[img_path]
+        pool_locs = pool_locs[img_path]
+        mask,_ = nrrd.read(mask_path)
+
+        print('Pool-size: %d'% (len(pool_lines)))
+        print('Test-size: %d'% (len(test_lines)))
 
         tf.reset_default_graph()
         
@@ -687,26 +702,22 @@ class SuPixExperiment(Experiment):
         print("Current F-measures: ", end='')
         print(*curr_fmeas, sep=', ')
 
-        # preparing super-pixel indices
-        overseg = np.load(os.path.join(
-            self.root_dir, str(run),
-            'oversegs.npy'))
-
         with tf.Session() as sess:
             # loading the stored weights
             model.initialize_graph(sess)
             sess.graph.finalize()
 
-            # starting the iterations
+            """ Querying iterations """
             print("Starting iterations of %s"%
                   method_name)
-            nqueries = 0
+            # separete counts for this session
+            newSuPix = 0
+            newPix   = 0
             model.perform_assign_ops(sess)
-            while nqueries < max_queries:
-                
+            while newSuPix < max_queries:
                 print("Iter. %d: "% iter_cnt,
                       end='\n\t')
-                """ querying """
+
                 # decide the number of queries 
                 # for this iteration (only to 
                 # be used fro non-fi algorithms)
@@ -714,37 +725,37 @@ class SuPixExperiment(Experiment):
                     self.pars['k'] = self.pars[
                         'iter_k'][iter_cnt]
                 
+                """ Querying Super-pixels"""
                 (qSuPix,
                  qSuPix_inds) = PW_NNAL.SuPix_query(
                      self,
                      run,
                      model,
-                     curr_pool,
-                     curr_train,
-                     overseg,
+                     pool_lines,
+                     train_inds,
+                     overseg_img,
                      method_name,
                      sess)
-
-                # save the queries
-                #np.savetxt(os.path.join(
-                #        method_path, 
-                #        'queries',
-                #        '%d.txt'% (
-                #            iter_cnt)
-                #        ), Q, fmt='%d')
                 
-                """Update the Indices"""
-                # removing grid points inside the
-                # superpixels
-                currpool_set = set(currpool_inds)
-                curr_pool = list(curr_pool)
-                for SPinds in qSuPix_inds:
-                    SP_gridpts = set.intersection(
-                        set(SPinds), currpool_set)
+                newSuPix += qSuPix.shape[1]
+                
+                """ Updating the Indices """
+                pool_set = set(pool_inds)
+                pool_lines = list(pool_lines)
+                for i, SPinds in enumerate(qSuPix_inds):
+                    # updating training indices
+                    train_inds = np.append(train_inds,
+                                           SPinds)
+                    # zeroing out the  superpixel
+                    tmp = overseg_img[:,:,qSuPix[0,i]]
+                    newPix += np.sum(tmp==qSuPix[1,i])
+                    tmp[tmp==qSuPix[1,i]] = 0
                     # remove the indices from 
                     # curr_pool (because this is
                     # what is fed to the querying
                     # function)
+                    SP_gridpts = set.intersection(
+                        set(SPinds), pool_set)
                     for pts in SP_gridpts:
                         # find location of this point;
                         # this indiex is the same for 
@@ -752,24 +763,98 @@ class SuPixExperiment(Experiment):
                         # there is only one image in
                         # this experiment
                         indic = np.where(
-                            currpool_inds==pts)[0][0]
-                        currpool_inds = np.delete(
-                            currpool_inds, indic)
-                        del curr_pool[indic]
+                            pool_inds==pts)[0][0]
+                        pool_inds = np.delete(
+                            pool_inds, indic)
+                        del pool_lines[indic]
 
-                curr_pool = np.array(curr_pool)
-                pdb.set_trace()
-
-                """ updating the model """
+                pool_lines = np.array(pool_lines)
+                
+                """ Updating the model """
+                labels = read_label_winds(
+                    mask, train_inds)
+                inds_dict = {img_path: train_inds}
+                labels_dict = {img_path: labels}
                 for i in range(self.pars['epochs']):
-                    PW_train_epoch_winds(
+                    PW_NN.PW_train_epoch(
                         model,
-                        self,
-                        run,
-                        curr_train,
+                        self.pars['dropout_rate'],
+                        inds_dict,
+                        labels_dict,
+                        self.pars['patch_shape'],
+                        self.pars['b'],
+                        self.pars['stats'],
                         sess)
                     print('%d'% i, end=',')
-        
+
+                """ Evluating the updated model """
+                ts_preds = batch_eval_winds(self,
+                                            run,
+                                            model,
+                                            test_lines,
+                                            'prediction',
+                                            sess)
+                # Saving the predictions: 
+                # first, loading whatever we had
+                # before
+                curr_predicts = np.loadtxt(
+                    os.path.join(method_path, 
+                                 'predicts.txt'))
+                # appending the new ones to them,
+                # and save them back
+                if curr_predicts.ndim<2:
+                    curr_predicts = np.expand_dims(
+                        curr_predicts, axis=0)
+                new_predicts = np.append(
+                    curr_predicts, 
+                    np.expand_dims(ts_preds, axis=0),
+                    axis=0)
+                # saving the appended prediction
+                np.savetxt(os.path.join(
+                    method_path, 'predicts.txt'), 
+                           new_predicts, fmt='%d')
+
+                # performance evaluation
+                ts_labels = read_label_lines(
+                    labels_path, test_lines)
+                Fmeas = PW_NN.get_Fmeasure(
+                    ts_preds, ts_labels)
+                                   
+                with open(os.path.join(
+                        method_path, 
+                        'perf_evals.txt'), 'a') as f:
+                    f.write('%f\n'% Fmeas)
+                
+                print('\n\t', end='')
+                print("Total Super-pixels: %d+%d"% 
+                      (nSuPix, newSuPix),
+                      end='\n\t')
+                print("Total Pixels: %d+%d"% 
+                      (nPix, newPix),
+                      end='\n\t')
+                print("F-measure: %.4f"% Fmeas)
+
+                """ Storing the Indices """
+                # super-pixel queries
+                np.savetxt(os.path.join(
+                    method_path, 'queries',
+                    '%d.txt'% iter_cnt), qSuPix,
+                           fmt='%d')
+                # update the loop variables
+                iter_cnt += 1
+                # the current training and pool
+                np.savetxt(os.path.join(
+                    method_path, 'pool_lines.txt'), 
+                           pool_lines,
+                           fmt='%d')
+                np.savetxt(train_path, 
+                           train_inds,
+                           fmt='%d')
+                # save the current weights
+                model.save_weights(
+                    os.path.join(
+                        method_path,
+                        'curr_weights.h5'))
             
 
 def target_prep_dat(img_addrs, mask_addrs,
@@ -1001,8 +1086,10 @@ def create_dict(inds_path,
     in a PW-experiment's run,
     """
     img_paths = []
-    inds_array = np.zeros(len(line_inds), dtype=int)
-    labels_array = np.zeros(len(line_inds), dtype=int)
+    inds_array = np.zeros(len(line_inds), 
+                          dtype=int)
+    labels_array = np.zeros(len(line_inds), 
+                            dtype=int)
     
     for i in range(len(line_inds)):
         line = linecache.getline(
@@ -1115,11 +1202,11 @@ def batch_eval_winds(expr,
 
     return eval_array
     
-def PW_train_epoch_winds(model,
-                        expr,
-                        run,
-                        line_inds,
-                        sess):
+def PW_train_epoch_wlines(model,
+                          expr,
+                          run,
+                          line_inds,
+                          sess):
     """Running one epoch of trianing 
     with training (line) indices with respect
     to a run of pw-experiment
@@ -1214,6 +1301,17 @@ def read_label_lines(labels_path, line_inds):
             line_inds[i]).splitlines()[0])
         
     return labels_array
+
+def read_label_winds(mask, inds_3D):
+    """Reading labels of several pixels
+    given with their D indices
+    """
+    
+    # 3D inds --> 3D multi-inds
+    multinds = np.unravel_index(
+        inds_3D, mask.shape)
+    
+    return mask[multinds]
 
 def finetune_winds(expr, run,
                   tr_inds,
@@ -1404,7 +1502,8 @@ def get_SuPix_inds(overseg_img,
                       expand_raveled_inds(
                           inds_2D, z, 2, s)
             
-            SuPix_inds[ind] = list(inds_3D)
+            SuPix_inds[ind] = list(
+                np.int64(inds_3D))
 
     return SuPix_inds
 

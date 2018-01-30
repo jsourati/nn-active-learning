@@ -351,7 +351,7 @@ def SuPix_query(expr,
                 run,
                 model,
                 pool_lines,
-                tr_lines,
+                train_inds,
                 overseg_img,
                 method_name,
                 sess):
