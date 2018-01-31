@@ -827,11 +827,17 @@ def generate_rgb_mask(img,mask):
     img_rgb = np.repeat(np.expand_dims(
         img,axis=2),3,axis=2)
     img_rgb = np.uint8(
-        img_rgb*255./img_rgb.max())
+        img_rgb*200./img_rgb.max())
     
     # create a mask in one of the channels
-    tmp = img_rgb[:,:,0]
-    tmp[mask>0] = 200.
+    img_rgb[:,:,0][mask>0] = 250.
+    #tmp = img_rgb[:,:,0]
+    #tmp[mask>0] = 100.
+    #tmp = img_rgb[:,:,1]
+    #tmp[mask>0] = 100.
+    #tmp = img_rgb[:,:,2]
+    #tmp[mask>0] = tmp[mask>0] + 100.
+    
     
     return img_rgb
 

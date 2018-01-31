@@ -172,7 +172,7 @@ class Experiment(object):
         #    self.pars['test_ratio'],
         #    inds_path, labels_path,
         #    self.pars['mask_ratio'])
-        pool_inds, test_inds, sub_id = prep_target_indiv(
+        pool_lines, test_lines, sub_id = prep_target_indiv(
             self,
             inds_path, 
             labels_path)
@@ -180,9 +180,9 @@ class Experiment(object):
         
         # saving indices into the run's folder
         np.savetxt('%s/test_lines.txt'% run_path, 
-                   test_inds, fmt='%d')
+                   test_lines, fmt='%d')
         np.savetxt('%s/init_pool_lines.txt'% run_path, 
-                   pool_inds, fmt='%d')
+                   pool_lines, fmt='%d')
 
         # evaluating the initial performance
         # -------------------------
@@ -201,7 +201,7 @@ class Experiment(object):
         #  computing pool statistics
         mu, sigma = get_statistics(
             self, n)
-        self.pars['stats'] = [mu, sigma]
+        self.pars['stats'] = [65., 54.5]
 
         # start a session to do the training
         with tf.Session() as sess:
@@ -215,7 +215,7 @@ class Experiment(object):
                 self,
                 n,
                 model,
-                test_inds,
+                test_lines,
                 'prediction',
                 sess)
                 
@@ -227,9 +227,9 @@ class Experiment(object):
             
             # initial, performance evaluation
             ts_labels = read_label_lines(
-                labels_path, test_inds)
-            Fmeas = PW_NN.get_Fmeasure(ts_preds, 
-                                       ts_labels)
+                labels_path, test_lines)
+            Fmeas = PW_analyze_results.get_Fmeasure(
+                ts_preds, ts_labels)
             print("Initial F-measure: %f"% Fmeas)
             perf_eval_path = os.path.join(
                 run_path, 'init_perf_eval.txt')
@@ -315,7 +315,7 @@ class Experiment(object):
             train_lines = np.int32(
                 np.loadtxt(train_path))
         else:
-            curr_train = []
+            train_lines = []
         pool_lines = np.int32(
             np.loadtxt(os.path.join(
                 method_path, 'pool_lines.txt')
@@ -445,7 +445,7 @@ class Experiment(object):
                 # performance evaluation
                 ts_labels = read_label_lines(
                     labels_path, test_lines)
-                Fmeas = PW_NN.get_Fmeasure(
+                Fmeas = PW_analyze_results.get_Fmeasure(
                     ts_preds, ts_labels)
                                    
                 with open(os.path.join(
@@ -459,7 +459,7 @@ class Experiment(object):
                 
                     print('\n\t', end='')
                     print("Total queries: %d"% 
-                          (len(curr_train)),
+                          (len(train_lines)),
                           end='\n\t')
                     print("F-measure: %.4f"% Fmeas)
                 
@@ -484,17 +484,17 @@ class Experiment(object):
         a given run
         """
         
-        pool_inds = np.int32(np.loadtxt(
+        pool_lines = np.int32(np.loadtxt(
             os.path.join(self.root_dir,str(run),
-                         'pool_inds.txt')))
-        test_inds = np.int32(np.loadtxt(
+                         'pool_lines.txt')))
+        test_lines = np.int32(np.loadtxt(
             os.path.join(self.root_dir,str(run),
-                         'test_inds.txt')))
+                         'test_lines.txt')))
         
         pool_Fmeas = finetune_winds(
             self, run,
-            pool_inds,
-            test_inds,
+            pool_lines,
+            test_lines,
             tb_files)
         
         print('Pool  F-measure: %f'% pool_Fmeas)
@@ -817,7 +817,7 @@ class SuPixExperiment(Experiment):
                 # performance evaluation
                 ts_labels = read_label_lines(
                     labels_path, test_lines)
-                Fmeas = PW_NN.get_Fmeasure(
+                Fmeas = PW_analyze_results.get_Fmeasure(
                     ts_preds, ts_labels)
                                    
                 with open(os.path.join(
@@ -1051,12 +1051,12 @@ def get_statistics(expr, run, hist_flag=False):
     run
     """
 
-    pool_inds = np.int32(np.loadtxt(
+    pool_lines = np.int32(np.loadtxt(
         os.path.join(expr.root_dir,
                      str(run),
-                     'pool_inds.txt')))
+                     'init_pool_lines.txt')))
     pool_patches = load_patches(
-        expr, run, pool_inds)
+        expr, run, pool_lines)
 
     # mean and std
     mu = np.mean(pool_patches)
@@ -1123,7 +1123,7 @@ def create_dict(inds_path,
     else:
         return inds_dict, locs_dict
 
-def batch_eval_winds(expr,
+def batch_eval_wlines(expr,
                      run,
                      model,
                      line_inds,
@@ -1314,8 +1314,8 @@ def read_label_winds(mask, inds_3D):
     return mask[multinds]
 
 def finetune_winds(expr, run,
-                  tr_inds,
-                  ts_inds,
+                  tr_lines,
+                  ts_lines,
                   tb_files=[]):
     """Finetuning a given model, with a given set
     of indices, and then evaluate the resulting
@@ -1338,9 +1338,9 @@ def finetune_winds(expr, run,
         expr.root_dir, str(run), 
         'labels.txt')
     ts_labels = read_label_lines(
-        labels_path, ts_inds)
+        labels_path, ts_lines)
     tr_labels = read_label_lines(
-        labels_path, tr_inds)
+        labels_path, tr_lines)
 
     with tf.Session() as sess:
         # loading the stored weights
@@ -1360,11 +1360,11 @@ def finetune_winds(expr, run,
             """ TensorBaord variables """
             if len(tb_files)>0:
                 # training/loss
-                tr_losses = batch_eval_winds(
+                tr_losses = batch_eval_wlines(
                     expr,
                     run,
                     model,
-                    tr_inds,
+                    tr_lines,
                     'loss',
                     sess)
                 loss_summ = tf.Summary()
@@ -1374,14 +1374,14 @@ def finetune_winds(expr, run,
                 tb_writers[0].add_summary(
                     loss_summ, i)
                 # training/F-measure
-                tr_preds = batch_eval_winds(
+                tr_preds = batch_eval_wlines(
                     expr,
                     run,
                     model,
-                    tr_inds,
+                    tr_lines,
                     'prediction',
                     sess)
-                Fmeas = PW_NN.get_Fmeasure(
+                Fmeas = PW_analyze_results.get_Fmeasure(
                     tr_preds, tr_labels)
                 Fmeas_summ = tf.Summary()
                 Fmeas_summ.value.add(
@@ -1390,11 +1390,11 @@ def finetune_winds(expr, run,
                 tb_writers[0].add_summary(
                     Fmeas_summ, i)
                 # test/loss
-                ts_losses = batch_eval_winds(
+                ts_losses = batch_eval_wlines(
                     expr,
                     run,
                     model,
-                    ts_inds,
+                    ts_lines,
                     'loss',
                     sess)
                 loss_summ = tf.Summary()
@@ -1404,14 +1404,14 @@ def finetune_winds(expr, run,
                 tb_writers[1].add_summary(
                     loss_summ, i)
                 # test/F-measure
-                ts_preds = batch_eval_winds(
+                ts_preds = batch_eval_wlines(
                     expr,
                     run,
                     model,
-                    ts_inds,
+                    ts_lines,
                     'prediction',
                     sess)
-                Fmeas = PW_NN.get_Fmeasure(
+                Fmeas = PW_analyze_results.get_Fmeasure(
                     ts_preds, ts_labels)
                 Fmeas_summ = tf.Summary()
                 Fmeas_summ.value.add(
@@ -1423,23 +1423,23 @@ def finetune_winds(expr, run,
             if i==expr.pars['epochs']:
                 break
 
-            PW_train_epoch_winds(
+            PW_train_epoch_wlines(
                 model,
                 expr,
                 run,
-                tr_inds,
+                tr_lines,
                 sess)
             print('%d'% i, end=',')
 
         # final evaluation over test 
-        ts_preds = batch_eval_winds(
+        ts_preds = batch_eval_wlines(
             expr,
             run,
             model,
-            ts_inds,
+            ts_lines,
             'prediction',
             sess)
-        Fmeas = PW_NN.get_Fmeasure(
+        Fmeas = PW_analyze_results.get_Fmeasure(
             ts_preds, ts_labels)
         
     return Fmeas
@@ -1463,6 +1463,8 @@ def get_SuPix_inds(overseg_img,
         slice_ = overseg_img[:,:,z]
         slice_props = regionprops(slice_)
         slice_labels = np.unique(slice_)
+        if 0 in slice_labels:
+            slice_labels = slice_labels[1:]
 
         # take all superpixels of a slice
         # and store their order in the input
