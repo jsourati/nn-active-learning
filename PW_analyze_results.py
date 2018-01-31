@@ -120,10 +120,12 @@ def get_slice_preds(expr,
     
     return preds, slice_multinds
 
-def visualize_methods(expr,
-                      run,
-                      methods=[],
-                      colors=[]):
+
+def visualize_eval_metrics(expr,
+                           run,
+                           metric,
+                           methods=[],
+                           colors=[]):
     """Visualize performance evaluations
     of a set of methods in an experiment's
     run
@@ -144,11 +146,19 @@ def visualize_methods(expr,
     # maximum number of queries among methods
     M = 0
     for i, method_name in enumerate(methods):
-        # vector of evaluation metrics
-        F = np.loadtxt(os.path.join(
-            run_path, 
-            method_name,
-            'perf_evals.txt'))
+        if metric=='F1':
+            # vector of evaluation metrics
+            F = np.loadtxt(os.path.join(
+                run_path, 
+                method_name,
+                'perf_evals.txt'))
+        elif metric=='Precision':
+            F = get_eval_metrics(
+                expr, run, method_name)[0,:]
+        elif metric=='Recall':
+            F = get_eval_metrics(
+                expr, run, method_name)[1,:]
+
 
         # vector of numbre of observed
         # labels at each query iterations
@@ -168,10 +178,12 @@ def visualize_methods(expr,
             plt.plot(Qsizes, F, 
                      linewidth=2,
                      color=colors[i],
+                     marker = '*',
                      label=method_name)
         else:
             plt.plot(Qsizes, F, 
                      linewidth=2,
+                     marker='*',
                      label=method_name)
 
     # get the full performance 
@@ -186,7 +198,7 @@ def visualize_methods(expr,
             plt.plot([0,M], 
                      [full_F, full_F],
                      linewidth=2,
-                     color=colors[i],
+                     color=colors[-1],
                      label='Pool-training')
         else:
             plt.plot([0,M], 
@@ -195,9 +207,109 @@ def visualize_methods(expr,
                      label='Pool-training')
 
     plt.legend(fontsize=15)
+    plt.xlabel('# Queries', fontsize=15)
+    plt.ylabel(metric, fontsize=15)
     plt.grid()
 
+def get_preds_stats(preds, mask):
+    """Computing different statistics of
+    a set of prediction in comparison with
+    the ground truth labels, such as P, N, 
+    TP, TN, FP, FN
+    
+    At this time, this function deals only
+    with single images (and not a dictionary
+    of multiple images). That is to say, the
+    inputs are two arrays of the same size, 
+    and with binary values (0 or 1)
+    """
+
+    P = float(np.sum(mask>0))
+    N = float(np.sum(mask==0))
+    TP = float(np.sum(np.logical_and(
+        preds>0, mask>0)))
+    FP = float(np.sum(np.logical_and(
+        preds>0, mask==0)))
+    TN = float(np.sum(np.logical_and(
+        preds==0, mask==0)))
+    FN = float(np.sum(np.logical_and(
+        preds==0, mask>0)))
+
+    return P, N, TP, FP, TN, FN
+    
+
+def get_Fmeasure(preds, mask):
+    
+    # computing total TPs, Ps, and
+    # TPFPs (all positives)
+    P  = 0
+    TP = 0
+    TPFP = 0
+    if isinstance(preds, dict):
+        for img_path in list(preds.keys()):
+            ipreds = preds[img_path]
+            imask = np.array(mask[img_path])
+            
+            P  += np.sum(imask>0)
+            TP += np.sum(np.logical_and(
+                ipreds>0, imask>0))
+            TPFP += np.sum(ipreds>0)
+    else:
         
+        P  += np.sum(mask>0)
+        TP += np.sum(np.logical_and(
+            preds>0, mask>0))
+        TPFP += np.sum(preds>0)
+
+    # precision and recall
+    Pr = TP / TPFP
+    Rc = TP / P
+    
+    # F measure
+    return 2/(1/Pr + 1/Rc)
+
+def get_eval_metrics(expr,
+                     run,
+                     method_name):
+    """Computing different evaluation
+    metrics of the predictions in results
+    of running a specific querying
+    method in an experiment's run
+    """
+
+    run_path = os.path.join(
+        expr.root_dir, str(run))
+
+    # load ground truth labels
+    labels_path = os.path.join(
+        run_path, 'labels.txt')
+    test_lines = np.int64(np.loadtxt(
+        os.path.join(run_path, 
+                     'test_lines.txt')))
+    test_labels = PW_AL.read_label_lines(
+        labels_path, test_lines)
+
+    # load predictions
+    preds_path = os.path.join(
+        run_path, 
+        method_name, 
+        'predicts.txt')
+    preds = np.loadtxt(preds_path)
+    
+    iter_cnt = preds.shape[0]
+    Metrs = np.zeros((2, iter_cnt))
+    for i in range(iter_cnt):
+        (P, N, TP, 
+         FP, TN, FN) = get_preds_stats(
+             preds[i,:], test_labels)
         
+        # Precision
+        Metrs[0,i] = TP / (TP+FP)
+        # Recall
+        Metrs[1,i] = TP / P
+
+    return Metrs
+    
+    
         
         

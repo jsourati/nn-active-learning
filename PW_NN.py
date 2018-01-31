@@ -645,32 +645,4 @@ def get_accuracy(preds, labels):
     
     return np.sum(preds==labels) / float(n)
 
-def get_Fmeasure(preds, mask):
-    
-    # computing total TPs, Ps, and
-    # TPFPs (all positives)
-    P  = 0
-    TP = 0
-    TPFP = 0
-    if isinstance(preds, dict):
-        for img_path in list(preds.keys()):
-            ipreds = preds[img_path]
-            imask = np.array(mask[img_path])
-            
-            P  += np.sum(imask>0)
-            TP += np.sum(np.logical_and(
-                ipreds>0, imask>0))
-            TPFP += np.sum(ipreds>0)
-    else:
-        
-        P  += np.sum(mask>0)
-        TP += np.sum(np.logical_and(
-            preds>0, mask>0))
-        TPFP += np.sum(preds>0)
 
-    # precision and recall
-    Pr = TP / TPFP
-    Rc = TP / P
-    
-    # F measure
-    return 2/(1/Pr + 1/Rc)
