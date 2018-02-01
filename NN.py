@@ -141,6 +141,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
+        self.FC_outputs = {}
         with tf.name_scope(name):
             for i in range(len(layer_dict)-1):
                 # extract previous depth
@@ -166,6 +167,13 @@ class CNN(object):
                 
                 self.layer_type += [
                     layer_dict[layer_names[i]][1]]
+
+                if layer_dict[layer_names[i]][1]=='fc':
+                    self.FC_outputs.update(
+                        {layer_names[i]: self.output})
+
+                # keeping FC outputs in a dictionary
+                
             
             self.add_layer(
                 layer_dict[layer_names[-1]],
@@ -174,6 +182,10 @@ class CNN(object):
             
             self.layer_type += [
                 layer_dict[layer_names[-1]][1]]
+
+            # last layer is an FC
+            self.FC_outputs.update(
+                {layer_names[-1]: self.output})
             
             # posterior
             posteriors = tf.nn.softmax(
@@ -577,6 +589,10 @@ class CNN(object):
         
         self.grad_posts = {}
         c = self.output.get_shape()[0].value
+        # in binary classification, get only
+        # gradient of the first class
+        if c==2:
+            c=1
         for j in range(c):
             self.grad_posts.update(
                 {str(j): tf.gradients(
@@ -584,7 +600,6 @@ class CNN(object):
                     gpars, name='score_class_%d'% j)
              }
             )
-
         
     def train_graph_one_epoch(self, expr,
                               train_inds,
