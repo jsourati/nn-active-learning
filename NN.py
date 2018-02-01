@@ -141,7 +141,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.FC_outputs = {}
+        self.FC_inputs = []
         with tf.name_scope(name):
             for i in range(len(layer_dict)-1):
                 # extract previous depth
@@ -166,15 +166,9 @@ class CNN(object):
                     self.feature_layer = self.output
                 
                 self.layer_type += [
-                    layer_dict[layer_names[i]][1]]
-
-                if layer_dict[layer_names[i]][1]=='fc':
-                    self.FC_outputs.update(
-                        {layer_names[i]: self.output})
-
-                # keeping FC outputs in a dictionary
-                
+                    layer_dict[layer_names[i]][1]]                
             
+            # last layer:
             self.add_layer(
                 layer_dict[layer_names[-1]],
                 layer_names[-1],
@@ -182,10 +176,6 @@ class CNN(object):
             
             self.layer_type += [
                 layer_dict[layer_names[-1]][1]]
-
-            # last layer is an FC
-            self.FC_outputs.update(
-                {layer_names[-1]: self.output})
             
             # posterior
             posteriors = tf.nn.softmax(
@@ -235,6 +225,10 @@ class CNN(object):
                               flatten=False)
 
         elif layer_specs[1]=='fc': 
+            # adding the input into the list
+            # of FC_inputs before adding the layer
+            self.FC_inputs += [[name,
+                               self.output]]
             # apply relu activation only if we are NOT 
             # at the last layer 
             if last_layer:
