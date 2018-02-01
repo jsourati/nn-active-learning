@@ -679,6 +679,59 @@ def inequality_cvx_matrix(A, k=None):
         h += [matrix(np.eye(n)/np.float(k))]
     
     return G, h
+
+def FC_grad_norms(model, X, sess):
+    """Computing norm of gradients of the FC 
+    layers with respect to the first class
+    posterior in a model for a given batch of 
+    data
+    """
+    
+    feed_dict = {model.x: X, 
+                 model.keep_prob: 1.}
+    grad_norms = np.zeros((
+        len(model.FC_inputs),
+        X.shape[0]))
+
+    # J = [J_0, J_1] (the posterior)
+    J = sess.run(model.posteriors, 
+                 feed_dict=feed_dict)
+    
+    for i, layer in reversed(list(
+            enumerate(model.FC_inputs))):
+
+        if i==len(model.FC_inputs)-1:
+            # gradient of J0 w.r.t output of 
+            # the last layer when last activation 
+            # is a softmax
+            dJ0_da = np.array([J[0,:]*J[1,:],
+                               -J[0,:]*J[1,:]])
+            # f'(z) of the last layer w.r.t z
+            fp_z = 1
+        else:
+            # gradient of J0 w.r.t output of the
+            # previous layers (using the previous
+            # parameter W)
+            dJ0_da = W.T @ dJ0_dz
+            # f'(z)
+            fp_z = np.array(a>0, dtype=int)
+
+        # inputs to this layer
+        a = sess.run(layer[1],
+                     feed_dict=feed_dict)
+        # norm-2 of the inputs
+        norm_a_2 = np.sum(a**2, axis=0)
+
+        dJ0_dz = fp_z * dJ0_da
+        grad_norms[i,:] = np.sum(
+            dJ0_dz**2,axis=0) * \
+            (norm_a_2 + 1.)
+        
+        # getting W for the next iteration
+        W = model.var_dict[layer[0]][0].eval()
+
+    return grad_norms
+    
     
 def shrink_gradient(grad, method, args=None):
     """Shrinking gradient vectors by summing-up 
