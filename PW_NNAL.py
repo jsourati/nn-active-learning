@@ -31,7 +31,7 @@ def CNN_query(expr,
 
     if method_name=='entropy':
         # posteriors
-        posts = PW_AL.batch_eval_winds(
+        posts = PW_AL.batch_eval_wlines(
             expr,
             run,
             model,
@@ -45,7 +45,7 @@ def CNN_query(expr,
         
     if method_name=='rep-entropy':
         # posteriors
-        posts = PW_AL.batch_eval_winds(
+        posts = PW_AL.batch_eval_wlines(
             expr,
             run,
             model, 
@@ -71,7 +71,7 @@ def CNN_query(expr,
         
         # extract the features for all the pool
         # sel_inds, rem_inds  -->  pool_inds
-        F = PW_AL.batch_eval_winds(
+        F = PW_AL.batch_eval_wlines(
             expr,
             run,
             model,
@@ -111,7 +111,7 @@ def CNN_query(expr,
 
     if method_name=='fi':
         # posteriors
-        posts = PW_AL.batch_eval_winds(
+        posts = PW_AL.batch_eval_wlines(
             expr,
             run,
             model, 
@@ -122,14 +122,25 @@ def CNN_query(expr,
         # vectories everything
         # uncertainty filtering
         B = expr.pars['B']
-        if B < len(posts):
+        if B < len(pool_inds):
+            #gradnorms = PW_AL.FC_gradnorms_wlines(
+            #    expr, run, model, pool_inds, sess)
+            #sel_inds = np.argsort(-gradnorms)[:B]
             sel_inds = np.argsort(
                 np.abs(posts-.5))[:B]
             sel_posts = posts[sel_inds]
         else:
             B = posts.shape[1]
-            sel_posts = posts
+            #sel_posts = posts
             sel_inds = np.arange(B)
+
+        #sel_posts = PW_AL.batch_eval_wlines(
+        #    expr,
+        #    run,
+        #    model, 
+        #    pool_inds[sel_inds],
+        #    'posteriors',
+        #    sess)
 
         # forming A-matrices
         # ------------------
@@ -138,8 +149,8 @@ def CNN_query(expr,
         # weights and bias terms --> number of layers that
         # are considered is obtained after dividing by 2
         A_size = int(
-            len(model.grad_posts['0'])/2)
-        n = len(posts)
+            len(model.grad_posts['1'])/2)
+        n = len(pool_inds)
         c = expr.nclass
 
         A = []
@@ -152,56 +163,74 @@ def CNN_query(expr,
             expr, run, pool_inds[sel_inds])
             
         for i in range(B):
-            X_i = sel_patches[i,:,:,:]
+            X_i = (sel_patches[i,:,:,:]-
+                   expr.pars['stats'][0]) / \
+                expr.pars['stats'][1]
             feed_dict = {
                 model.x: np.expand_dims(X_i,axis=0),
                 model.keep_prob: 1.}
 
             # preparing the poserior
-            # (sel_posts contains single posterior
-            # probability of being masked; we need
-            # full posterior array here)
-            x_post = np.array([1-sel_posts[i], 
-                      sel_posts[i]])
-            # remove zero, or close-to-zero posteriors
-            x_post[x_post<1e-6] = 0.
-            nz_classes = np.where(x_post > 0.)[0]
-            nz_posts = x_post[nz_classes] / np.sum(
-                x_post[nz_classes])
-            # considering only gradients of classes 
-            # with non-zero posteriors
-            nz_classes_grads = {
-                str(cc): model.grad_posts[str(cc)]
-                for cc in nz_classes}
+            # ASSUMOTION: binary classifications
+            x_post = sel_posts[i]
+            # Computing gradients and shrinkage
+            if x_post < 1e-6:
+                x_post = 0.
 
-            # ASSUMOTION: we have few classes here
-            # (probably only two)
-            grads = sess.run(nz_classes_grads,
-                             feed_dict=feed_dict)
-            sel_classes = nz_classes
-            new_posts = nz_posts
+                grads_0 = sess.run(
+                    model.grad_posts['0'],
+                    feed_dict=feed_dict)
 
+                grads_0 =  NNAL_tools.\
+                           shrink_gradient(
+                               grads_0, 'sum')
+                grads_1 = 0.
+
+            elif x_post > 1-1e-6:
+                x_post = 1.
+
+                grads_0 = 0.
+
+                grads_1 = sess.run(
+                    model.grad_posts['1'],
+                    feed_dict=feed_dict)
+
+                grads_1 = NNAL_tools.\
+                          shrink_gradient(
+                              grads_1, 'sum')
+            else:
+                grads_0 = sess.run(
+                    model.grad_posts['0'],
+                    feed_dict=feed_dict)
+                grads_0 =  NNAL_tools.\
+                           shrink_gradient(
+                               grads_0, 'sum')
+
+                grads_1 = sess.run(
+                    model.grad_posts['1'],
+                    feed_dict=feed_dict)
+                grads_1 =  NNAL_tools.\
+                           shrink_gradient(
+                               grads_1, 'sum')
+                
             # the A-matrix
-            Ai = np.zeros((A_size, A_size))
-            for j in range(len(sel_classes)):
-                shrunk_grad = NNAL_tools.shrink_gradient(
-                    grads[str(sel_classes[j])], 'sum')
-                Ai += np.outer(shrunk_grad, 
-                               shrunk_grad) / new_posts[j] \
-                    + np.eye(A_size)*1e-5
-            A += [Ai]
+            Ai = (1.-x_post) * np.outer(grads_0, grads_0) + \
+                 x_post * np.outer(grads_1, grads_1)
+                
+            # final diagonal-loading
+            A += [Ai+ np.eye(A_size)*1e-5]
 
             if not(i%10):
                 print(i, end=',')
-            
+
         # extracting features for pool samples
         # using only few indices of the features
-        F = PW_AL.batch_eval_winds(expr,
-                                   run,
-                                   model,
-                                   pool_inds[sel_inds],
-                                   'feature_layer',
-                                   sess)
+        F = PW_AL.batch_eval_wlines(expr,
+                                    run,
+                                    model,
+                                    pool_inds[sel_inds],
+                                    'feature_layer',
+                                    sess)
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
