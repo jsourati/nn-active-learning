@@ -15,6 +15,7 @@ import os
 
 import PW_analyze_results
 import patch_utils
+import NNAL_tools
 import PW_NNAL
 import PW_NN
 import NNAL
@@ -201,7 +202,7 @@ class Experiment(object):
         #  computing pool statistics
         mu, sigma = get_statistics(
             self, n)
-        self.pars['stats'] = [65., 54.5]
+        self.pars['stats'] = [mu, sigma]
 
         # start a session to do the training
         with tf.Session() as sess:
@@ -211,7 +212,7 @@ class Experiment(object):
                 self.pars['init_weights_path'], sess)
                         
             # get a prediction of the test samples
-            ts_preds = batch_eval_winds(
+            ts_preds = batch_eval_wlines(
                 self,
                 n,
                 model,
@@ -418,7 +419,7 @@ class Experiment(object):
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
-                ts_preds = batch_eval_winds(self,
+                ts_preds = batch_eval_wlines(self,
                                             run,
                                             model,
                                             test_lines,
@@ -995,7 +996,7 @@ def prep_target_indiv(expr,
 
 def load_patches(expr, 
                  run, 
-                 line_inds, 
+                 line_inds,
                  label_flag=False):
     """Loading a set of patches and their
     labels that are specified by the line
@@ -1010,6 +1011,7 @@ def load_patches(expr,
     inds_array = np.zeros(len(line_inds), dtype=int)
 
     for i in range(len(line_inds)):
+        #pdb.set_trace()
         line = linecache.getline(
             inds_path, line_inds[i]).splitlines()[0]
         img_paths += [line.split(',')[0]]
@@ -1201,6 +1203,51 @@ def batch_eval_wlines(expr,
             eval_array[locs] = eval_dict[path]
 
     return eval_array
+
+def FC_gradnorms_wlines(expr,
+                        run,
+                        model,
+                        line_inds,
+                        sess):
+    """Computing norm of gradients of FC layers
+    of a model for a specific line inds (w.r.t.
+    index file of the experiemt's run)
+    
+    The reason that this part is not included
+    inside `batch_eval_wlines()` was that it 
+    has a different procedure of being calculated
+    """
+
+    # preparing batch indices
+    n = len(line_inds)
+    b = expr.pars['ntb']
+    batch_ends = np.arange(0,n,b)
+    if not(batch_ends[-1]==n):
+        batch_ends = np.append(
+            batch_ends, n)
+
+    # going through batches
+    gradnorms = np.zeros(n)
+    for i in range(1,len(batch_ends)):
+        # getting the chunk of indices
+        batch_inds = np.arange(
+            batch_ends[i-1],batch_ends[i])
+        
+        # load patches corresponding to
+        # the current batch of lines
+        X = load_patches(
+            expr, run,
+            line_inds[batch_inds])
+        X = (X - expr.pars['stats'][0]) / \
+            expr.pars['stats'][1]
+        
+        S = NNAL_tools.FC_gradnorms_batch(
+            model, X, sess)
+        gradnorms[batch_inds] = np.sum(
+            S, axis=0)
+        
+    return gradnorms
+
     
 def PW_train_epoch_wlines(model,
                           expr,
@@ -1535,8 +1582,8 @@ def get_multinds(expr, run,
 
 def get_expr_paths(expr):
     """Getting path where the 
-    experiment's image is saved
-    
+    experiment's image and mask is 
+    saved
     """
 
     if expr.pars['data']=='newborn':
@@ -1552,3 +1599,43 @@ def get_expr_paths(expr):
         'indiv_img_ind']]
 
     return img_path, mask_path
+
+def get_expr_data_info(expr, base_dir=None):
+    """Getting path where the 
+    experiment's image and mask is 
+    saved using `inds.txt`
+    
+    If the base directory is given, return 
+    the paths as sub-directory of the 
+    base directory.
+    """
+
+    # path to image
+    img_path = linecache.getline(os.path.join(
+        expr.root_dir,'0/inds.txt'),1).split(',')[0]
+    split_path = img_path.split('/')
+
+    # the item that contains subject ID
+    sub_indic = np.where([
+        'sub' in S for S in split_path])[0][0]
+    sub_id = split_path[sub_indic][8:]
+    
+    # change the root if a sub-directory
+    # is given
+    if base_dir:
+        # the base directory is considered to
+        # the path where all the patiend 
+        # folders lie
+        split_path = [base_dir] + \
+                     split_path[sub_indic:]
+        # reconstruct the path to get the
+        # new path to image 
+        img_path = '/'.join(split_path)
+
+    # preparing path to mask
+    split_path[-2] = '03-ICC'
+    split_path[-1] = split_path[-1][:-12] + \
+                     'ICC.nrrd'
+    mask_path = '/'.join(split_path)
+
+    return sub_id, img_path, mask_path
