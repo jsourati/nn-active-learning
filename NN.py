@@ -585,12 +585,11 @@ class CNN(object):
         c = self.output.get_shape()[0].value
         # in binary classification, get only
         # gradient of the first class
-        if c==2:
-            c=1
+
         for j in range(c):
             self.grad_posts.update(
                 {str(j): tf.gradients(
-                    self.posteriors[j, 0], 
+                    tf.log(self.posteriors[j, 0]),
                     gpars, name='score_class_%d'% j)
              }
             )
