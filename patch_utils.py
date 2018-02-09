@@ -818,7 +818,7 @@ def get_mean_var(batches,
         
     return bin_seq,hist
     
-def generate_rgb_mask(img,mask):
+def generate_rgb_mask(img,mask,mask2):
     """Generating a colored image based
     on a given 1-channel image and 
     a binary maske
@@ -830,7 +830,10 @@ def generate_rgb_mask(img,mask):
         img_rgb*200./img_rgb.max())
     
     # create a mask in one of the channels
-    img_rgb[:,:,0][mask>0] = 250.
+    img_rgb[:,:,0][mask>0] = 200.
+
+    if len(mask2)>0:
+        img_rgb[:,:,1][mask2>0] = 200.
     #tmp = img_rgb[:,:,0]
     #tmp[mask>0] = 100.
     #tmp = img_rgb[:,:,1]

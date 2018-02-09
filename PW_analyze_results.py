@@ -1,3 +1,5 @@
+from skimage.segmentation import find_boundaries
+from skimage.measure import regionprops
 from matplotlib import pyplot as plt
 import numpy as np
 import linecache
@@ -15,7 +17,6 @@ import PW_NNAL
 import PW_NN
 import PW_AL
 import NN
-
 
 
 def get_queries(expr, run, method_name):
@@ -310,6 +311,234 @@ def get_eval_metrics(expr,
 
     return Metrs
     
+def mask_SuPix(overseg_img,
+               SuPix_codes,
+               show_bound=True):
+    """Visualizing some super-pixels in
+    the over-segmentation image where the 
+    boundaries of all the super-pixels
+    are shown, and the selected ones
+    are high-lighted
+    """
+
+    s = overseg_img.shape
+
+    masked_SuPix = np.zeros(
+        s, dtype=bool)
+
+    # get the boundaries if necessary
+    if show_bound:
+        for i in range(s[2]):
+            masked_SuPix[:,:,i
+            ] = find_boundaries(
+                overseg_img[:,:,i])
+
+    # selected superpixels slices
+    slices = np.unique(SuPix_codes[0,:])
+    for j in slices:
+        props = regionprops(
+            overseg_img[:,:,j])
+        SuPix_labels = SuPix_codes[
+            1, SuPix_codes[0,:]==j]
+        n_overseg = len(props)
+        prop_labels = [props[i]['label']
+                      for i in 
+                      range(n_overseg)]
+        # mask the super-pixels
+        for label in SuPix_labels:
+            label_loc = np.where(
+                prop_labels==label)[0][0]
+            # indices of the pixels in 
+            # this super-pixel
+            multinds_2D = props[
+                label_loc]['coords']
+            vol = len(multinds_2D[:,0])
+            multinds_3D = (
+                multinds_2D[:,0],
+                multinds_2D[:,1],
+                np.ones(vol,dtype=int)*j)
+
+            masked_SuPix[multinds_3D] = True
+
+    return masked_SuPix
+            
+
+def full_model_eval(expr,
+                    run,
+                    method_name,
+                    img_path,
+                    mask_path,
+                    slice_inds,
+                    save_dir=None):
+    """Evaluating the last model of a querying
+    method in an experiment's run
+    """
+
+    if len(method_name)>0:
+        method_path = os.path.join(
+            expr.root_dir, str(run),
+            method_name)
+        weights_path = os.path.join(
+            method_path, 'curr_weights.h5')
+    else:
+        weights_path = expr.pars[
+            'init_weights_path']
+
+    mask,_ = nrrd.read(mask_path)
+
+    # make the model ready
+    model = NN.create_model(
+        expr.pars['model_name'],
+        expr.pars['dropout_rate'],
+        expr.nclass,
+        expr.pars['learning_rate'],
+        expr.pars['grad_layers'],
+        expr.pars['train_layers'],
+        expr.pars['optimizer_name'],
+        expr.pars['patch_shape'])
+
+    # start TF session to do the prediction
+    with tf.Session() as sess:
+        print("Loading model with weights %s"% 
+              weights_path)
+        # loading the weights into the model
+        model.initialize_graph(sess)
+        model.load_weights(
+            weights_path, sess)
+
+        # get the predictins
+        slice_evals = full_slice_eval(
+            model,
+            img_path,
+            slice_inds,
+            'axial',
+            expr.pars['patch_shape'],
+            expr.pars['ntb'],
+            expr.pars['stats'],
+            sess)
+        
+    # creating an array with the same
+    # shape as the mask
+    test_mask = mask[:,:,slice_inds]
+    test_evals = np.zeros(test_mask.shape)
+    for i in range(len(slice_inds)):
+        test_evals[:,:,i] = slice_evals[i]
+
+    # computing F-measure
+    P,N,TP,FP,TN,FN = get_preds_stats(
+        test_evals,test_mask)
+    Pr = TP/(TP+FP)
+    Rc = TP/P
+    F1 = 2./(1/Pr+1/Rc)
+
+    # save the results if necessary
+    # this save_path will be created inside the
+    # method's directory
+    if save_dir:
+        if not(os.path.exists(save_dir)):
+            os.mkdir(save_dir)
+
+        # save the results itself
+        np.save(os.path.join(save_dir, 'segs.npy'),
+                test_evals)
+        np.savetxt(os.path.join(save_dir,
+                                'test_slice_inds.txt'),
+                   slice_inds)
+            
+        # save the results, with showing both
+        # model evaluations and mask boundaries
+        img,_ = nrrd.read(img_path)
+        for i in range(len(slice_inds)):
+            slice_ = img[:,:,slice_inds[i]]
+            mask_bound = find_boundaries(
+                mask[:,:,slice_inds[i]])
+            rgb_result = patch_utils.generate_rgb_mask(
+                slice_, test_evals[:,:,i], mask_bound)
+            
+            fig = plt.figure(figsize=(7,7))
+            plt.imshow(rgb_result, cmap='gray')
+            plt.axis('off')
+            plt.savefig(os.path.join(
+                save_dir,'%d.png'% (slice_inds[i])), 
+                        bbox_inches='tight')
+            plt.close(fig)
+
+    return test_evals, F1
+
+
+def full_slice_eval(model,
+                    img_path,
+                    slice_inds,
+                    slice_view,
+                    patch_shape,
+                    batch_size,
+                    stats,
+                    sess,
+                    varname='prediction'):
+    """Generating prediction of all voxels
+    in a few slices of a given image
+    """
     
+    img,_ = nrrd.read(img_path)
+    img_shape = img.shape
+    
+    # preparing 3D indices of the slices
+    # ---------------------------------
+    # first preparing 2D single indices
+    if slice_view=='sagittal':
+        nvox_slice=img_shape[1]*img_shape[2]
+        slice_shape = img[0,:,:].shape
+    elif slice_view=='coronal':
+        nvox_slice=img_shape[0]*img_shape[2]
+        slice_shape = img[:,0,:].shape
+    elif slice_view=='axial':
+        nvox_slice=img_shape[0]*img_shape[1]
+        slice_shape = img[:,:,0].shape        
         
+    inds_2D = np.arange(0, nvox_slice)
+    
+    # single to multiple 2D indices
+    # (common for all slices)
+    multiinds_2D = np.unravel_index(
+        inds_2D, slice_shape)
+    
+    slice_evals = []
+    for i in range(len(slice_inds)):
+        extra_inds = np.ones(
+            len(inds_2D),
+            dtype=int)*slice_inds[i]
+
+        # multi 2D to multi 3D indices
+        if slice_view=='sagittal':
+            multiinds_3D = (extra_inds,) + \
+                              multiinds_2D
+        elif slice_view=='coronal':
+            multiinds_3D = multiinds_2D[:1] +\
+                              (extra_inds,) +\
+                              multiinds_2D[1:]
+        elif slice_view=='axial':
+            multiinds_3D = multiinds_2D +\
+                           (extra_inds,)
         
+        # multi 3D to single 3D indices
+        inds_3D = np.ravel_multi_index(
+            multiinds_3D, img_shape)
+        # get the prediction for this slice
+        inds_dict = {img_path: inds_3D}
+
+        evals = PW_NN.batch_eval(model,
+                                 inds_dict,
+                                 patch_shape,
+                                 batch_size,
+                                 stats,
+                                 sess,
+                                 varname)
+        # prediction map
+        eval_map = np.zeros(slice_shape)
+        eval_map[multiinds_2D] = evals[0][img_path]
+        slice_evals += [eval_map]
+
+        print('%d / %d'% 
+              (i,len(slice_inds)))
+
+    return slice_evals
