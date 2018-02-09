@@ -680,7 +680,7 @@ def inequality_cvx_matrix(A, k=None):
     
     return G, h
 
-def FC_grad_norms(model, X, sess):
+def FC_gradnorms_batch(model, X, sess):
     """Computing norm of gradients of the FC 
     layers with respect to the first class
     posterior in a model for a given batch of 
@@ -731,7 +731,7 @@ def FC_grad_norms(model, X, sess):
         W = model.var_dict[layer[0]][0].eval()
 
     return grad_norms
-    
+
     
 def shrink_gradient(grad, method, args=None):
     """Shrinking gradient vectors by summing-up 

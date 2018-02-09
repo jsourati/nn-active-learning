@@ -552,13 +552,13 @@ class SuPixExperiment(Experiment):
     """
     
     def __init__(self, root_dir, 
-                 pars=None):
+                 pars={}):
         """Constructor
         """
         
         Experiment.__init__(self, 
                             root_dir,
-                            pars={})
+                            pars)
         
     def add_run(self):
         """Adding a run to the
@@ -569,12 +569,12 @@ class SuPixExperiment(Experiment):
         nrun = len(self.get_runs())-1
         
         # now preparing the super-pixels
-        pool_inds = np.int32(np.loadtxt(
+        pool_lines = np.int32(np.loadtxt(
             os.path.join(self.root_dir,
                          str(nrun),
-                         'pool_inds.txt')))
+                         'init_pool_lines.txt')))
         pool_multinds = get_multinds(
-            self, nrun, pool_inds)
+            self, nrun, pool_lines)
         pool_slices = np.unique(pool_multinds[2])
 
         img_path,_ = get_expr_paths(self)
@@ -633,7 +633,7 @@ class SuPixExperiment(Experiment):
         nPix = 0   # labeled pixels
         Q_path = os.path.join(method_path,
                               'queries')
-        Q_files = os.listdir(Q_path)
+        Q_files = []#os.listdir(Q_path)
         for f in Q_files:
             qSuPix = np.int32(np.loadtxt(
                 os.path.join(Q_path, f)))
@@ -661,11 +661,13 @@ class SuPixExperiment(Experiment):
             train_inds = np.array([],
                                   dtype=int)
 
+        nPix = len(train_inds)
         pool_lines = np.int32(
             np.loadtxt(os.path.join(
                 method_path, 'pool_lines.txt')))
         # for the pool, get the pixel indices
-        img_path,mask_path = get_expr_paths(self)
+        _,img_path,mask_path = get_expr_data_info(
+            self)
         pool_inds,pool_locs = create_dict(
             inds_path, pool_lines)
         pool_inds = pool_inds[img_path]
@@ -743,11 +745,12 @@ class SuPixExperiment(Experiment):
                 """ Updating the Indices """
                 pool_set = set(pool_inds)
                 pool_lines = list(pool_lines)
+                new_train_inds = []
                 for i, SPinds in enumerate(qSuPix_inds):
                     # updating training indices
-                    train_inds = np.append(train_inds,
-                                           SPinds)
-                    # zeroing out the  superpixel
+                    #train_inds = np.append(train_inds,
+                    #                       SPinds)
+                    # zeroing out the superpixel
                     tmp = overseg_img[:,:,qSuPix[0,i]]
                     newPix += np.sum(tmp==qSuPix[1,i])
                     tmp[tmp==qSuPix[1,i]] = 0
@@ -758,6 +761,7 @@ class SuPixExperiment(Experiment):
                     SP_gridpts = set.intersection(
                         set(SPinds), pool_set)
                     for pts in SP_gridpts:
+                        new_train_inds += [pts]
                         # find location of this point;
                         # this indiex is the same for 
                         # pixel and line indices as
@@ -770,7 +774,11 @@ class SuPixExperiment(Experiment):
                         del pool_lines[indic]
 
                 pool_lines = np.array(pool_lines)
-                
+                train_inds = np.append(train_inds,
+                                       new_train_inds)
+
+                newPix = len(train_inds)
+
                 """ Updating the model """
                 labels = read_label_winds(
                     mask, train_inds)
@@ -789,7 +797,7 @@ class SuPixExperiment(Experiment):
                     print('%d'% i, end=',')
 
                 """ Evluating the updated model """
-                ts_preds = batch_eval_winds(self,
+                ts_preds = batch_eval_wlines(self,
                                             run,
                                             model,
                                             test_lines,
@@ -840,6 +848,11 @@ class SuPixExperiment(Experiment):
                 np.savetxt(os.path.join(
                     method_path, 'queries',
                     '%d.txt'% iter_cnt), qSuPix,
+                           fmt='%d')
+                np.savetxt(os.path.join(
+                    method_path, 'queries',
+                    'inds_%d.txt'% iter_cnt), 
+                           list(train_inds),
                            fmt='%d')
                 # update the loop variables
                 iter_cnt += 1
