@@ -202,7 +202,8 @@ class Experiment(object):
         #  computing pool statistics
         mu, sigma = get_statistics(
             self, n)
-        self.pars['stats'] = [mu, sigma]
+        #self.pars['stats'] = [mu, sigma] #[65., 54.5]
+        #self.save_parameters(self.pars)
 
         # start a session to do the training
         with tf.Session() as sess:
@@ -479,31 +480,50 @@ class Experiment(object):
                         method_path,
                         'curr_weights.h5'))
 
-    def finetune_wpool(self, run, tb_files=[]):
+    def finetune_wpool(self, run, 
+                       save_names=[],
+                       train_lines_path=[],
+                       full=False,
+                       tb_files=[]):
         """Finetuning the initial model of an
         experiment with all the pool samples of
         a given run
+        
+        
         """
         
-        pool_lines = np.int32(np.loadtxt(
-            os.path.join(self.root_dir,str(run),
-                         'pool_lines.txt')))
+        if len(train_lines_path)>0:
+            train_lines = np.int32(np.loadtxt(
+                train_lines_path))
+        else:
+            train_lines = np.int32(np.loadtxt(
+                os.path.join(self.root_dir,str(run),
+                             'init_pool_lines.txt')))
+
         test_lines = np.int32(np.loadtxt(
             os.path.join(self.root_dir,str(run),
                          'test_lines.txt')))
         
-        pool_Fmeas = finetune_winds(
+        pool_Fmeas, model = finetune_winds(
             self, run,
-            pool_lines,
+            train_lines,
             test_lines,
             tb_files)
         
-        print('Pool  F-measure: %f'% pool_Fmeas)
-        save_path = os.path.join(
-            self.root_dir, str(run),
-            'pooltrain_eval.txt')
-        with open(save_path, 'w') as f:
-            f.write('%f\n'% pool_Fmeas)
+        print('Final F-measure: %f'% pool_Fmeas)
+        if save_names:
+            save_path = os.path.join(
+                self.root_dir, str(run),
+                '%s.txt'% (save_names[0]))
+            with open(save_path, 'w') as f:
+                f.write('%f\n'% pool_Fmeas)
+                
+            save_path = os.path.join(
+                self.root_dir, str(run),
+                '%s.txt'% (save_names[1]))
+
+            model.save_weights(save_path)
+
 
     def load_results(self, run):
         """Loading performance evaluations
@@ -1502,7 +1522,7 @@ def finetune_winds(expr, run,
         Fmeas = PW_analyze_results.get_Fmeasure(
             ts_preds, ts_labels)
         
-    return Fmeas
+    return Fmeas, model
 
 def get_SuPix_inds(overseg_img,
                    SuPix_codes):
