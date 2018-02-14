@@ -1,5 +1,10 @@
 from skimage.segmentation import find_boundaries
 from skimage.measure import regionprops
+
+from pydensecrf.utils import create_pairwise_bilateral
+from pydensecrf.utils import create_pairwise_gaussian
+import pydensecrf.densecrf as dcrf
+
 from matplotlib import pyplot as plt
 import numpy as np
 import linecache
@@ -363,6 +368,236 @@ def mask_SuPix(overseg_img,
     return masked_SuPix
             
 
+def full_model_probs(expr,
+                     run,
+                     method_name,
+                     img_path,
+                     slice_inds):
+    """Computing the probability maps of slices
+    of an image that is given through its path
+    
+    If `method_name` is an empty list, then this
+    function loads the weights to which the 
+    parameter `expr.pars['init_weights_path]`
+    is referring.
+    """
+
+    if len(method_name)>0:
+        method_path = os.path.join(
+            expr.root_dir, str(run),
+            method_name)
+        weights_path = os.path.join(
+            method_path, 'curr_weights.h5')
+    else:
+        weights_path = expr.pars[
+            'init_weights_path']
+
+
+    # make the model ready
+    model = NN.create_model(
+        expr.pars['model_name'],
+        expr.pars['dropout_rate'],
+        expr.nclass,
+        expr.pars['learning_rate'],
+        expr.pars['grad_layers'],
+        expr.pars['train_layers'],
+        expr.pars['optimizer_name'],
+        expr.pars['patch_shape'])
+
+    # start TF session to do the prediction
+    with tf.Session() as sess:
+        print("Loading model with weights %s"% 
+              weights_path)
+        # loading the weights into the model
+        model.initialize_graph(sess)
+        model.load_weights(
+            weights_path, sess)
+
+        # get the predictins
+        slice_evals = full_slice_eval(
+            model,
+            img_path,
+            slice_inds,
+            'axial',
+            expr.pars['patch_shape'],
+            expr.pars['ntb'],
+            expr.pars['stats'],
+            sess,
+            'posteriors')
+        
+    return slice_evals
+
+def full_model_pred_DCRF(expr,
+                         run,
+                         method_name,
+                         img_path,
+                         mask_path,
+                         slice_inds,
+                         save_dir=None):
+    """Generating  predictions of a model
+    that is post-processed by Dense-CRF, over 
+    particular slices of an image
+
+    If `method_name` is given, the last model that
+    is saved for that method will be used (in the
+    given experiment's run)
+    
+    If `method_name` is an empty list, then this
+    function loads the weights to which the 
+    parameter `expr.pars['init_weights_path]`
+    is referring.
+    """
+
+    img,_ = nrrd.read(img_path)
+    mask,_ = nrrd.read(mask_path)
+
+    DCRF_preds = np.zeros(img.shape)
+
+    if len(method_name)>0:
+        method_path = os.path.join(
+            expr.root_dir, str(run),
+            method_name)
+        weights_path = os.path.join(
+            method_path, 'curr_weights.h5')
+    else:
+        weights_path = expr.pars[
+            'init_weights_path']
+
+
+    # make the model ready
+    model = NN.create_model(
+        expr.pars['model_name'],
+        expr.pars['dropout_rate'],
+        expr.nclass,
+        expr.pars['learning_rate'],
+        expr.pars['grad_layers'],
+        expr.pars['train_layers'],
+        expr.pars['optimizer_name'],
+        expr.pars['patch_shape'])
+
+    # start TF session to do the prediction
+    with tf.Session() as sess:
+        print("Loading model with weights %s"% 
+              weights_path)
+        # loading the weights into the model
+        model.initialize_graph(sess)
+        model.load_weights(
+            weights_path, sess)
+        sess.graph.finalize()
+
+        for i, ind in enumerate(slice_inds):
+            # get the posteriors
+            slice_posts = full_slice_eval(
+                model,
+                img_path,
+                [ind],
+                'axial',
+                expr.pars['patch_shape'],
+                expr.pars['ntb'],
+                expr.pars['stats'],
+                sess,
+                'posteriors')
+
+            slice_dcrf = DCRF_postprocess_2D(
+                slice_posts[0],
+                img[:,:,ind])
+            DCRF_preds[:,:,ind] = slice_dcrf
+
+            print('%d / %d'% 
+                  (i, len(slice_inds)-1))
+
+            if save_dir:
+                # save the results, showing 
+                # predictions on mask boundaries
+                mask_bound = find_boundaries(
+                    mask[:,:,ind])
+                rgb_result = patch_utils.\
+                             generate_rgb_mask(
+                                 img[:,:,ind], 
+                                 slice_dcrf,
+                                 mask_bound)
+
+                fig = plt.figure(figsize=(7,7))
+                plt.imshow(rgb_result, cmap='gray')
+                plt.axis('off')
+                plt.savefig(os.path.join(
+                    save_dir,'%d.png'% 
+                    (slice_inds[i])), 
+                            bbox_inches='tight')
+                plt.close(fig)
+
+    
+    if save_dir:
+        nrrd.write(os.path.join(
+            save_dir, 'segs.nrrd'),
+                   DCRF_preds)
+
+    # computing F-measure
+    P,N,TP,FP,TN,FN = get_preds_stats(
+        DCRF_preds[:,:,slice_inds],
+        mask[:,:,slice_inds])
+    Pr = TP/(TP+FP)
+    Rc = TP/P
+    F1 = 2./(1/Pr+1/Rc)
+
+    return DCRF_preds, F1
+
+
+def DCRF_postprocess_2D(post_map, 
+                        img_slice):
+    """Dense-CRF applying on a 2D 
+    binary posterior map
+    """
+
+    d = dcrf.DenseCRF2D(img_slice.shape[0], 
+                        img_slice.shape[1], 
+                        2)
+    # unary potentials
+    post_map[post_map==0] += 1e-10
+    post_map = -np.log(post_map)
+    U = np.float32(np.array([1-post_map,
+                             post_map]))
+    U = U.reshape((2,-1))
+    d.setUnaryEnergy(U)
+
+    # pairwise potentials
+    # ------------------
+    # smoothness kernel (considering only
+    # the spatial features)
+    feats = create_pairwise_gaussian(
+        sdims=(1, 1), 
+        shape=img_slice.shape)
+
+    d.addPairwiseEnergy(
+        feats, compat=25,
+        kernel=dcrf.DIAG_KERNEL,
+        normalization=dcrf.NORMALIZE_SYMMETRIC)
+
+    # appearance kernel (considering spatial
+    # and intensity features)
+    feats = create_pairwise_bilateral(
+        sdims=(10, 10), 
+        schan=(20),
+        img=img_slice, 
+        chdim=-1)
+
+    d.addPairwiseEnergy(
+        feats, compat=25,
+        kernel=dcrf.DIAG_KERNEL,
+        normalization=dcrf.NORMALIZE_SYMMETRIC)
+
+    # D-CRF's inference
+    niter = 5
+    Q = d.inference(niter)
+
+    # maximum probability as the label
+    MAP = np.argmax(Q, axis=0).reshape(
+        (img_slice.shape[0], 
+         img_slice.shape[1]))
+
+    return MAP
+
+
 def full_model_eval(expr,
                     run,
                     method_name,
@@ -538,7 +773,7 @@ def full_slice_eval(model,
         eval_map[multiinds_2D] = evals[0][img_path]
         slice_evals += [eval_map]
 
-        print('%d / %d'% 
-              (i,len(slice_inds)))
+        #print('%d / %d'% 
+        #      (i,len(slice_inds)))
 
     return slice_evals
