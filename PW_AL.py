@@ -1672,3 +1672,50 @@ def get_expr_data_info(expr, base_dir=None):
     mask_path = '/'.join(split_path)
 
     return sub_id, img_path, mask_path
+
+
+def sequential_AL(base_expr,
+                  target_img_inds,
+                  seq_base_dir):
+    """Doing sequential active learning starting
+    from the model in the last iteration of the
+    FI-based querying iterations, and repeat the
+    querying iterations on another images; 
+    this sequence will be repeated for multiple
+    images and the results will be saved in the
+    corresponding experiments' folders
+
+    For now, it is mostly compatible with adults
+    data set.
+    """
+
+    #base_ind = base_expr.pars['indiv_img_ind']
+
+    # For each target image, create a new
+    # experiment to do the sequential AL
+    pars = copy.deepcopy(base_expr.pars)
+    prev_expr_dir = base_expr.root_dir
+    for i, ind in enumerate(target_img_inds):
+        print('Running AL of experiment '+
+              '%s on image %s'% 
+              (prev_expr_dir, ind))
+        
+        # creating a new experiment
+        pars['indiv_img_ind'] = ind
+        pars['init_weights_path'] = os.path.join(
+            prev_expr_dir, '0/fi/curr_weights.h5')
+        
+        root_dir = os.path.join(
+            seq_base_dir, 
+            'N1017_%d'% (ind))
+        E = Experiment(root_dir, pars)
+        E.add_run()
+
+        # starting the FI-based iteration
+        E.add_method('fi',0)
+        E.run_method('fi', 0, 1500)
+        
+        # when it is done, modify the path
+        # to the previous experiment
+        prev_expr_dir = E.root_dir
+        
