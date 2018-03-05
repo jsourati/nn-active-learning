@@ -1300,6 +1300,21 @@ def PW_train_epoch_wlines(model,
     inds_dict, labels_dict, locs_dict = create_dict(
         inds_path, line_inds, labels_path)
     
+    # convert the paths to the ones used
+    # in Wombat
+    if True:
+        base_dir = '/common/data/raw/Hakim/For_Christine'+\
+                   '/Mrakotsky_IBD_Brain/Processed/'
+        
+        old_path = list(inds_dict.keys())[0]
+        new_path = base_dir + old_path[31:]
+        c_inds_dict = {
+            new_path: inds_dict[old_path]}
+        c_labels_dict = {
+            new_path: labels_dict[old_path]}
+        inds_dict = c_inds_dict
+        labels_dict = c_labels_dict
+
     # now that we have the index- and labels-
     # dictionaries, we can feed it to 
     # PW_NN.PW_train_epoch()
@@ -1523,6 +1538,81 @@ def finetune_winds(expr, run,
             ts_preds, ts_labels)
         
     return Fmeas, model
+
+def wholepool_train(expr_names,
+                    img_addrs,
+                    mask_addrs,
+                    weights_path):
+    """Finetuning a given model, with a given set
+    of indices, and then evaluate the resulting
+    model on a set of test samples
+     """
+
+    # preparing the model
+    root_dir = expr_names[0]
+    E = Experiment(root_dir)
+    E.load_parameters()
+    model = NN.create_model(
+        E.pars['model_name'],
+        E.pars['dropout_rate'],
+        E.nclass,
+        E.pars['learning_rate'],
+        E.pars['grad_layers'],
+        E.pars['train_layers'],
+        E.pars['optimizer_name'],
+        E.pars['patch_shape'])
+
+    with tf.Session() as sess:
+        model.initialize_graph(sess)
+        model.add_assign_ops(weights_path)
+
+        sess.graph.finalize
+
+        for root_dir in expr_names:
+            # initializing 
+            model.perform_assign_ops(sess)
+
+            # preparing whole-pool training
+            print(root_dir)
+            E = Experiment(root_dir)
+            E.load_parameters()
+            labels_path = os.path.join(
+                E.root_dir,
+                '0/labels.txt')
+
+            pool_lines = np.int32(np.loadtxt(os.path.join(
+                E.root_dir, '0/init_pool_lines.txt')))
+
+            for i in range(60):
+                PW_train_epoch_wlines(
+                    model,
+                    E,
+                    0,
+                    pool_lines,
+                    sess)
+                #print('%d'% i, end=',')
+
+            save_dir = os.path.join(
+                E.root_dir, '0/wholepool')
+            if not(os.path.exists(save_dir)):
+                os.mkdir(save_dir)
+
+            model.save_weights(os.path.join(
+                save_dir,
+                'final_weights.h5'))
+
+            print('Predicting...', end=' ')
+            img_path = img_addrs[
+                E.pars['indiv_img_ind']]
+            mask_path = mask_addrs[
+                E.pars['indiv_img_ind']]
+            slice_inds = np.arange(
+                1, img.shape[2], 2)
+            _,F1 = PW_analyze_results.full_model_eval(
+                E, model, sess, img_path, mask_path,
+                slice_inds, save_dir)
+            print('F1: %.5f'% F1)
+
 
 def get_SuPix_inds(overseg_img,
                    SuPix_codes):
