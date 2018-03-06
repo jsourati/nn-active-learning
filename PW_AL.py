@@ -55,7 +55,13 @@ class Experiment(object):
         # if there are parameter given, write them
         # into a text file to be used later
         if len(pars)>0:
-            self.save_parameters(pars)
+            if os.path.exists(os.path.join(
+                    root_dir, 
+                    'parameters.txt')):
+                print("Some parameters already exist")
+            else:
+                self.save_parameters(pars)
+
 
     def modify_parameters(self, mod_dict):
         """Modifying parameters of a given 
@@ -138,52 +144,27 @@ class Experiment(object):
                           os.path.join(self.root_dir, str(i)))
                 
 
-    def add_run(self):
+    def prep_data(self):
         """Adding a run to this experiment
         
         Each run will have its pool and test
         image indices, which will be sampled
         to get the pool and test data sets
         """
-        
-        # create a folder for the new run
-        curr_runs = self.get_runs()
-        # when organized (from 0 to n-1), name of the 
-        # new folder could be `n`
-        n = len(curr_runs)
-        run_path = os.path.join(self.root_dir, str(n))
-        os.mkdir(run_path)
-        
+                
         if not(hasattr(self, 'pars')):
             self.load_parameters()
         
         # preparing the indices
         # -----------------------
-        inds_path = os.path.join(
-            run_path,'inds.txt')
-        labels_path = os.path.join(
-            run_path,'labels.txt')
-        # OUT-DATED because of adding types_dict to
-        # the Experiment.generate_sample()
-        #pool_inds, test_inds = newborn_prep_dat(
-        #    img_addrs, mask_addrs,
-        #    self.pars['pool_img_inds'],
-        #    self.pars['test_img_inds'],
-        #    self.pars['pool_ratio'],
-        #    self.pars['test_ratio'],
-        #    inds_path, labels_path,
-        #    self.pars['mask_ratio'])
-        pool_lines, test_lines, sub_id = prep_target_indiv(
-            self,
-            inds_path, 
-            labels_path)
-        self.subject_id = sub_id
+        prep_AL_data(self)
         
-        # saving indices into the run's folder
-        np.savetxt('%s/test_lines.txt'% run_path, 
-                   test_lines, fmt='%d')
-        np.savetxt('%s/init_pool_lines.txt'% run_path, 
-                   pool_lines, fmt='%d')
+        # get the test indices for initial
+        # performance evaluation
+        test_inds = read_ints(os.path.join(
+            self.root_dir,'test_inds.txt'))
+        test_labels = read_ints(os.path.join(
+            self.root_dir,'test_labels.txt'))
 
         # evaluating the initial performance
         # -------------------------
@@ -200,8 +181,6 @@ class Experiment(object):
             self.pars['patch_shape'])
 
         #  computing pool statistics
-        mu, sigma = get_statistics(
-            self, n)
         #self.pars['stats'] = [mu, sigma] #[65., 54.5]
         #self.save_parameters(self.pars)
 
@@ -209,29 +188,31 @@ class Experiment(object):
         with tf.Session() as sess:
             # training from initial training data
             model.initialize_graph(sess)
-            model.load_weights(
-                self.pars['init_weights_path'], sess)
+            if 'init_weights_path' in self.pars:
+                model.load_weights(
+                    self.pars['init_weights_path'], 
+                    sess)
                         
             # get a prediction of the test samples
-            ts_preds = batch_eval_wlines(
-                self,
-                n,
+            test_data = self.pars['img_path']+[test_inds]
+            test_preds = PW_NN.batch_eval(
                 model,
-                test_lines,
-                'prediction',
-                sess)
+                sess,
+                ts_data,
+                self.pars['patch_shape'],
+                self.pars['ntb'],
+                self.pars['stats'],
+                'prediction')[0]
                 
             # save the predictions 
-            np.savetxt(os.path.join(run_path, 
+            np.savetxt(os.path.join(self.root_dir, 
                                     'init_predicts.txt'), 
-                       np.expand_dims(ts_preds,axis=0),
+                       np.expand_dims(test_preds,axis=0),
                        fmt='%d')
             
             # initial, performance evaluation
-            ts_labels = read_label_lines(
-                labels_path, test_lines)
             Fmeas = PW_analyze_results.get_Fmeasure(
-                ts_preds, ts_labels)
+                test_preds, test_labels)
             print("Initial F-measure: %f"% Fmeas)
             perf_eval_path = os.path.join(
                 run_path, 'init_perf_eval.txt')
@@ -243,18 +224,17 @@ class Experiment(object):
         """
         
         # check if the method already exists in this run
-        run_path = os.path.join(self.root_dir, str(run))
-        if os.path.exists(os.path.join(run_path, 
+        if os.path.exists(os.path.join(self.root_dir, 
                                        method_name)):
             print("This method already exists in run %s"% run)
             print("Nothing else to do..")
             return
         
         # create a directory for the method
-        os.mkdir(os.path.join(run_path,
+        os.mkdir(os.path.join(self.root_dir,
                               method_name))
         # create a directory for the queries
-        os.mkdir(os.path.join(run_path,
+        os.mkdir(os.path.join(self.root_dir,
                               method_name,
                               'queries'))
 
@@ -263,14 +243,19 @@ class Experiment(object):
         # init_predicts        -->   predicts
         # `init_weights_path`  -->   curr_weights.h5
         # init_perf_eval       -->   perf_evals
-        method_path = os.path.join(run_path, method_name)
+        method_path = os.path.join(self.root_dir, 
+                                   method_name)
 
         shutil.copy(
-            os.path.join(run_path,'init_pool_lines.txt'),
-            os.path.join(method_path,'pool_lines.txt')
+            os.path.join(self.root_dir,'init_pool_inds.txt'),
+            os.path.join(method_path,'pool_inds.txt')
             )
         shutil.copy(
-            os.path.join(run_path,'init_predicts.txt'),
+            os.path.join(self.root_dir,'init_pool_labels.txt'),
+            os.path.join(method_path,'pool_labels.txt')
+            )
+        shutil.copy(
+            os.path.join(self.root_dir,'init_predicts.txt'),
             os.path.join(method_path,'predicts.txt')
             )
         shutil.copy(
@@ -278,7 +263,7 @@ class Experiment(object):
             os.path.join(method_path,'curr_weights.h5')
             )
         shutil.copy(
-            os.path.join(run_path,'init_perf_eval.txt'),
+            os.path.join(self.root_dir,'init_perf_eval.txt'),
             os.path.join(method_path,'perf_evals.txt')
             )
         
@@ -287,8 +272,7 @@ class Experiment(object):
         given number of queries are drawn
         """
         
-        run_path = os.path.join(self.root_dir,
-                                str(run))
+        run_path = self.root_dir
         method_path = os.path.join(run_path, 
                                    method_name)
         labels_path = os.path.join(run_path, 
@@ -311,6 +295,11 @@ class Experiment(object):
             np.loadtxt(os.path.join(
                 run_path, 'test_lines.txt')
                    ))
+        inds_path = os.path.join(self.root_dir,
+                                 'inds.txt')
+        test_inds = read_int_lines(
+            inds_path, test_lines)
+
         train_path = os.path.join(
             method_path, 'train_lines.txt')
         if os.path.exists(train_path):
@@ -889,90 +878,8 @@ class SuPixExperiment(Experiment):
                     os.path.join(
                         method_path,
                         'curr_weights.h5'))
-            
 
-def target_prep_dat(img_addrs, mask_addrs,
-                    pool_imgs, test_imgs, 
-                    pool_ratio, test_ratio,
-                    dat_opath, label_opath,
-                    mask_ratio):
-    """Preparing test and pool image data
-    sets, by giving separate images for 
-    test-sampling and pool-sampling
-    
-    The image indices are in terms of the
-    newborn data
-    
-    """
-    
-    npool_img = len(pool_imgs)
-    ntest_img = len(test_imgs)
-
-    # data set
-    sel_img_addrs = [img_addrs[i] 
-                for i in pool_imgs+test_imgs]
-    sel_mask_addrs = [mask_addrs[i] 
-                for i in pool_imgs+test_imgs]
-
-    D = patch_utils.PatchBinaryData(
-        sel_img_addrs, sel_mask_addrs)
-
-    # sampling from test images
-    pinds_dict, pmask_dict = D.generate_samples(
-        np.arange(npool_img), test_ratio, 
-        mask_ratio, 'axial')
-
-    # sampling from pool images
-    tsinds_dict, tsmask_dict = D.generate_samples(
-        np.arange(npool_img, npool_img+ntest_img), 
-        pool_ratio, mask_ratio, 'axial')
-    
-    """write the text files"""
-    cnt = 0
-    # pool
-    with open(dat_opath,'a') as f, open(
-            label_opath,'a') as g:
-        for path in list(pinds_dict.keys()):
-            for i in range(len(pinds_dict[path])):
-                # determining type of this sample
-                stype,_ = patch_utils.get_sample_type(
-                    pool_ratio, i)
-                # data file
-                f.write(
-                    '%s, %d, %s\n'
-                    % (path,
-                       pinds_dict[path][i],
-                       stype))
-                # label file
-                g.write(
-                    '%d\n'%(pmask_dict[path][i]))
-                cnt += 1
-    npool = cnt
-
-    # test
-    with open(dat_opath,'a') as f, open(
-            label_opath,'a') as g:
-        for path in list(tsinds_dict.keys()):
-            for i in range(len(tsinds_dict[path])):
-                # determining type of this sample
-                stype,_ = patch_utils.get_sample_type(
-                    test_ratio, i)
-                # data file
-                f.write(
-                    '%s, %d, %s\n'
-                    % (path,
-                       tsinds_dict[path][i],
-                       stype))
-                # label file
-                g.write(
-                    '%d\n'%(tsmask_dict[path][i]))
-                cnt += 1
-    
-    return np.arange(npool)+1, np.arange(npool,cnt)+1
-
-def prep_target_indiv(expr,
-                      dat_opath, 
-                      label_opath):
+def prep_AL_data(expr):
     """Preparing the target data set, including
     unlabeled pool and test samples for running
     an active learning experiment, based on a 
@@ -983,49 +890,53 @@ def prep_target_indiv(expr,
     draw samples from the even slices for the pool,
     and from the odd slices for the test data set.
     """
-    
-    if expr.pars['data']=='adults':
-        img_addrs, mask_addrs = patch_utils.extract_Hakims_data_path()
-    elif expr.pars['data']=='newborn':
-        img_addrs, mask_addrs = patch_utils.extract_newborn_data_path()
 
-    img_addr = img_addrs[expr.pars['indiv_img_ind']]
-    mask_addr = mask_addrs[expr.pars['indiv_img_ind']]
-    subject_id = img_addr.split('/')[6]
+    # assuming that all image modalities have the
+    # same shape, we use the first modality to
+    # prepare grid indices
+    img_addr = expr.pars['img_path'][0]
+    mask_addr = expr.pars['mask_path']
     
-    D = patch_utils.PatchBinaryData(
-        [img_addr], [mask_addr])
-
     """Sampling from the slices"""
     # grid sampling
-    inds_dict, mask_dict, types_dict = patch_utils.generate_grid_samples(
-        img_addr, mask_addr, 
+    inds, labels, types = patch_utils.generate_grid_samples(
+        img_addr, mask_addr,
         expr.pars['grid_spacing'], 
         expr.pars['grid_offset'])
 
     # divide slices
     img,_ = nrrd.read(img_addr)
-    multinds = np.unravel_index(inds_dict[img_addr],
-                                img.shape)
+    multinds = np.unravel_index(inds, img.shape)
     # take the even slices
     even_slices = np.where(multinds[2]%2==0)[0]
+    pool_inds = np.array(inds)[even_slices]
+    pool_labels = np.array(labels)[even_slices]
+
     odd_slices = np.where(multinds[2]%2==1)[0]
+    test_inds = np.array(inds)[odd_slices]
+    test_labels = np.array(labels)[odd_slices]
     
     """write the text files"""
-    with open(dat_opath,'w') as f, open(
-            label_opath,'w') as g:
-        for i in range(len(inds_dict[img_addr])):
-            # data file
-            f.write(
-                '%s, %d, %s\n'
-                % (img_addr,
-                   inds_dict[img_addr][i],
-                   types_dict[img_addr][i]))
-            # label file
-            g.write(
-                '%d\n'%(mask_dict[img_addr][i]))
+    inds_path = os.path.join(
+        expr.root_dir, 'inds.txt')
+    #types_path = os.path.join(
+    #    expr.root_dir, 'types.txt')
+    labels_path = os.path.join(
+        expr.root_dir, 'labels.txt')
+    
+    np.savetxt(os.path.join(
+        expr.root_dir, 'init_pool_inds.txt'),
+               pool_inds, fmt='%d')
+    np.savetxt(os.path.join(
+        expr.root_dir, 'init_pool_labels.txt'),
+               pool_labels, fmt='%d')
+    np.savetxt(os.path.join(
+        expr.root_dir, 'test_inds.txt'),
+               test_inds, fmt='%d')
+    np.savetxt(os.path.join(
+        expr.root_dir, 'test_labels.txt'),
+               test_labels, fmt='%d')
 
-    return even_slices+1, odd_slices+1, subject_id
 
 def load_patches(expr, 
                  run, 
@@ -1382,20 +1293,21 @@ def PW_train_epoch_winds_wconf(model,
         sess)
     
 
-def read_label_lines(labels_path, line_inds):
-    """Reading several lines of a label
-    file, which is stored in a format consistent
-    with that of pw-experiment run's labels.txt
+def read_ints(file_path):
+    """Reading several lines of a text
+    file containing integer values (either
+    sample indices or 
     """
     
-    labels_array = np.zeros(len(line_inds),
-                            dtype=int)
-    for i in range(len(line_inds)):
-        labels_array[i] = int(linecache.getline(
-            labels_path, 
-            line_inds[i]).splitlines()[0])
+    ints_array = np.array(linecache.getlines(
+        file_path))
+
+    # remove \n from the lines and 
+    # conveting strings to integers
+    ints_array = [int(L[:-1]) for 
+                  L in ints_array]
         
-    return labels_array
+    return ints_array
 
 def read_label_winds(mask, inds_3D):
     """Reading labels of several pixels
