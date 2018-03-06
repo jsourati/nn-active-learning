@@ -173,6 +173,10 @@ class CNN(object):
                 layer_dict[layer_names[-1]],
                 layer_names[-1],
                 last_layer=True)
+
+            if len(layer_dict)-1 in self.dropout_layers:
+                self.output = tf.nn.dropout(
+                    self.output, self.keep_prob)
             
             self.layer_type += [
                 layer_dict[layer_names[-1]][1]]
@@ -1115,7 +1119,7 @@ def create_PW1(nclass,
                'fc2':[4096,'fc'],
                'fc3':[nclass,'fc']}
     
-    dropout = [[9,10], dropout_rate]
+    dropout = [[6,7,8], dropout_rate]
     x = tf.placeholder(
         tf.float32,
         [None, 
