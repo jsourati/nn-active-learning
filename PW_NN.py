@@ -10,6 +10,7 @@ import os
 import NN
 import PW_NNAL
 import patch_utils
+import PW_analyze_results
 
 
 def train_pw_model(patch_shape,
@@ -160,6 +161,9 @@ def train_pw_model(patch_shape,
                         vAcc_summary, cnt)
                     
                 cnt += 1
+
+
+
 
 def active_finetune(pars_dict,
                     patch_shape,
@@ -341,6 +345,188 @@ def PW_train_epoch(model,
             return Fm
 
 
+def PW_train_epoch_MultiModal(
+        model,
+        sess,
+        tr_data,
+        epochs,
+        patch_shape,
+        b,
+        ntb,
+        stats,
+        save_dir,
+        ts_data=None,
+        tb_dir=None):
+    """This function is similar to 
+    `PW_train_epoch` except that it works
+    with more than one modality; here 
+    instead of single dictionary of for
+    one modality, we have a list of 
+    dictionary, one for each modality
+
+    Data = [[P_11, P_12, ..., P_1M, I_1, L_1],
+            [P_21, P_22, ..., P_2M, I_2, L_2],
+            ...] 
+
+    where P_ij is the path that refers to
+    the j-th modality of the i-th subject,
+    I_i is the set of voxel indices
+    selected for this subject, and L_i is 
+    the set of labels for these indices.
+
+    Here the assumtion is that all
+    modalities have the same shape.
+    """
+
+    # number of all training samples
+    n = np.sum(
+        [len(tr_data[i][-2]) 
+         for i in range(len(tr_data))])
+
+    # number of modalities
+    m = len(tr_data[0])-2
+
+    # number of subjects
+    s = len(tr_data)
+
+    # if TB should be prepared
+    if tb_dir:
+        tb_writer = tf.summary.FileWriter(
+            tb_dir)
+
+    tb_cnt = 0
+    for t in range(epochs):
+        # batch-ify the data
+        batch_inds = NN.gen_batch_inds(n, b)
+
+        for i in range(len(batch_inds)):
+
+            b_data, b_labels = patch_utils.\
+                               get_patches_MultiModal(
+                                   tr_data,
+                                   batch_inds[i],
+                                   patch_shape)
+            for j in range(m):
+                b_data[:,:,:,j] = (
+                    b_data[:,:,:,j]-stats[
+                        j][0])/stats[j][1] 
+
+            # finally the data is ready to
+            # perform this iteration
+            # batch gradient step
+            sess.run(
+                model.train_step,
+                feed_dict={
+                    model.x: b_data,
+                    model.y_: b_labels,
+                    model.keep_prob:model.dropout_rate})
+
+            # writing into TB every 100 iterations
+            if not(i%100):
+                if ts_data:
+                    eval_to_TB(
+                        model,
+                        sess,
+                        ts_data,
+                        stats,
+                        patch_shape,
+                        ntb,
+                        tb_writer,
+                        tb_cnt)
+
+                    tb_cnt += 1
+                    
+        model.save_weights(
+            os.path.join(save_dir,
+                         'model_pars.h5'))
+        np.savetxt(os.path.join(save_dir,
+                                'epoch.txt'),
+                   [t])
+
+                
+def eval_to_TB(model, 
+               sess,
+               ts_data,
+               stats,
+               patch_shape,
+               ntb,
+               tb_writer,
+               tb_cnt):
+    """Evaluating a given model and save the
+    results into a tensor-board file
+    """
+
+    ntest = np.sum(
+        [len(ts_data[i][-2])
+         for i in range(len(ts_data))])
+    m = len(ts_data[0])-2
+
+    ts_batches = NN.gen_batch_inds(
+        ntest, ntb)
+    
+    t_P = 0
+    t_TP = 0
+    t_FP = 0
+    t_losses = 0
+    for i in range(len(ts_batches)):
+        b_data, b_labels = patch_utils.\
+                           get_patches_MultiModal(
+                               ts_data,
+                               ts_batches[i],
+                               patch_shape)
+        # normalization
+        for j in range(m):
+            b_data[:,:,:,j] = (
+                b_data[:,:,:,j]-stats[j][0])/stats[j][1]
+        # prediction
+        losses, preds = sess.run(
+            [model.loss, model.prediction],
+            feed_dict={
+                model.x: b_data,
+                model.y_: b_labels,
+                model.keep_prob:model.dropout_rate})
+
+        t_losses += np.sum(losses)
+        true_labels = np.argmax(b_labels, axis=0)
+        P,N,TP,FP,TN,FN = PW_analyze_results.\
+                          get_preds_stats(preds,
+                                          true_labels)
+        t_TP += TP
+        t_FP += FP
+        t_P  += P
+
+    # compute average loss and total F-measure
+    av_loss = t_losses / ntest
+    if (t_TP + t_FP) > 0:
+        Pr = t_TP / (t_TP+t_FP)
+    else:
+        Pr = 0
+
+    if t_P > 0:
+        Rc = t_TP / t_P
+    else:
+        Rc = 0
+
+    if (Pr + Rc) > 0:
+        F_meas = 2*Pr*Rc / (Pr+Rc)
+    else:
+        F_meas = 0
+
+    # now saving them into tensorboard 
+    # directories
+    loss_summ = tf.Summary()
+    loss_summ.value.add(
+        tag='Loss',
+        simple_value=av_loss)
+    tb_writer.add_summary(
+        loss_summ, tb_cnt)
+    Fmeas_summ = tf.Summary()
+    Fmeas_summ.value.add(
+        tag='F1 score',
+        simple_value=F_meas)
+    tb_writer.add_summary(
+        Fmeas_summ, tb_cnt)
+
 
 def expand_train_dicts(qrel_dict,
                        pinds_dict,
@@ -397,14 +583,13 @@ def expand_train_dicts(qrel_dict,
     return (trinds_dict,trmask_dict,
             pinds_dict, pmask_dict)
         
-def batch_eval(model, 
-               inds_dict,
+def batch_eval(model,
+               sess, 
+               dat,
                patch_shape,
                batch_size,
                stats,
-               sess,
-               varnames,
-               mask_dict=None):
+               varnames):
     """evaluating a list of variables over
     a set of samples from different images
     in a batch-wise format
@@ -415,13 +600,16 @@ def batch_eval(model,
             an object with `prediction`
             and `posterior` properties
     
-        **inds_dict** : dictionary
-           keys of this dictionary include
-           path to images where prediction
-           and posterior are to be evaluated
-           for some voxels; and the items
-           include 3D indices of those
-           voxels.
+        **dat** : list or sequence 
+           a sequence in the following
+           structure: `[P1,...,PM,I,L]`,
+           where `P1` to `PM` are paths
+           to the `M` modalities of data,
+           `I` is a list including voxel
+           indices, and `L` (if given) 
+           is another sequence of the same
+           length as `I` which contains 
+           the labels
 
         **patch_shape** : tuple
             shape of patches
@@ -453,102 +641,98 @@ def batch_eval(model,
             (in a binary segmentation).
     """
     
-    # taking path of the images
-    imgs_path = list(inds_dict.keys())
+    # check if the labels are given and 
+    # assign number of modalities (m)
+    if isinstance(dat[-2], list):
+        m = len(dat) - 2
+        label_flag = True
+    else:
+        m = len(dat) - 1
+        label_flag = False
+    img_paths = dat[:m]
+
     if not(isinstance(varnames, list)):
         varnames = [varnames]
-    var_dicts = [] 
-    for i in range(len(varnames)):
-        var_dicts += [{}]
 
-    mu = stats[0]
-    sigma = stats[1]
-    for img_path in imgs_path:
-        img,_ = nrrd.read(img_path)
-        
-        # preparing batch indices
-        n = len(inds_dict[img_path])
-        batch_ends = np.arange(0,n,batch_size)
-        if not(batch_ends[-1]==n):
-            batch_ends = np.append(
-                batch_ends, n)
-            
-        # going through batches
-        for i in range(1,len(batch_ends)):
-            # getting the chunk of indices
-            batch_inds = np.arange(
-                batch_ends[i-1],batch_ends[i])
-            b = len(batch_inds)
-            # loading tensors
-            # (not to be confused with 
-            # patch_utils.get_batches())
-            batch_tensors = patch_utils.get_patches(
-                img, 
-                np.array(inds_dict[
-                    img_path])[batch_inds],
-                patch_shape)
-            batch_tensors = (
-                batch_tensors-mu)/sigma
+    var_dicts = []
 
-            # evaluating the listed variabels
-            for j,var in enumerate(varnames):
-                # create the array for this image
-                # and this variable in the first
-                # iteration
-                if i==1:
-                    if var=='feature_layer':
-                        fdim = model.feature_layer.shape[0].value
-                        var_dicts[j][img_path] = np.zeros((fdim,n))
-                    else:
-                        var_dicts[j][img_path] = np.zeros(n)
-                    
-                # evaluate variable for this batch
-                model_var = getattr(model, var)
-                if var=='loss':
-                    """if loss to be evaluated,
-                    load the batch labels"""
-                    # ---------------------------\
-                    if not(mask_dict):
-                        raise ValueError(
-                            'If loss '+
-                            'is to be evaluated '+
-                            'the mask dictionary '+
-                            'should be given.')
-                    batch_labels = np.array(mask_dict[
-                        img_path])[batch_inds]
-                    hotbatch_labels = np.zeros((2,b))
-                    hotbatch_labels[0,batch_labels==0]=1
-                    hotbatch_labels[1,batch_labels==1]=1
+    # preparing batch indices
+    n = len(dat[-1])
+    batch_ends = np.arange(0,n,batch_size)
+    if not(batch_ends[-1]==n):
+        batch_ends = np.append(
+            batch_ends, n)
 
-                    batch_vals = sess.run(
-                        model_var,
-                        feed_dict={model.x:batch_tensors,
-                                   model.y_:hotbatch_labels,
-                                   model.keep_prob: 1.})
+    # going through batches
+    for i in range(1,len(batch_ends)):
+        # getting the chunk of indices
+        batch_inds = np.arange(
+            batch_ends[i-1],batch_ends[i])
+        b = len(batch_inds)
+        # loading tensors
+        # (not to be confused with 
+        # patch_utils.get_batches())
+        batch_tensors = patch_utils.get_patches(
+            img_paths, 
+            np.array(dat[m+1])[batch_inds],
+            patch_shape)
+        batch_tensors = np.squeeze(batch_tensors,
+                                   axis=3)
+        for j in range(m):
+            batch_tensors[:,:,:,j] = (
+                batch_tensors-stats[j][0])/stats[j][1]
+
+        # evaluating the listed variabels
+        for j,var in enumerate(varnames):
+            # create the array for this image
+            # and this variable in the first
+            # iteration
+            if i==1:
+                if var=='feature_layer':
+                    fdim = model.feature_layer.shape[0].value
+                    vals = np.zeros((fdim,n))
                 else:
-                    """evaluating variables with no need
-                    to batch labels
-                    """
-                    batch_vals = sess.run(
-                        model_var,
-                        feed_dict={model.x:batch_tensors,
-                                   model.keep_prob: 1.})
-                
-                if var=='posteriors':
-                    # keeping only posterior probability
-                    # of being maksed
-                    var_dicts[j][img_path][
-                        batch_inds] = batch_vals[1,:]
-                elif var=='feature_layer':
-                    var_dicts[j][img_path][:,
-                        batch_inds] = batch_vals
-                else:
-                    var_dicts[j][img_path][
-                        batch_inds] = batch_vals
+                    vals = np.zeros(n)
 
-            if i%50==0:
-                print(i,end=',')
-                
+            # evaluate variable for this batch
+            model_var = getattr(model, var)
+            if var=='loss':
+                """if loss to be evaluated,
+                load the batch labels"""
+                # ---------------------------\
+                if not(label_flag):
+                    raise ValueError(
+                        'If loss '+
+                        'is to be evaluated '+
+                        'the mask dictionary '+
+                        'should be given.')
+                batch_labels = np.array(dat[-1])[batch_inds]
+                hotbatch_labels = np.zeros((2,b))
+                hotbatch_labels[0,batch_labels==0]=1
+                hotbatch_labels[1,batch_labels==1]=1
+
+                batch_vals = sess.run(
+                    model_var,
+                    feed_dict={model.x:batch_tensors,
+                               model.y_:hotbatch_labels,
+                               model.keep_prob: 1.})
+            else:
+                """evaluating variables with no need
+                to batch labels
+                """
+                batch_vals = sess.run(
+                    model_var,
+                    feed_dict={model.x:batch_tensors,
+                               model.keep_prob: 1.})
+
+            if var=='posteriors':
+                # keeping only posterior probability
+                # of being maksed
+                vals[batch_inds] = batch_vals[1,:]
+            elif var=='feature_layer':
+                vals[:,batch_inds] = batch_vals
+            else:
+                vals[batch_inds] = batch_vals                
             
     return var_dicts
 
