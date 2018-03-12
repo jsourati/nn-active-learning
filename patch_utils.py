@@ -180,11 +180,7 @@ def generate_grid_samples(img_addr, mask_addr,
         
         types += list(grid_types)
     
-    inds_dict = {img_addr: inds_3D}
-    labels_dict = {img_addr: labels}
-    types_dict = {img_addr: types}
-    
-    return inds_dict, labels_dict, types_dict
+    return inds_3D, labels, types
 
 def get_batches(inds_dict,
                 batch_size):
@@ -294,7 +290,58 @@ def get_batch_vars(inds_dict,
             cnt += 1
 
     return batch_tensors, batch_labels
-            
+
+def get_patches_MultiModal(tr_data,
+                           batch_inds,
+                           patch_shape):
+    """Loading patches of some indices of
+    a given data with structure explained in
+    the function `PW_NN.PW_train_epoch_MultiModal`
+
+    The function  loads patches of each modality
+    separately, and then merge them all together
+    """
+
+    # number of modalities
+    m = len(tr_data[0])-2
+
+    s = len(tr_data)
+    b = len(batch_inds)
+    MM_batches = np.zeros(
+        (b,) + patch_shape[:2] + (m,))
+
+    # load the data from the correponding
+    # modalities.. using the old 
+    # functions for single-modality 
+    # images that were using dictionaries
+    for j in range(m):
+        trinds_dict = {}
+        trlabels_dict = {}
+        for k in range(s):
+            trinds_dict.update(
+                {tr_data[k][j]:
+                 tr_data[k][-2]})
+            trlabels_dict.update(
+                {tr_data[k][j]:
+                 tr_data[k][-1]})
+
+        # get the batches
+        # we indeed, get the label multiple times
+        # because they don't change when we
+        # read batches from different modality
+        (batch_tensors,
+         batch_labels) = get_batch_vars(
+             trinds_dict,
+             trlabels_dict,
+             batch_inds,
+             patch_shape)
+
+        # normalizing the batches
+        MM_batches[:,:,:,j] = np.squeeze(
+            batch_tensors, axis=3)
+
+    return MM_batches, batch_labels
+
 
 def ravel_binary_mask(mask):
     """Reading and raveling masked indices
@@ -324,10 +371,12 @@ def extract_Hakims_data_path():
 
     root_dir = '/common/data/raw/Hakim/For_Christine/Mrakotsky_IBD_Brain/Processed'
     mask_rest_of_path = 'scan01/common-processed/anatomical/03-ICC/'
-    img_rest_of_path = 'scan01/common-processed/anatomical/01-t1w-ref/'
+    T1_rest_of_path = 'scan01/common-processed/anatomical/01-t1w-ref/'
+    T2_rest_of_path = 'scan01/common-processed/anatomical/02-coregistration/'
 
     mask_addrs =[]
-    img_addrs = []
+    T1_addrs = []
+    T2_addrs = []
     for idx in ids:
         name = os.listdir(
             os.path.join(
@@ -337,13 +386,18 @@ def extract_Hakims_data_path():
                 root_dir,'Case%s'% idx,
                 name,mask_rest_of_path,
                 'c%s_s01_ICC.nrrd'% idx)]
-        img_addrs += [
+        T1_addrs += [
             os.path.join(
                 root_dir,'Case%s'% idx,
-                name,img_rest_of_path,
+                name,T1_rest_of_path,
                 'c%s_s01_t1w_ref.nrrd'% idx)]
+        T2_addrs += [
+            os.path.join(
+                root_dir,'Case%s'% idx,
+                name,T2_rest_of_path,
+                'c%s_s01_t2w_r.nrrd'% idx)]
         
-    return img_addrs, mask_addrs
+    return T1_addrs, T2_addrs,  mask_addrs
 
 def extract_newborn_data_path():
     """Preparing addresses pointing to
@@ -362,16 +416,20 @@ def extract_newborn_data_path():
     # (except the data files which include
     # the subject and session codes in their
     # names)
-    img_rest_of_path = 'common-processed' +\
+    T1_rest_of_path = 'common-processed' +\
                        '/anatomical/01-t1w-ref'
+    T2_rest_of_path = 'common-processed' +\
+                       '/anatomical/02-coregistration'
     mask_rest_of_path = 'common-processed' +\
                         '/anatomical/03-ICC'
 
 
     # subject-specific sub-directories
     dirs = get_subdirs(root_dir)
-    img_addrs = []
+    T1_addrs = []
+    T2_addrs = []
     mask_addrs = []
+    sub_codes = []
     for i, d in enumerate(dirs):
         if not('sub-CC00' in d):
             continue
@@ -386,6 +444,7 @@ def extract_newborn_data_path():
         # we need the codes for accessing
         # to names of the data
         sub_code = d[4:]
+        sub_codes += [sub_code]
         sess_code = subsubdir[4:]
             
         # subject-specific sub-directories
@@ -396,12 +455,20 @@ def extract_newborn_data_path():
             subsubdir)
 
         """Putting everything together"""
-        img_addrs += [
+        T1_addrs += [
             os.path.join(
                 root_dir,
                 subdirs,
-                img_rest_of_path,
+                T1_rest_of_path,
                 'c%s_s%s_t1w_ref.nrrd'% 
+                (sub_code, sess_code))]
+
+        T2_addrs += [
+            os.path.join(
+                root_dir,
+                subdirs,
+                T2_rest_of_path,
+                'c%s_s%s_t2w_r.nrrd'% 
                 (sub_code, sess_code))]
         
         mask_addrs += [
@@ -412,7 +479,7 @@ def extract_newborn_data_path():
                 'c%s_s%s_ICC.nrrd'% 
                 (sub_code, sess_code))]
         
-    return img_addrs, mask_addrs
+    return T1_addrs, T2_addrs, mask_addrs, sub_codes
 
 
 def get_subdirs(path):
@@ -626,6 +693,46 @@ def get_vars_2d(img,d):
     
     return varx
 
+
+def global2local_inds(batch_inds,
+                      set_sizes):
+    """Having a finite set of sets with
+    ordered elements and aiming to extract
+    a subset of them, this function takes
+    global indices of the elements in this
+    subset and output which elements in
+    each set belongs to this subset; the 
+    given subset can be one of the batches
+    after batch-ifying voxels of a set of
+    images
+    
+    By "global index", we mean an indexing
+    system that we can refer to a specific
+    element of one of the sets uniquely. 
+    Here, assuming that the sets and their
+    elements are ordered, our global indexing 
+    system refers to the i-th element of the
+    j-th set by an index calculated by
+
+    `len(S1) + len(S2) + .. len(Si-1) + j-1`
+    
+    where `S1` to `Si-1` are the sets that
+    are located before the target i-th set
+    """
+
+    cumvols = np.append(
+        -1, np.cumsum(set_sizes)-1)
+    
+    # finding the set indices 
+    set_inds = cumvols.searchsorted(
+        batch_inds) - 1
+    # local index for each set
+    local_inds = [np.array(batch_inds)[
+        set_inds==i]-cumvols[i]-1 for i in
+                  range(len(set_sizes))]
+
+    return local_inds
+
 def locate_in_dict(inds_dict, 
                    inds):
     """Locating a set of indices inside
@@ -830,7 +937,8 @@ def generate_rgb_mask(img,mask,mask2):
         img_rgb*200./img_rgb.max())
     
     # create a mask in one of the channels
-    img_rgb[:,:,0][mask>0] = 200.
+    if len(mask)>0:
+        img_rgb[:,:,0][mask>0] = 150.
 
     if len(mask2)>0:
         img_rgb[:,:,1][mask2>0] = 200.
@@ -844,48 +952,94 @@ def generate_rgb_mask(img,mask,mask2):
     
     return img_rgb
 
-def get_patches(img, inds, patch_shape):
+def get_patches(imgs, 
+                inds, 
+                patch_shape,
+                padded=True,
+                mask=None):
     """Extacting patches around a given 
     set of 3D indices 
+    
+    Shape of the output patches will be
+    `(b, d1, d2, m * d3)`
+
+    where `b` is the size of the output
+    batch of patches (equal to length of `inds`),
+    `d1` and `d2` represent the shape of patches
+    in the 2D axial plane, `m` represents 
+    the number of modalities and `d3` is the 
+    depth of patches taken from each modality 
+    (which, similar to `d1` and `d2` should be 
+    an odd number)
+
+    Note that even if the input images are
+    already padded, the given multuple-indices
+    are assumed to be un-adjusted, that is based
+    on the original image shapes, and not the
+    padded ones
     """
     
+    # dimensions of the outpuit patches
+    d1,d2,d3 = patch_shape
+    m = len(imgs)
+
     # padding the image with radii
     rads = np.zeros(3,dtype=int)
     for i in range(3):
         rads[i] = int((patch_shape[i]-1)/2.)
-            
-    padded_img = np.pad(
-        img, 
-        ((rads[0],rads[0]),
-         (rads[1],rads[1]),
-         (rads[2],rads[2])),
-        'constant')
-
-    # computing 3D coordinates of the samples
-    # in terms of the original image shape
-    multi_inds = np.unravel_index(
-        inds, img.shape)
+    if not padded:
+        # if not already padded, do it
+        padded_imgs = []
+        for img in imgs:
+            padded_img = np.pad(
+                img, 
+                ((rads[0],rads[0]),
+                 (rads[1],rads[1]),
+                 (rads[2],rads[2])),
+                'constant')
+            padded_imgs += [padded_img]
+        # store the original shape
+        orig_shape = imgs[0].shape
+    else:
+        padded_imgs = imgs[:]
+        # adjust the shapes to go back
+        # to the original shape
+        pad_shape = imgs[0].shape
+        orig_shape = (pad_shape[0]-2*rads[0],
+                      pad_shape[1]-2*rads[1],
+                      pad_shape[2]-2*rads[2])
     
+    multinds = np.unravel_index(inds, 
+                                orig_shape)
     b = len(inds)
-    batch = np.zeros((b,)+patch_shape)
+    patches = np.zeros((b,d1,d2,m*d3))
     for i in range(b):
         # adjusting the multi-coordinates 
         # WITH padded margins
         center = [
-            multi_inds[0][i]+rads[0],
-            multi_inds[1][i]+rads[1],
-            multi_inds[2][i]+rads[2]]
+            multinds[0][i]+rads[0],
+            multinds[1][i]+rads[1],
+            multinds[2][i]+rads[2]]
         
-        patch = padded_img[
-            center[0]-rads[0]:
-            center[0]+rads[0]+1,
-            center[1]-rads[1]:
-            center[1]+rads[1]+1,
-            center[2]-rads[2]:
-            center[2]+rads[2]+1]
+        for j in range(m):
+            patch = padded_imgs[j][
+                center[0]-rads[0]:
+                center[0]+rads[0]+1,
+                center[1]-rads[1]:
+                center[1]+rads[1]+1,
+                center[2]-rads[2]:
+                center[2]+rads[2]+1]
+            if patch.shape[1]==22:
+                pdb.set_trace()
+            patches[i,:,:,
+                    j*d3:(j+1)*d3] = patch
         
-        batch[i,:,:,:] = patch
-        
-    return batch
+    # if the mask is also given, output 
+    # the corresponding labels too
+    if mask is not None:
+        labels = mask[multinds]
+        return patches, labels
+
+    return patches
 
 
