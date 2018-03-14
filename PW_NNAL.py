@@ -14,12 +14,12 @@ import patch_utils
 
 
 def CNN_query(expr,
-              run,
               model,
+              sess,
+              padded_imgs,
               pool_inds,
               tr_inds,
-              method_name,
-              sess):
+              method_name):
     """Querying strategies for active
     learning of patch-wise model
     """
@@ -31,19 +31,22 @@ def CNN_query(expr,
 
     if method_name=='entropy':
         # posteriors
-        posts = PW_AL.batch_eval_wlines(
-            expr,
-            run,
+        posts = PW_NN.batch_eval(
             model,
+            sess,
+            padded_imgs,
             pool_inds,
-            'posteriors',
-            sess)
+            expr.pars['patch_shape'],
+            expr.pars['ntb'],
+            expr.pars['stats'],
+            'posteriors')[0]
         
         # k most uncertain (binary classes)
         q = np.argsort(np.abs(posts-.5))[
             :expr.pars['k']]
         
     if method_name=='rep-entropy':
+        ####### OUT-DATED
         # posteriors
         posts = PW_AL.batch_eval_wlines(
             expr,
@@ -111,27 +114,26 @@ def CNN_query(expr,
 
     if method_name=='fi':
         # posteriors
-        posts = PW_AL.batch_eval_wlines(
-            expr,
-            run,
-            model, 
+        posts = PW_NN.batch_eval(
+            model,
+            sess,
+            padded_imgs,
             pool_inds,
-            'posteriors',
-            sess)
+            expr.pars['patch_shape'],
+            expr.pars['ntb'],
+            expr.pars['stats'],
+            'posteriors')[0]
         
         # vectories everything
         # uncertainty filtering
         B = expr.pars['B']
         if B < len(pool_inds):
-            #gradnorms = PW_AL.FC_gradnorms_wlines(
-            #    expr, run, model, pool_inds, sess)
-            #sel_inds = np.argsort(-gradnorms)[:B]
             sel_inds = np.argsort(
                 np.abs(posts-.5))[:B]
             sel_posts = posts[sel_inds]
         else:
             B = posts.shape[1]
-            #sel_posts = posts
+            sel_posts = posts
             sel_inds = np.arange(B)
 
         #sel_posts = PW_AL.batch_eval_wlines(
@@ -159,8 +161,9 @@ def CNN_query(expr,
         # CAUTIOUS: this will give an error if 
         # the selected indices in `sel_inds`
         # contains only one index.
-        sel_patches = PW_AL.load_patches(
-            expr, run, pool_inds[sel_inds])
+        sel_patches = patch_utils.get_patches(
+            padded_imgs, pool_inds[sel_inds],
+            expr.pars['patch_shape'])
             
         for i in range(B):
             X_i = (sel_patches[i,:,:,:]-
@@ -225,12 +228,15 @@ def CNN_query(expr,
 
         # extracting features for pool samples
         # using only few indices of the features
-        F = PW_AL.batch_eval_wlines(expr,
-                                    run,
-                                    model,
-                                    pool_inds[sel_inds],
-                                    'feature_layer',
-                                    sess)
+        F = PW_NN.batch_eval(model,
+                             sess,
+                             padded_imgs,
+                             pool_inds[sel_inds],
+                             expr.pars['patch_shape'],
+                             expr.pars['ntb'],
+                             expr.pars['stats'],
+                             'feature_layer')[0]
+
         # selecting from those features that have the most
         # non-zero values among the selected samples
         nnz_feats = np.sum(F>0, axis=1)
@@ -396,7 +402,7 @@ def SuPix_query(expr,
 
     if method_name=='entropy':
         # posteriors
-        posts = PW_AL.batch_eval_winds(
+        posts = PW_AL.batch_eval_wlines(
             expr,
             run,
             model,
@@ -422,8 +428,9 @@ def SuPix_query(expr,
         # NaN's, so invert np.inf to np.nan
         SuPix_scores[
             SuPix_scores==np.inf]=np.nan
+        # also nan-out the zero superpixels
         qSuPix = np.unravel_index(
-            np.argsort(-np.ravel(SuPix_scores)), 
+            np.argsort(np.ravel(SuPix_scores)), 
             SuPix_scores.shape)
         qSuPix = np.array([qSuPix[0][:k],
                            qSuPix[1][:k]])
@@ -454,6 +461,40 @@ def superpix_scoring(overseg_img,
     represented by line numbers in index file,
     to a set of overpixels in a given
     oversegmentation
+    
+    :Parameters:
+    
+        **overseg_img** : 3D array
+            oversegmentation of the image
+            containing super-pixels
+
+        **inds** : 1D array-like
+            3D index of the pixels that are
+            socred
+
+        **socres** : 1D array-like
+            scores that are assigned to pixels
+    
+    :Returns:
+
+        **SuPix_scores** : 2D array
+            scores assigned to super-pixels, 
+            where each row corresponds to a
+            slice of the image, and each 
+            column corresponds to a super-pixel;
+            such that the (i,j)-th element 
+            represents the score assigned to
+            the super-pixel with label j in 
+            the i-th slice of the over-
+            segmentation image
+
+            If the (i,j)-th element is `np.inf`
+            it means that the super-pixel with
+            label j in slice i did not get any
+            score pixel in its area. And if
+            it is assigned zero, it means that 
+            the superpixel with label j does
+            not exist in slice i at all.
     """
     
     # multi-indices of pixel indices
@@ -461,12 +502,13 @@ def superpix_scoring(overseg_img,
     multinds = np.unravel_index(inds, s)
     Z = np.unique(multinds[2])
     
-    SuPix_scores = np.zeros(
+    SuPix_scores = np.ones(
         (s[2], 
-         int(overseg_img.max()+1)))
+         int(overseg_img.max()+1)))*np.inf
     for z in Z:
         slice_ = overseg_img[:,:,z]
 
+        """ Assigning Min-Itensity of Pixels """
         # creatin an image with 
         # values on the location of 
         # pixels
