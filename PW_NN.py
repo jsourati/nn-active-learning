@@ -2,7 +2,6 @@ from scipy.signal import convolve2d
 import tensorflow as tf
 import numpy as np
 import warnings
-import nibabel
 import nrrd
 import pdb
 import os
@@ -668,9 +667,6 @@ def batch_eval(model,
             probability of being masked
             (in a binary segmentation).
     """
-    
-    # number of modalities
-    m = len(img_paths)
 
     if not(isinstance(varnames, list)):
         varnames = [varnames]
@@ -681,10 +677,14 @@ def batch_eval(model,
         rads[i] = int((patch_shape[i]-1)/2.)
     # check if the images are given or the
     # paths to them
-    if isinstance(imgs_dat[0], np.ndarray):
+    if isinstance(img_dat[0], np.ndarray):
         padded_imgs = img_data
     else:
-        # loading + padding 
+        # loading + padding
+        img_paths = img_dat
+        
+        # number of modalities
+        m = len(img_paths) 
         padded_imgs = []
         for j in range(m):
             img,_ = nrrd.read(img_paths[j])
