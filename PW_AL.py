@@ -1,6 +1,6 @@
 from skimage.measure import regionprops
 from skimage.segmentation import slic
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
 import linecache
@@ -170,6 +170,9 @@ class Experiment(object):
         # -------------------------
         # create the NN model
         tf.reset_default_graph()
+        m = len(self.pars['img_path'])
+        patch_shape = self.pars['patch_shape'][:2] + \
+                      (m*self.pars['patch_shape'][2],)
         model = NN.create_model(
             self.pars['model_name'],
             self.pars['dropout_rate'],
@@ -178,7 +181,7 @@ class Experiment(object):
             self.pars['grad_layers'],
             self.pars['train_layers'],
             self.pars['optimizer_name'],
-            self.pars['patch_shape'])
+            patch_shape)
 
         #  computing pool statistics
         #self.pars['stats'] = [mu, sigma] #[65., 54.5]
@@ -272,6 +275,12 @@ class Experiment(object):
         given number of queries are drawn
         """
         
+        # read all the modalities in the beginning
+        imgs = []
+        for path in self.pars['img_paths']:
+            img,_ = nrrd.read(path)
+            imgs += [img]
+
         run_path = self.root_dir
         method_path = os.path.join(run_path, 
                                    method_name)
@@ -290,31 +299,27 @@ class Experiment(object):
             n_oldqueries += len(Qs)
             iter_cnt += 1
         
-        # preparing the (line) indices
-        test_lines = np.int32(
-            np.loadtxt(os.path.join(
-                run_path, 'test_lines.txt')
-                   ))
-        inds_path = os.path.join(self.root_dir,
-                                 'inds.txt')
-        test_inds = read_int_lines(
-            inds_path, test_lines)
-
+        # preparing the indices
+        test_inds = read_ints(os.path.join(
+            self.root_dir,'test_inds.txt'))
+        test_labels = read_ints(os.path.join(
+            self.root_dir,'test_labels.txt'))
+        pool_inds = read_ints(os.path.join(
+            method_path, 'pool_inds.txt'))
+        pool_labels = read_ints(os.path.join(
+            method_path, 'pool_labels.txt'))
+        # for training
         train_path = os.path.join(
-            method_path, 'train_lines.txt')
+            method_path, 'train_inds.txt')
         if os.path.exists(train_path):
-            train_lines = np.int32(
+            train_inds = np.int32(
                 np.loadtxt(train_path))
         else:
-            train_lines = []
-        pool_lines = np.int32(
-            np.loadtxt(os.path.join(
-                method_path, 'pool_lines.txt')
-                   ))
-        print('Pool-size: %d'% (len(pool_lines)))
-        print('Test-size: %d'% (len(test_lines)))
+            train_inds = []
 
-        tf.reset_default_graph()
+        print('Test-size: %d'% (len(test_inds)))
+        print('Pool-size: %d'% (len(pool_inds)))
+        print('Train-size: %d'% (len(train_inds)))
         
         if not(hasattr(self, 'pars')):
             self.load_parameters()
@@ -322,6 +327,7 @@ class Experiment(object):
         
         """ Loading the model """
         print("Loading the current model..")
+        tf.reset_default_graph()
         # create a model-holder
         model = NN.create_model(
             self.pars['model_name'],
@@ -369,12 +375,11 @@ class Experiment(object):
                 
                 Q_inds = PW_NNAL.CNN_query(
                     self,
-                    run,
                     model,
-                    pool_lines,
-                    train_lines,
-                    method_name,
-                    sess)
+                    sess,
+                    pool_inds,
+                    train_inds,
+                    method_name)
 
                 if self.pars['k']==1:
                     Q = [pool_lines[Q_inds]]
