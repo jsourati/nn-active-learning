@@ -813,7 +813,18 @@ class CNN(object):
 
         return predicts
 
-    
+def add_loss_grad(model, pars=[]):
+    """Adding the gradient of the loss
+    with respect to parameters if necessary
+    """
+
+    if pars==[]:
+        pars = tf.trainable_variables()
+
+    model.loss_grad = tf.gradients(
+        model.loss, pars)
+
+
 class AlexNet_CNN(AlexNet):
     """
     """
