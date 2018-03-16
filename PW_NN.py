@@ -2,6 +2,7 @@ from scipy.signal import convolve2d
 import tensorflow as tf
 import numpy as np
 import warnings
+import nibabel
 import nrrd
 import pdb
 import os
@@ -458,6 +459,11 @@ def PW_train_epoch_MultiModal(
                     b_labels[
                         cnt:cnt+len(img_inds)] = labels
                     cnt += len(img_inds)
+                    
+            # hot-one vector for labels
+            hot_b_labels = np.zeros((2, len(b_labels)))
+            hot_b_labels[0,b_labels==0]=1
+            hot_b_labels[1,b_labels==1]=1
 
             # normalizing the patches
             for j in range(m):
@@ -472,7 +478,7 @@ def PW_train_epoch_MultiModal(
                 model.train_step,
                 feed_dict={
                     model.x: b_patches,
-                    model.y_: b_labels,
+                    model.y_: hot_b_labels,
                     model.keep_prob:model.dropout_rate})
 
             # writing into TB every 100 iterations
@@ -554,6 +560,12 @@ def eval_to_TB(model,
                 b_labels[
                     cnt:cnt+len(img_inds)] = labels
                 cnt += len(img_inds)
+
+        # hot-one vector for labels
+        hot_b_labels = np.zeros((2, len(b_labels)))
+        hot_b_labels[0,b_labels==0]=1
+        hot_b_labels[1,b_labels==1]=1
+
         # normalizing the patches
         for j in range(m):
             b_patches[:,:,:,j] = (
@@ -565,8 +577,8 @@ def eval_to_TB(model,
             [model.loss, model.prediction],
             feed_dict={
                 model.x: b_data,
-                model.y_: b_labels,
-                model.keep_prob:model.dropout_rate})
+                model.y_: hot_b_labels,
+                model.keep_prob:1.})
 
         t_losses += np.sum(losses)
         true_labels = np.argmax(b_labels, axis=0)
@@ -616,7 +628,9 @@ def batch_eval(model,
                patch_shape,
                batch_size,
                stats,
-               varnames):
+               varnames,
+               mask=None,
+               x_feed_dict={}):
     """evaluating a list of variables over
     a set of samples from different images
     in a batch-wise format
@@ -667,6 +681,9 @@ def batch_eval(model,
             probability of being masked
             (in a binary segmentation).
     """
+    
+    # number of modalities
+    m = len(img_dat)
 
     if not(isinstance(varnames, list)):
         varnames = [varnames]
@@ -678,13 +695,10 @@ def batch_eval(model,
     # check if the images are given or the
     # paths to them
     if isinstance(img_dat[0], np.ndarray):
-        padded_imgs = img_data
+        padded_imgs = img_dat
     else:
-        # loading + padding
+        # loading + padding 
         img_paths = img_dat
-        
-        # number of modalities
-        m = len(img_paths) 
         padded_imgs = []
         for j in range(m):
             img,_ = nrrd.read(img_paths[j])
@@ -717,57 +731,74 @@ def batch_eval(model,
 
         # evaluate variable for this batch
         model_var = getattr(model, var)
-        if var=='loss':
-
-            """ **** OUTDATED *** """
-            batch_labels = np.array(dat[-1])[batch_inds]
-            hotbatch_labels = np.zeros((2,b))
-            hotbatch_labels[0,batch_labels==0]=1
-            hotbatch_labels[1,batch_labels==1]=1
-
-            batch_vals = sess.run(
-                model_var,
-                feed_dict={model.x:batch_tensors,
-                           model.y_:hotbatch_labels,
-                           model.keep_prob: 1.})
+        if (var=='loss') or (var=='hess_vecp'):
+            labels_flag = True
         else:
-            """evaluating variables with no need
-            to batch labels
-            """
-            # going through batches
-            for i in range(1,len(batch_ends)):
-                # getting the chunk of indices
-                batch_inds = np.arange(
-                    batch_ends[i-1],batch_ends[i])
-                b = len(batch_inds)
-                # loading tensors
-                # (not to be confused with 
-                # patch_utils.get_batches())
+            labels_flag = False
+
+
+        """evaluating variables with no need
+        to batch labels
+        """
+        # going through batches
+        for i in range(1,len(batch_ends)):
+            # getting the chunk of indices
+            batch_inds = np.arange(
+                batch_ends[i-1],batch_ends[i])
+            b = len(batch_inds)
+            # loading tensors
+            # (not to be confused with 
+            # patch_utils.get_batches())
+            if labels_flag:
+                (batch_tensors, 
+                 batch_labels) = patch_utils.get_patches(
+                     padded_imgs, 
+                     np.array(inds)[batch_inds],
+                     patch_shape,
+                     True,
+                     mask)
+
+                hot_labels = np.zeros((2,b))
+                hot_labels[0,batch_labels==0]=1
+                hot_labels[1,batch_labels==1]=1
+            else:
                 batch_tensors = patch_utils.get_patches(
                     padded_imgs, 
                     np.array(inds)[batch_inds],
                     patch_shape)
 
-                for j in range(m):
-                    batch_tensors[:,:,:,j] = (
-                        batch_tensors[
-                            :,:,:,j]-stats[j][0])/stats[j][1]
+            for j in range(m):
+                batch_tensors[:,:,:,j] = (
+                    batch_tensors[
+                        :,:,:,j]-stats[j][0])/stats[j][1]
 
+            if labels_flag:
+                feed_dict = {
+                    model.x:batch_tensors,
+                    model.y_:hot_labels,
+                    model.keep_prob: 1.}
+                feed_dict.update(x_feed_dict)
+                batch_vals = sess.run(
+                    model_var,
+                    feed_dict=feed_dict)
+            else:
                 batch_vals = sess.run(
                     model_var,
                     feed_dict={model.x:batch_tensors,
                                model.keep_prob: 1.})
 
-                if var=='posteriors':
-                    # keeping only posterior probability
-                    # of being maksed
-                    vals[batch_inds] = batch_vals[1,:]
-                elif var=='feature_layer':
-                    vals[:,batch_inds] = batch_vals
-                else:
-                    vals[batch_inds] = batch_vals                
+            if var=='posteriors':
+                # keeping only posterior probability
+                # of being maksed
+                vals[batch_inds] = batch_vals[1,:]
+            elif var=='feature_layer':
+                vals[:,batch_inds] = batch_vals
+            elif var=='hess_vecp':
+                vals = batch_vals
+            else:
+                vals[batch_inds] = batch_vals                
 
-            vals_list += [vals]
+        vals_list += [vals]
             
     return vals_list
 
