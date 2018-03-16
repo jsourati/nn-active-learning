@@ -27,7 +27,11 @@ import NN
 
 
 def hessian_vector_product(ys, xs, v):
-  """Multiply the Hessian of `ys` wrt `xs` by `v`.
+  """This function is written by Pang Wei Koh, to 
+  be used in their paper "Understanding Black-bx 
+  Predictions via Influence Functions."
+
+  Multiply the Hessian of `ys` wrt `xs` by `v`.
   This is an efficient construction that uses a backprop-like approach
   to compute the product between the Hessian and another vector. The
   Hessian is usually too large to be explicitly computed or even
@@ -121,6 +125,13 @@ def eval_loss_grad_q(model,
     q_patch, q_label = patch_utils.get_patches(
         padded_imgs, [test_ind], 
         patch_shape, True, mask)
+
+    # normalizing the patch
+    m = q_patch.shape[-1]
+    for j in range(m):
+        q_patch[:,:,:,j] = (
+            q_patch[:,:,:,j]-stats[
+                j][0])/stats[j][1]
 
     q_hot_label = np.zeros((2,1))
     q_hot_label[0,q_label[0]==0]=1
@@ -367,6 +378,6 @@ def sample_influence(model,
         fprime=fprime,
         fhess_p=hessp,
         avextol=1e-8,
-        maxiter=100)
+        maxiter=10)
 
     return soln
