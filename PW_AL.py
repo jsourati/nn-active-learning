@@ -1,6 +1,6 @@
 from skimage.measure import regionprops
 from skimage.segmentation import slic
-#from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
 import linecache
@@ -163,14 +163,14 @@ class Experiment(object):
         # performance evaluation
         test_inds = read_ints(os.path.join(
             self.root_dir,'test_inds.txt'))
-        test_labels = read_ints(os.path.join(
-            self.root_dir,'test_labels.txt'))
+        test_labels = np.array(read_ints(os.path.join(
+            self.root_dir,'test_labels.txt')))
 
         # evaluating the initial performance
         # -------------------------
         # create the NN model
         tf.reset_default_graph()
-        m = len(self.pars['img_path'])
+        m = len(self.pars['img_paths'])
         patch_shape = self.pars['patch_shape'][:2] + \
                       (m*self.pars['patch_shape'][2],)
         model = NN.create_model(
@@ -197,11 +197,11 @@ class Experiment(object):
                     sess)
                         
             # get a prediction of the test samples
-            test_data = self.pars['img_path']+[test_inds]
             test_preds = PW_NN.batch_eval(
                 model,
                 sess,
-                ts_data,
+                self.pars['img_paths'],
+                test_inds,
                 self.pars['patch_shape'],
                 self.pars['ntb'],
                 self.pars['stats'],
@@ -218,18 +218,18 @@ class Experiment(object):
                 test_preds, test_labels)
             print("Initial F-measure: %f"% Fmeas)
             perf_eval_path = os.path.join(
-                run_path, 'init_perf_eval.txt')
+                self.root_dir, 'init_perf_eval.txt')
             with open(perf_eval_path, 'w') as f:
                 f.write('%f\n'% Fmeas)
                 
-    def add_method(self, method_name, run):
+    def add_method(self, method_name):
         """Adding a method to a given run of the experiment
         """
         
         # check if the method already exists in this run
         if os.path.exists(os.path.join(self.root_dir, 
                                        method_name)):
-            print("This method already exists in run %s"% run)
+            print("This method already exists")
             print("Nothing else to do..")
             return
         
@@ -270,21 +270,34 @@ class Experiment(object):
             os.path.join(method_path,'perf_evals.txt')
             )
         
-    def run_method(self, method_name, run, max_queries):
+    def run_method(self, method_name, max_queries):
         """Running a querying method in a run until a 
         given number of queries are drawn
         """
         
-        # read all the modalities in the beginning
-        imgs = []
+        # read all the modalities and pad them
+        rads = np.zeros(3,dtype=int)
+        for i in range(3):
+            rads[i] = int(
+                (self.pars['patch_shape'][i]-1)/2.)
+
+        padded_imgs = []
         for path in self.pars['img_paths']:
             img,_ = nrrd.read(path)
-            imgs += [img]
+            padded_img = np.pad(
+                img, 
+                ((rads[0],rads[0]),
+                 (rads[1],rads[1]),
+                 (rads[2],rads[2])),
+                'constant')
+            padded_imgs += [padded_img]
+        mask,_ = nrrd.read(self.pars['mask_path'])
 
-        run_path = self.root_dir
-        method_path = os.path.join(run_path, 
+
+        # set up the paths
+        method_path = os.path.join(self.root_dir, 
                                    method_name)
-        labels_path = os.path.join(run_path, 
+        labels_path = os.path.join(self.root_dir, 
                                    'labels.txt')
         
         # count how many queries have been 
@@ -302,10 +315,10 @@ class Experiment(object):
         # preparing the indices
         test_inds = read_ints(os.path.join(
             self.root_dir,'test_inds.txt'))
-        test_labels = read_ints(os.path.join(
-            self.root_dir,'test_labels.txt'))
-        pool_inds = read_ints(os.path.join(
-            method_path, 'pool_inds.txt'))
+        test_labels = np.array(read_ints(os.path.join(
+            self.root_dir,'test_labels.txt')))
+        pool_inds = np.array(read_ints(os.path.join(
+            method_path, 'pool_inds.txt')))
         pool_labels = read_ints(os.path.join(
             method_path, 'pool_labels.txt'))
         # for training
@@ -329,6 +342,9 @@ class Experiment(object):
         print("Loading the current model..")
         tf.reset_default_graph()
         # create a model-holder
+        m = len(self.pars['img_paths'])
+        patch_shape = self.pars['patch_shape'][:2] + \
+                      (m*self.pars['patch_shape'][2],)
         model = NN.create_model(
             self.pars['model_name'],
             self.pars['dropout_rate'], 
@@ -337,7 +353,7 @@ class Experiment(object):
             self.pars['grad_layers'],
             self.pars['train_layers'],
             self.pars['optimizer_name'],
-            self.pars['patch_shape'])
+            patch_shape)
         model.add_assign_ops(os.path.join(
             method_path, 'curr_weights.h5'))
         
@@ -377,14 +393,15 @@ class Experiment(object):
                     self,
                     model,
                     sess,
+                    padded_imgs,
                     pool_inds,
                     train_inds,
                     method_name)
 
                 if self.pars['k']==1:
-                    Q = [pool_lines[Q_inds]]
+                    Q = [pool_inds[Q_inds]]
                 else:
-                    Q = pool_lines[Q_inds]
+                    Q = pool_inds[Q_inds]
 
                 # save the queries
                 np.savetxt(os.path.join(
@@ -395,31 +412,35 @@ class Experiment(object):
                         ), Q, fmt='%d')
                 
                 # update the indices
-                if len(train_lines)==0:
-                    train_lines = Q
+                if len(train_inds)==0:
+                    train_inds = Q
                 else:
-                    train_lines = np.append(
-                        train_lines, Q)
-                pool_lines = np.delete(
-                    pool_lines, Q_inds)
+                    train_inds = np.append(
+                        train_inds, Q)
+                pool_inds = np.delete(
+                    pool_inds, Q_inds)
                                 
                 """ updating the model """
                 for i in range(self.pars['epochs']):
-                    PW_train_epoch_wlines(
-                        model,
-                        self,
-                        run,
-                        train_lines,
-                        sess)
+                    finetune(model,
+                             sess,
+                             self,
+                             padded_imgs,
+                             mask,
+                             train_inds)
                     print('%d'% i, end=',')
                     
                 """ evluating the updated model """
-                ts_preds = batch_eval_wlines(self,
-                                            run,
-                                            model,
-                                            test_lines,
-                                            'prediction',
-                                            sess)
+                test_preds = PW_NN.batch_eval(
+                    model,
+                    sess,
+                    padded_imgs,
+                    test_inds,
+                    self.pars['patch_shape'],
+                    self.pars['ntb'],
+                    self.pars['stats'],
+                    'prediction')[0]
+
                 # saving the predictions
                 curr_predicts = np.loadtxt(
                     os.path.join(method_path, 
@@ -432,17 +453,15 @@ class Experiment(object):
                         curr_predicts, axis=0)
                 new_predicts = np.append(
                     curr_predicts, 
-                    np.expand_dims(ts_preds, axis=0),
+                    np.expand_dims(test_preds, axis=0),
                     axis=0)
                 np.savetxt(os.path.join(
                     method_path, 'predicts.txt'), 
                            new_predicts, fmt='%d')
             
                 # performance evaluation
-                ts_labels = read_label_lines(
-                    labels_path, test_lines)
                 Fmeas = PW_analyze_results.get_Fmeasure(
-                    ts_preds, ts_labels)
+                    test_preds, test_labels)
                                    
                 with open(os.path.join(
                         method_path, 
@@ -455,18 +474,18 @@ class Experiment(object):
                 
                     print('\n\t', end='')
                     print("Total queries: %d"% 
-                          (len(train_lines)),
+                          (len(train_inds)),
                           end='\n\t')
                     print("F-measure: %.4f"% Fmeas)
                 
                 # when querying is done..
                 # save the current training and pool
                 np.savetxt(os.path.join(
-                    method_path, 'curr_pool.txt'), 
-                           pool_lines,
+                    method_path, 'pool_inds.txt'), 
+                           pool_inds,
                            fmt='%d')
                 np.savetxt(train_path, 
-                           train_lines,
+                           train_inds,
                            fmt='%d')
                 # save the current weights
                 model.save_weights(
@@ -899,7 +918,7 @@ def prep_AL_data(expr):
     # assuming that all image modalities have the
     # same shape, we use the first modality to
     # prepare grid indices
-    img_addr = expr.pars['img_path'][0]
+    img_addr = expr.pars['img_paths'][0]
     mask_addr = expr.pars['mask_path']
     
     """Sampling from the slices"""
@@ -909,7 +928,6 @@ def prep_AL_data(expr):
         expr.pars['grid_spacing'], 
         expr.pars['grid_offset'])
 
-    # divide slices
     img,_ = nrrd.read(img_addr)
     multinds = np.unravel_index(inds, img.shape)
     # take the even slices
@@ -922,13 +940,6 @@ def prep_AL_data(expr):
     test_labels = np.array(labels)[odd_slices]
     
     """write the text files"""
-    inds_path = os.path.join(
-        expr.root_dir, 'inds.txt')
-    #types_path = os.path.join(
-    #    expr.root_dir, 'types.txt')
-    labels_path = os.path.join(
-        expr.root_dir, 'labels.txt')
-    
     np.savetxt(os.path.join(
         expr.root_dir, 'init_pool_inds.txt'),
                pool_inds, fmt='%d')
@@ -942,59 +953,6 @@ def prep_AL_data(expr):
         expr.root_dir, 'test_labels.txt'),
                test_labels, fmt='%d')
 
-
-def load_patches(expr, 
-                 run, 
-                 line_inds,
-                 label_flag=False):
-    """Loading a set of patches and their
-    labels that are specified by the line
-    numbers where they are saved in the
-    corresponding PW-AL experiment's run
-    """
-        
-    inds_path = os.path.join(
-        expr.root_dir,str(run),'inds.txt')
-
-    img_paths = []
-    inds_array = np.zeros(len(line_inds), dtype=int)
-
-    for i in range(len(line_inds)):
-        #pdb.set_trace()
-        line = linecache.getline(
-            inds_path, line_inds[i]).splitlines()[0]
-        img_paths += [line.split(',')[0]]
-        inds_array[i] = int(line.split(',')[1])
-        
-    # start loading the patches in the same order
-    # as is determined in `inds`
-    patches = np.zeros((len(line_inds),) + 
-                       expr.pars['patch_shape'])
-    # load patches of same images at the 
-    # same time
-    upaths = np.unique(img_paths)
-    for path in upaths:
-        indics = np.where(
-            np.array(img_paths)==path)[0]
-        img,_ = nrrd.read(path)
-        img_patches = patch_utils.get_patches(
-            img, inds_array[indics],
-            expr.pars['patch_shape'])
-        patches[indics,:,:,:] = img_patches
-
-    if label_flag:
-        labels = np.zeros(len(line_inds), 
-                          dtype=bool)
-        for i in range(len(line_inds)):
-            labels[i] = linecache.getline(
-                inds_path, 
-                line_inds[i]).splitlines()[0]
-            
-        return patches, labels
-        
-    # if labels_flag is off, only returns
-    # the patches
-    return patches
 
 def get_statistics(expr, run, hist_flag=False):
     """Getting statistics of intensity values
@@ -1198,51 +1156,68 @@ def FC_gradnorms_wlines(expr,
     return gradnorms
 
     
-def PW_train_epoch_wlines(model,
-                          expr,
-                          run,
-                          line_inds,
-                          sess):
-    """Running one epoch of trianing 
-    with training (line) indices with respect
-    to a run of pw-experiment
-    """
-    
-    inds_path = os.path.join(
-        expr.root_dir, str(run), 'inds.txt')
-    labels_path = os.path.join(
-        expr.root_dir, str(run), 'labels.txt')
-    
-    inds_dict, labels_dict, locs_dict = create_dict(
-        inds_path, line_inds, labels_path)
-    
-    # convert the paths to the ones used
-    # in Wombat
-    if True:
-        base_dir = '/common/data/raw/Hakim/For_Christine'+\
-                   '/Mrakotsky_IBD_Brain/Processed/'
-        
-        old_path = list(inds_dict.keys())[0]
-        new_path = base_dir + old_path[31:]
-        c_inds_dict = {
-            new_path: inds_dict[old_path]}
-        c_labels_dict = {
-            new_path: labels_dict[old_path]}
-        inds_dict = c_inds_dict
-        labels_dict = c_labels_dict
+def finetune(model,
+             sess,
+             expr,
+             padded_imgs,
+             mask,
+             train_inds):
+    """Fine-tuning a given model for
+    a number of epochs; written mainly
+    to be used within querying iterations
 
-    # now that we have the index- and labels-
-    # dictionaries, we can feed it to 
-    # PW_NN.PW_train_epoch()
-    PW_NN.PW_train_epoch(
-        model,
-        expr.pars['dropout_rate'],
-        inds_dict,
-        labels_dict,
-        expr.pars['patch_shape'],
-        expr.pars['b'],
-        expr.pars['stats'],
-        sess)
+    This function basically does same thin
+    as `PW_NN.PW_train_epoch_MultiModal`,
+    but is little handier and more brief:
+    it only uses indices of a single imagel,
+    there is no option for saving variables
+    in tensorboard, and also the images are
+    given as input arguments, hence no need
+    to load them separately here
+    """
+
+    n = len(train_inds)
+    m = len(padded_imgs)
+    b = expr.pars['b']
+    patch_shape = expr.pars['patch_shape']
+    stats = expr.pars['stats']
+
+    for t in range(expr.pars['epochs']):
+        # batch-ify the data
+        batch_inds = NN.gen_batch_inds(n, b)
+
+        for i in range(len(batch_inds)):
+            img_inds = train_inds[batch_inds[i]]
+            patches, labels = patch_utils.\
+                              get_patches(
+                                  padded_imgs,
+                                  img_inds,
+                                  patch_shape,
+                                  True,
+                                  mask)
+            # hot-one vector for labels
+            hot_labels = np.zeros(
+                (2, len(labels)))
+            hot_labels[0,labels==0]=1
+            hot_labels[1,labels==1]=1
+
+            # normalizing the patches
+            for j in range(m):
+                patches[:,:,:,j] = (
+                    patches[:,:,:,j]-stats[
+                        j][0])/stats[j][1] 
+
+                # perform this iteration
+            # batch gradient step
+            sess.run(
+                model.train_step,
+                feed_dict={
+                    model.x: patches,
+                    model.y_: hot_labels,
+                    model.keep_prob:model.dropout_rate})
+
+    
+    
 
 def PW_train_epoch_winds_wconf(model,
                                expr,
