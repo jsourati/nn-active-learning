@@ -1,6 +1,6 @@
 from skimage.measure import regionprops
 from skimage.segmentation import slic
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
 import linecache

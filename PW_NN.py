@@ -2,7 +2,7 @@ from scipy.signal import convolve2d
 import tensorflow as tf
 import numpy as np
 import warnings
-import nibabel
+#import nibabel
 import nrrd
 import pdb
 import os

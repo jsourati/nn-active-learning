@@ -5,7 +5,7 @@ from pydensecrf.utils import create_pairwise_bilateral
 from pydensecrf.utils import create_pairwise_gaussian
 import pydensecrf.densecrf as dcrf
 
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import numpy as np
 import linecache
 import shutil
@@ -24,7 +24,7 @@ import PW_AL
 import NN
 
 
-def get_queries(expr, run, method_name):
+def get_queries(expr, method_name):
     """Simply giving back the queries generated
     in different queries separately
     """
@@ -32,7 +32,7 @@ def get_queries(expr, run, method_name):
     Qs = []
 
     Q_dir = os.path.join(
-        expr.root_dir,str(run),
+        expr.root_dir,
         method_name, 'queries')
     Q_files = os.listdir(Q_dir)
     for f in Q_files:
@@ -142,8 +142,7 @@ def visualize_eval_metrics(expr,
     metric value for the full pool data set)
     """
 
-    run_path = os.path.join(expr.root_dir,
-                            str(run))
+    run_path = expr.root_dir
     if len(methods)==0:
         methods = [f for f in os.listdir(run_path) 
                    if os.path.isdir(os.path.join(
@@ -152,6 +151,10 @@ def visualize_eval_metrics(expr,
     # maximum number of queries among methods
     M = 0
     for i, method_name in enumerate(methods):
+        if not(os.path.exists(os.path.join(
+                expr.root_dir, method_name))):
+            continue
+
         if metric=='F1':
             # vector of evaluation metrics
             F = np.loadtxt(os.path.join(
@@ -168,7 +171,7 @@ def visualize_eval_metrics(expr,
 
         # vector of numbre of observed
         # labels at each query iterations
-        Qset = get_queries(expr, run, 
+        Qset = get_queries(expr,
                            method_name)
         Qsizes = [0] + [len(Q) for Q in Qset]
         Qsizes = np.cumsum(Qsizes)

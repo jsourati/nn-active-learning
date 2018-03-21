@@ -2,7 +2,7 @@ from skimage.measure import regionprops
 import tensorflow as tf
 import numpy as np
 import warnings
-import nibabel
+#import nibabel
 import nrrd
 import pdb
 import os
@@ -22,12 +22,55 @@ def CNN_query(expr,
               method_name):
     """Querying strategies for active
     learning of patch-wise model
+
+     Although the given image is padded, 
+    the indices are given in terms of the
+    original dimensionalities
     """
 
     if method_name=='random':
         n = len(pool_inds)
         q = np.random.permutation(n)[
             :expr.pars['k']]
+
+    if method_name=="ps-random":
+        # pseudo-random: randomly
+        # selecting queries from regions
+        # with high local variance
+        
+        thr = 2.   # variance threshold
+        rads = np.int8((np.array(expr.pars[
+            'patch_shape'])-1)/2)
+        # use T1 to compute the variances
+        (d1,d2,d3) = padded_imgs[0].shape
+        # un-padding
+        img_1 = padded_imgs[0][
+            rads[0]:d1-rads[0],
+            rads[1]:d2-rads[1],
+            rads[2]:d3-rads[2]]
+
+        # compute 2D variance map
+        # (choosing first component of
+        # the patch shape as the radius of
+        # the loal variance computation)
+        var_map = np.zeros(img_1.shape)
+        for i in range(img_1.shape[2]):
+            slice_var = patch_utils.get_vars_2d(
+                img_1[:,:,i], rads[0])
+            var_map[:,:,i] = slice_var
+
+        # get variance scores of 
+        # all given pool indices
+        pool_multinds = np.unravel_index(
+            pool_inds, img_1.shape)
+        inds_vscores = var_map[pool_multinds]
+        # filter-out the low-variance 
+        # pool indices, and select randomly
+        valid_pool_inds = np.where(
+            inds_vscores>thr)[0]
+        rand_inds = np.random.permutation(
+            len(valid_pool_inds))[:expr.pars['k']]
+        q = valid_pool_inds[rand_inds]
 
     if method_name=='entropy':
         # posteriors
@@ -164,11 +207,18 @@ def CNN_query(expr,
         sel_patches = patch_utils.get_patches(
             padded_imgs, pool_inds[sel_inds],
             expr.pars['patch_shape'])
-            
+        
+        d3 = expr.pars['patch_shape'][-1]
         for i in range(B):
-            X_i = (sel_patches[i,:,:,:]-
-                   expr.pars['stats'][0]) / \
-                expr.pars['stats'][1]
+
+            # normalizing the patch
+            X_i = np.zeros(sel_patches.shape[1:])
+            for j in range(len(expr.pars['img_paths'])):
+                X_i[:,:,d3*j:d3*(j+1)] = (
+                    sel_patches[i,:,:,d3*j:d3*(j+1)]-
+                    expr.pars['stats'][j][0]) / \
+                    expr.pars['stats'][j][1]
+
             feed_dict = {
                 model.x: np.expand_dims(X_i,axis=0),
                 model.keep_prob: 1.}
