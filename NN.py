@@ -143,16 +143,25 @@ class CNN(object):
 
         self.FC_inputs = []
         with tf.name_scope(name):
-            for i in range(len(layer_dict)-1):
+            for i in range(len(layer_dict)):
                 # extract previous depth
                 if i==0:
                     #prev_depth = x.shape[-1].value
                     self.output = x
+
+                if i==len(layer_dict)-1:
+                    last_layer_flag=True
+                    next_layer_type = None
+                else:
+                    last_layer_flag=False
+                    next_layer_type = layer_dict[
+                        layer_names[i+1]][1]
                 
                 self.add_layer(
                     layer_dict[layer_names[i]], 
                     layer_names[i],
-                    layer_dict[layer_names[i+1]][1])
+                    next_layer_type,
+                    last_layer_flag)
                 
                 # dropping out the output layers if the layer
                 # is in the list of dropped-out layers
@@ -167,20 +176,7 @@ class CNN(object):
                 
                 self.layer_type += [
                     layer_dict[layer_names[i]][1]]                
-            
-            # last layer:
-            self.add_layer(
-                layer_dict[layer_names[-1]],
-                layer_names[-1],
-                last_layer=True)
-
-            if len(layer_dict)-1 in self.dropout_layers:
-                self.output = tf.nn.dropout(
-                    self.output, self.keep_prob)
-            
-            self.layer_type += [
-                layer_dict[layer_names[-1]][1]]
-            
+                        
             # posterior
             posteriors = tf.nn.softmax(
                 tf.transpose(self.output))
