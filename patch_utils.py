@@ -1,7 +1,7 @@
 from scipy.signal import convolve2d
 import numpy as np
 import warnings
-import nibabel
+#import nibabel
 import nrrd
 import pdb
 import os
@@ -377,6 +377,7 @@ def extract_Hakims_data_path():
     mask_addrs =[]
     T1_addrs = []
     T2_addrs = []
+    Orig_addrs = []
     for idx in ids:
         name = os.listdir(
             os.path.join(
@@ -396,8 +397,15 @@ def extract_Hakims_data_path():
                 root_dir,'Case%s'% idx,
                 name,T2_rest_of_path,
                 'c%s_s01_t2w_r.nrrd'% idx)]
+
+        Orig_addrs += [
+            os.path.join(
+                root_dir,'Case%s'% idx,
+                name,mask_rest_of_path,
+                'c%s_s01_BrainMask.nrrd'% idx)]
         
-    return T1_addrs, T2_addrs,  mask_addrs
+    return T1_addrs, T2_addrs, \
+        mask_addrs, Orig_addrs
 
 def extract_newborn_data_path():
     """Preparing addresses pointing to
@@ -481,6 +489,45 @@ def extract_newborn_data_path():
         
     return T1_addrs, T2_addrs, mask_addrs, sub_codes
 
+
+def extract_ACElesion_data_path():
+
+    # common directory
+    root_dir = '/common/segmentation/Xavi/ICC-Datasets/ACE/'
+
+    # common sub-directories
+    # there are four scans, specify which
+    # one to use
+    scan_idx = 1
+    T1_rest_of_path = 'scan0%d/t1w.nrrd'% scan_idx
+    T2_rest_of_path = 'scan0%d/t2w.nrrd'% scan_idx
+    mask_rest_of_path='scan0%d/Manual-ICC.nrrd'% scan_idx
+
+
+    # subject-specific sub-directories
+    dirs = get_subdirs(root_dir)
+    T1_addrs = []
+    T2_addrs = []
+    mask_addrs = []
+    sub_codes = []
+
+    for dir in dirs:
+        sub_codes += [dir]
+
+        T1_path = os.path.join(
+            root_dir,dir,T1_rest_of_path)
+        T1_addrs += [T1_path]
+
+        T2_path = os.path.join(
+            root_dir,dir,T2_rest_of_path)
+        T2_addrs += [T2_path]
+
+        mask_path = os.path.join(
+            root_dir,dir,mask_rest_of_path)
+        mask_addrs += [mask_path]
+
+    return T1_addrs, T2_addrs, mask_addrs, sub_codes
+    
 
 def get_subdirs(path):
     """returning all sub-directories of a 
@@ -1029,8 +1076,6 @@ def get_patches(imgs,
                 center[1]+rads[1]+1,
                 center[2]-rads[2]:
                 center[2]+rads[2]+1]
-            if patch.shape[1]==22:
-                pdb.set_trace()
             patches[i,:,:,
                     j*d3:(j+1)*d3] = patch
         
