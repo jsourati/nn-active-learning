@@ -88,74 +88,9 @@ def CNN_query(expr,
         q = np.argsort(np.abs(posts-.5))[
             :expr.pars['k']]
         
-    if method_name=='rep-entropy':
-        ####### OUT-DATED
-        # posteriors
-        posts = PW_AL.batch_eval_wlines(
-            expr,
-            run,
-            model, 
-            pool_inds,
-            'posteriors',
-            sess)
-        
-        # vectories everything
-        # uncertainty filtering
-        B = expr.pars['B']
-        if B < len(posts):
-            sel_inds = np.argsort(
-                np.abs(posts-.5))[:B]
-            sel_posts = posts[sel_inds]
-        else:
-            B = posts.shape[1]
-            sel_posts = posts
-            sel_inds = np.arange(B)
-            
-        n = len(pool_inds)
-        rem_inds = list(set(np.arange(n)) - 
-                        set(sel_inds))
-        
-        # extract the features for all the pool
-        # sel_inds, rem_inds  -->  pool_inds
-        F = PW_AL.batch_eval_wlines(
-            expr,
-            run,
-            model,
-            pool_inds,
-            'feature_layer',
-            sess)
-
-        F_uncertain = F[:, sel_inds]
-        norms_uncertain = np.sqrt(np.sum(F_uncertain**2, axis=0))
-        F_rem_pool = F[:, rem_inds]
-        norms_rem = np.sqrt(np.sum(F_rem_pool**2, axis=0))
-        
-        # compute cos-similarities between filtered images
-        # and the rest of the unlabeled samples
-        dots = np.dot(F_rem_pool.T, F_uncertain)
-        norms_outer = np.outer(norms_rem, norms_uncertain)
-        sims = dots / norms_outer
-            
-        print("Greedy optimization..", end='\n\t')
-        # start from empty set
-        Q_inds = []
-        nQ_inds = np.arange(B)
-        # add most representative samples one by one
-        for i in range(expr.pars['k']):
-            rep_scores = np.zeros(B-i)
-            for j in range(B-i):
-                cand_Q = Q_inds + [nQ_inds[j]]
-                rep_scores[j] = np.sum(
-                    np.max(sims[:, cand_Q], axis=1))
-            iter_sel = nQ_inds[np.argmax(rep_scores)]
-            # update the iterating sets
-            Q_inds += [iter_sel]
-            nQ_inds = np.delete(
-                nQ_inds, np.argmax(rep_scores))
-            
-        q = sel_inds[Q_inds]
-
     if method_name=='fi':
+        n = len(pool_inds)
+
         # posteriors
         posts = PW_NN.batch_eval(
             model,
@@ -179,26 +114,6 @@ def CNN_query(expr,
             sel_posts = posts
             sel_inds = np.arange(B)
 
-        #sel_posts = PW_AL.batch_eval_wlines(
-        #    expr,
-        #    run,
-        #    model, 
-        #    pool_inds[sel_inds],
-        #    'posteriors',
-        #    sess)
-
-        # forming A-matrices
-        # ------------------
-        # division by two in computing size of A is because 
-        # in each layer we have gradients with respect to
-        # weights and bias terms --> number of layers that
-        # are considered is obtained after dividing by 2
-        A_size = int(
-            len(model.grad_posts['1'])/2)
-        n = len(pool_inds)
-        c = expr.nclass
-
-        A = []
         # load the patches
         # indices: sel_inds --> pool_inds
         # CAUTIOUS: this will give an error if 
@@ -207,118 +122,19 @@ def CNN_query(expr,
         sel_patches = patch_utils.get_patches(
             padded_imgs, pool_inds[sel_inds],
             expr.pars['patch_shape'])
-        
-        d3 = expr.pars['patch_shape'][-1]
-        for i in range(B):
 
-            # normalizing the patch
-            X_i = np.zeros(sel_patches.shape[1:])
-            for j in range(len(expr.pars['img_paths'])):
-                X_i[:,:,d3*j:d3*(j+1)] = (
-                    sel_patches[i,:,:,d3*j:d3*(j+1)]-
-                    expr.pars['stats'][j][0]) / \
-                    expr.pars['stats'][j][1]
-
-            feed_dict = {
-                model.x: np.expand_dims(X_i,axis=0),
-                model.keep_prob: 1.}
-
-            # preparing the poserior
-            # ASSUMOTION: binary classifications
-            x_post = sel_posts[i]
-            # Computing gradients and shrinkage
-            if x_post < 1e-6:
-                x_post = 0.
-
-                grads_0 = sess.run(
-                    model.grad_posts['0'],
-                    feed_dict=feed_dict)
-
-                grads_0 =  NNAL_tools.\
-                           shrink_gradient(
-                               grads_0, 'sum')
-                grads_1 = 0.
-
-            elif x_post > 1-1e-6:
-                x_post = 1.
-
-                grads_0 = 0.
-
-                grads_1 = sess.run(
-                    model.grad_posts['1'],
-                    feed_dict=feed_dict)
-
-                grads_1 = NNAL_tools.\
-                          shrink_gradient(
-                              grads_1, 'sum')
-            else:
-                grads_0 = sess.run(
-                    model.grad_posts['0'],
-                    feed_dict=feed_dict)
-                grads_0 =  NNAL_tools.\
-                           shrink_gradient(
-                               grads_0, 'sum')
-
-                grads_1 = sess.run(
-                    model.grad_posts['1'],
-                    feed_dict=feed_dict)
-                grads_1 =  NNAL_tools.\
-                           shrink_gradient(
-                               grads_1, 'sum')
-                
-            # the A-matrix
-            Ai = (1.-x_post) * np.outer(grads_0, grads_0) + \
-                 x_post * np.outer(grads_1, grads_1)
-                
-            # final diagonal-loading
-            A += [Ai+ np.eye(A_size)*1e-5]
-
-            if not(i%10):
-                print(i, end=',')
-
-        # extracting features for pool samples
-        # using only few indices of the features
-        F = PW_NN.batch_eval(model,
-                             sess,
-                             padded_imgs,
-                             pool_inds[sel_inds],
-                             expr.pars['patch_shape'],
-                             expr.pars['ntb'],
-                             expr.pars['stats'],
-                             'feature_layer')[0]
-
-        # selecting from those features that have the most
-        # non-zero values among the selected samples
-        nnz_feats = np.sum(F>0, axis=1)
-        feat_inds = np.argsort(-nnz_feats)[:int(B/2)]
-        F_sel = F[feat_inds,:]
-        # taking care of the rank
-        while np.linalg.matrix_rank(F_sel)<len(feat_inds):
-            # if the matrix is not full row-rank, discard
-            # the last selected index (worst among all)
-            feat_inds = feat_inds[:-1]
-            F_sel = F[feat_inds,:]
-                
-        # taking care of the conditional number
-        lambda_ = expr.pars['lambda_']
-        while np.linalg.cond(F_sel) > 1e6:
-            feat_inds = feat_inds[:-1]
-            F_sel = F[feat_inds,:]
-            if len(feat_inds)==1:
-                lambda_=0
-                print('Only one feature is selected.')
-                break
-        
-        # subtracting the mean
-        F_sel -= np.repeat(np.expand_dims(
-            np.mean(F_sel, axis=1),
-            axis=1), B, axis=1)
-        
-        print('Cond. #: %f'% (np.linalg.cond(F_sel)),
-              end='\n\t')
-        print('# selected features: %d'% 
-              (len(feat_inds)), end='\n\t')
-        
+        # get the A-matrices (conditional FI's)
+        A = get_A_matrices(expr, 
+                           model,
+                           sess,
+                           sel_patches,
+                           sel_posts)
+        # prepare the feature vectors
+        F_sel = get_feature_vecs(pool_inds[sel_inds],
+                                 padded_imgs,
+                                 expr,
+                                 model,
+                                 sess)
         # SDP
         # ----
         soln = NNAL_tools.SDP_query_distribution(
@@ -332,105 +148,185 @@ def CNN_query(expr,
             replacement=True)
         q = sel_inds[Q_inds]
 
-    elif method_name=='prob-entropy':
-        # posteriors
-        posts = PW_AL.batch_eval_winds(
-            expr,
-            run,
-            model, 
-            pool_inds,
-            'posteriors',
-            sess)
 
-        # extracting features
-        pdb.set_trace()
-        pool_F = PW_AL.batch_eval_winds(
-            expr,
-            run,
-            model,
-            pool_inds,
-            'feature_layer',
-            sess)
-
-        if len(tr_inds)>0:
-            tr_F = PW_AL.batch_eval_winds(
-                expr,
-                run,
-                model,
-                tr_inds,
-                'feature_layer',
-                sess)
-        else:
-            tr_F = []
-
-        # self-similarities
-        U_self_sims = get_self_sims(pool_F)
-        # unlabeled-labeled similarities
-        if tr_F:
-            UL_sims = get_cross_sims(pool_F,
-                                     tr_F)
-        
-        # forming the distributions
-        P_1 =  np.exp(-pis[0]*(posts-0.5)**2)
-        P_1 = P_1 / np.sum(P_1)
-        P_2 = np.exp(-pis[1]*U_self_sims)
-        P_2 = P_2 / np.sum(P_2)
-        if tr_F:
-            P_3 = np.exp(-pis[2]/UL_sims)
-            P_3 = P_3 / np.sum(P_3)
-        else:
-            P_3 = 1.
-
-        # multiplicative mixture
-        pis = expr.pars['q_mixing_coeffs']
-        logq = np.log(P_1) + \
-               np.log(P_2) + \
-               np.log(P_3)
-        q = np.exp(logq)
-        # taking care of zero values
-        z_indic = np.logical_or(
-            P_1==0,P_2==0)
-        z_indic = np.logical_or(
-            z_indic, P_3==0)
-        q[z_indic] = 0
-        # re-normalization
-        q = q / np.sum(q)
-
-        # now sampling from this distribution
-        # -----
-        # update the distribution every `b`
-        # samples to incorporate diversity
-        b = 50
-        k = expr.pars['k']
-        prior = []
-        draw_inds = np.arange(0, k, b)
-        if not(draw_inds[-1]==k):
-            draw_inds = np.append(
-                draw_inds, k)
-
-        Q_inds = np.zeros(k)
-        for i in range(len(draw_inds)-1):
-            iter_draws = draw_queries(
-                qdist, priors)
-            Q_inds[draw_inds[i]:
-                   draw_inds[i+1]] = iter_draws
-            
-            if i<len(draw_inds)-2:
-                # updating the prior using the
-                # similarity between the pool
-                # and samples that are selected
-                # so far
-                F_Q = pool_F[:,iter_draws]
-                QU_sims = get_cross_sims(
-                    pool_F, F_Q)
-                prior = np.exp(-pis[1]*QU_sim)
-                prior[iter_draws] = 0
-                prior = prior / np.sum(prior)
-            
-        q = Q_inds
-        
     return q
 
+
+def query_multimg(expr,
+                  model,
+                  sess,
+                  all_padded_imgs,
+                  pool_inds,
+                  tr_inds,
+                  method_name):
+    """Similar to (single image) query except
+    `all_padded_imgs` contains multiple images,
+    hence `pool_inds` and `tr_inds` include a 
+    sequence of lists each of which contains 
+    training indices associated with a training
+    subject
+
+    The output will be a list of N sets of indices
+    (N as the number of training subjects), where
+    each set (possibly empty) includes the indices
+    of the queries chosen from that subject
+    """
+
+    k = expr.pars['k']
+
+    if method_name=='random':
+        inds_num = [len(pool_inds[i]) for
+                    i in range(len(pool_inds))]
+        npool = np.sum(inds_num)
+        inds = np.random.permutation(npool)[:k]
+        
+        Q_inds = patch_utils.global2local_inds(
+            inds, inds_num)
+
+    return Q_inds
+
+def gen_A_matrices(expr, 
+                   model, 
+                   sess,
+                   sel_patches,
+                   sel_posts,
+                   diag_load=1e-5):
+
+    # forming A-matrices
+    # ------------------
+    # division by two in computing size of A is because 
+    # in each layer we have gradients with respect to
+    # weights and bias terms --> number of layers that
+    # are considered is obtained after dividing by 2
+    A_size = int(
+        len(model.grad_posts['1'])/2)
+    c = expr.nclass
+    A = []
+
+    d3 = expr.pars['patch_shape'][-1]
+    for i in range(B):
+
+        # normalizing the patch
+        X_i = np.zeros(sel_patches.shape[1:])
+        for j in range(len(expr.pars['img_paths'])):
+            X_i[:,:,d3*j:d3*(j+1)] = (
+                sel_patches[i,:,:,d3*j:d3*(j+1)]-
+                expr.pars['stats'][j][0]) / \
+                expr.pars['stats'][j][1]
+
+        feed_dict = {
+            model.x: np.expand_dims(X_i,axis=0),
+            model.keep_prob: 1.}
+
+        # preparing the poserior
+        # ASSUMOTION: binary classifications
+        x_post = sel_posts[i]
+        # Computing gradients and shrinkage
+        if x_post < 1e-6:
+            x_post = 0.
+
+            grads_0 = sess.run(
+                model.grad_posts['0'],
+                feed_dict=feed_dict)
+
+            grads_0 =  NNAL_tools.\
+                       shrink_gradient(
+                           grads_0, 'sum')
+            grads_1 = 0.
+
+        elif x_post > 1-1e-6:
+            x_post = 1.
+
+            grads_0 = 0.
+
+            grads_1 = sess.run(
+                model.grad_posts['1'],
+                feed_dict=feed_dict)
+
+            grads_1 = NNAL_tools.\
+                      shrink_gradient(
+                          grads_1, 'sum')
+        else:
+            grads_0 = sess.run(
+                model.grad_posts['0'],
+                feed_dict=feed_dict)
+            grads_0 =  NNAL_tools.\
+                       shrink_gradient(
+                           grads_0, 'sum')
+
+            grads_1 = sess.run(
+                model.grad_posts['1'],
+                feed_dict=feed_dict)
+            grads_1 =  NNAL_tools.\
+                       shrink_gradient(
+                           grads_1, 'sum')
+
+        # the A-matrix
+        Ai = (1.-x_post) * np.outer(grads_0, grads_0) + \
+             x_post * np.outer(grads_1, grads_1)
+
+        # final diagonal-loading
+        A += [Ai+ np.eye(A_size)*diag_load]
+
+    return A
+
+
+def get_feature_vecs(inds,
+                     padded_imgs,
+                     expr,
+                     model,
+                     sess):
+    """Extracting feature vectors for different
+    data samples from the network, and refining 
+    them to have well-conditioned features
+    """
+
+    B = expr.pars['B']
+    lambda_ = expr.pars['lambda_']
+
+    # extracting features for pool samples
+    # using only few indices of the features
+    F = PW_NN.batch_eval(model,
+                         sess,
+                         padded_imgs,
+                         inds,
+                         expr.pars['patch_shape'],
+                         expr.pars['ntb'],
+                         expr.pars['stats'],
+                         'feature_layer')[0]
+
+    # selecting from those features that have the most
+    # non-zero values among the selected samples
+    nnz_feats = np.sum(F>0, axis=1)
+    feat_inds = np.argsort(-nnz_feats)[:int(B/2)]
+    F_sel = F[feat_inds,:]
+    # taking care of the rank
+    while np.linalg.matrix_rank(F_sel)<len(feat_inds):
+        # if the matrix is not full row-rank, discard
+        # the last selected index (worst among all)
+        feat_inds = feat_inds[:-1]
+        F_sel = F[feat_inds,:]
+
+    # taking care of the conditional number
+    while np.linalg.cond(F_sel) > 1e6:
+        feat_inds = feat_inds[:-1]
+        F_sel = F[feat_inds,:]
+        if len(feat_inds)==1:
+            lambda_=0
+            print('Only one feature is selected.')
+            break
+
+    # subtracting the mean
+    F_sel -= np.repeat(np.expand_dims(
+        np.mean(F_sel, axis=1),
+        axis=1), B, axis=1)
+
+    print('Cond. #: %f'% (np.linalg.cond(F_sel)),
+          end='\n\t')
+    print('# selected features: %d'% 
+          (len(feat_inds)), end='\n\t')
+
+    return F_sel
 
 def SuPix_query(expr,
                 run,
