@@ -1087,4 +1087,41 @@ def get_patches(imgs,
 
     return patches
 
+def get_patches_multimg(all_padded_imgs,
+                        img_inds,
+                        patch_shape,
+                        stats):
+    """Get patches around given voxels of
+    multiple multi-modality images 
 
+    Based on the function `get_patches()`
+    """
+
+    m = len(all_padded_imgs[0])-1
+    s = len(img_inds)
+    n = np.sum([len(img_inds[i]) for 
+                i in range(s)])
+    d3 = patch_shape[2]
+    b_patches = [[] for i in range(s)]
+    b_labels = [[] for i in range(s)]
+
+    for j in range(s):
+        if len(img_inds[j])>0:
+            patches, labels = get_patches(
+                all_padded_imgs[j][:m],
+                img_inds[j],
+                patch_shape,
+                True,
+                all_padded_imgs[j][m])
+
+            # normalizing the patches
+            for k in range(m):
+                mu = stats[j,k*2]
+                sigma = stats[j,k*2+1]
+                patches[:,:,:,j*d3:(j+1)*d3] = (
+                    patches[:,:,:,j*d3:(j+1)*d3]-mu)/sigma
+
+            b_patches[j] = patches
+            b_labels[j] = labels
+
+    return b_patches, b_labels

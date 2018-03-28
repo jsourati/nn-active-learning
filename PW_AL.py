@@ -1,6 +1,6 @@
 from skimage.measure import regionprops
 from skimage.segmentation import slic
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
 import linecache
@@ -274,7 +274,7 @@ class Experiment(object):
         """Running a querying method in a run until a 
         given number of queries are drawn
         """
-        
+
         # read all the modalities and pad them
         rads = np.zeros(3,dtype=int)
         for i in range(3):
@@ -292,7 +292,6 @@ class Experiment(object):
                 'constant')
             padded_imgs += [padded_img]
         mask,_ = nrrd.read(self.pars['mask_path'])
-
 
         # set up the paths
         method_path = os.path.join(self.root_dir, 
@@ -999,13 +998,10 @@ class Experiment_MultiImg(Experiment):
         """ Initial Prediction """
         test_inds, test_labes = gen_multimg_inds(
             self.test_paths, self.pars['grid_spacing'])
-
-        if not(hasattr(self, test_stats)):
-            self.get_stats()
         
         # loading the model
         tf.reset_default_graph()
-        m = len(self.pars['test_paths'][0])
+        m = len(self.test_paths[0])-1
         patch_shape = self.pars['patch_shape'][:2] + \
                       (m*self.pars['patch_shape'][2],)
         model = NN.create_model(
@@ -1034,7 +1030,7 @@ class Experiment_MultiImg(Experiment):
                 test_preds = PW_NN.batch_eval(
                     model,
                     sess,
-                    self.pars['test_paths'][:-1],
+                    self.test_paths[:-1],
                     test_inds,
                     self.pars['patch_shape'],
                     self.pars['ntb'],
@@ -1146,6 +1142,7 @@ class Experiment_MultiImg(Experiment):
                     all_padded_imgs, 
                     pool_inds,training_inds,
                     method_name)
+
                 # moving Qs from pool --> training
                 nQ = np.sum([len(qind) for qind in Q_inds])
                 nqueries += nQ
@@ -1180,7 +1177,6 @@ class Experiment_MultiImg(Experiment):
                                  all_padded_imgs,
                                  training_inds)
 
-                pdb.set_trace()
 
                 """ Evaluating on Test Images """
                 # compute prediction evaluations statistics
@@ -1408,8 +1404,9 @@ def finetune_multimg(expr,
                      all_padded_imgs,
                      training_inds):
 
+    s = len(training_inds)
     img_ind_sizes = [len(training_inds[i]) for i 
-                     in range(len(training_inds))] 
+                     in range(s)] 
     n = np.sum(img_ind_sizes)
     m = len(all_padded_imgs[0]) - 1
     b = expr.pars['b']
@@ -1420,45 +1417,29 @@ def finetune_multimg(expr,
 
         for i in range(len(batch_inds)):
             """ Preparing the Patches/Labels """
-            b_patches = np.zeros(((len(batch_inds[i]),)+
-                                  (expr.pars['patch_shape'][:2])+
-                                  (m*d3,)))
-            b_labels = np.zeros(len(batch_inds[i]))
 
             # batch indices are global indices,
             # extract local indices for each image
             local_inds = patch_utils.global2local_inds(
                 batch_inds[i], img_ind_sizes)
+            # local indices --> image (voxel) indices
+            img_inds = [np.array(training_inds[j])[
+                local_inds[j]] for j in range(s)]
 
-            cnt = 0
-            for j in range(len(local_inds)):
-                if len(local_inds[j])>0:
-                    img_inds = np.array(training_inds[j])[local_inds[j]]
-                    patches, labels = patch_utils.get_patches(
-                        all_padded_imgs[j][:m],
-                        img_inds,
-                        expr.pars['patch_shape'],
-                        True,
-                        all_padded_imgs[j][m])
-
-                    # normalizing the patches
-                    for k in range(m):
-                        mu = expr.train_stats[j,k*2]
-                        sigma = expr.train_stats[j,k*2+1]
-                        patches[:,:,:,j*d3:(j+1)*d3] = (
-                            patches[:,:,:,j*d3:(j+1)*d3]-mu)/sigma
-
-                    b_patches[cnt:cnt+
-                              len(img_inds),:,:,:]=patches
-                    b_labels[cnt:cnt+len(img_inds)]=labels
-                    cnt += len(local_inds[j])
+            b_patches, b_labels = patch_utils.get_patches_multimg(
+                all_padded_imgs, img_inds,
+                expr.pars['patch_shape'], 
+                expr.train_stats)
+            b_patches = np.concatenate(b_patches,
+                                       axis=0)
+            b_labels = np.concatenate(b_labels)
 
             # converting to hot-one vectors
             hot_labels = np.zeros((2,len(b_labels)))
             hot_labels[0,b_labels==0] = 1
             hot_labels[1,b_labels==1] = 1
 
-            """ Doing an Optimization Iteration  """
+            """ Doing an Optimization Iteration """
             # finally we are ready to take 
             # optimization step
             sess.run(
