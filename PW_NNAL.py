@@ -90,6 +90,9 @@ def CNN_query(expr,
         
     if method_name=='fi':
         n = len(pool_inds)
+        m = len(expr.pars['img_paths'])
+        B = expr.pars['B']
+        lambda_ = expr.pars['lambda_']
 
         # posteriors
         posts = PW_NN.batch_eval(
@@ -104,7 +107,6 @@ def CNN_query(expr,
         
         # vectories everything
         # uncertainty filtering
-        B = expr.pars['B']
         if B < len(pool_inds):
             sel_inds = np.argsort(
                 np.abs(posts-.5))[:B]
@@ -122,25 +124,39 @@ def CNN_query(expr,
         sel_patches = patch_utils.get_patches(
             padded_imgs, pool_inds[sel_inds],
             expr.pars['patch_shape'])
+        for j in range(m):
+            sel_patches[:,:,:,j] = (
+                sel_patches[:,:,:,j]-
+                expr.pars['stats'][j][0])/\
+                expr.pars['stats'][j][1]
 
         # get the A-matrices (conditional FI's)
-        A = get_A_matrices(expr, 
+        A = gen_A_matrices(expr, 
                            model,
                            sess,
                            sel_patches,
                            sel_posts)
         # prepare the feature vectors
-        F_sel = get_feature_vecs(pool_inds[sel_inds],
-                                 padded_imgs,
-                                 expr,
-                                 model,
-                                 sess)
+        F = PW_NN.batch_eval(model,
+                             sess,
+                             padded_imgs,
+                             pool_inds[sel_inds],
+                             expr.pars['patch_shape'],
+                             expr.pars['ntb'],
+                             expr.pars['stats'],
+                             'feature_layer')[0]
+        ref_F = refine_feature_matrix(F, B)
+        # make the feature components zero-mean
+        ref_F -= np.repeat(np.expand_dims(
+            np.mean(ref_F, axis=1),
+            axis=1), F.shape[1], axis=1)
+
         # SDP
         # ----
         soln = NNAL_tools.SDP_query_distribution(
-            A, lambda_, F_sel, expr.pars['k'])
+            A, lambda_, ref_F, expr.pars['k'])
         print('status: %s'% (soln['status']), end='\n\t')
-        q_opt = np.array(soln['x'][:B])
+        q_opt = np.array(soln['x'][:F.shape[1]])
         
         # sampling from the optimal solution
         Q_inds = NNAL_tools.sample_query_dstr(
@@ -173,7 +189,12 @@ def query_multimg(expr,
     """
 
     k = expr.pars['k']
-
+    B = expr.pars['B']
+    img_ind_sizes = [len(pool_inds[i]) for 
+                     i in range(len(pool_inds))]
+    n = np.sum(img_ind_sizes)
+    m = len(all_padded_imgs[0]) - 1
+    
     if method_name=='random':
         inds_num = [len(pool_inds[i]) for
                     i in range(len(pool_inds))]
@@ -183,7 +204,138 @@ def query_multimg(expr,
         Q_inds = patch_utils.global2local_inds(
             inds, inds_num)
 
+    if method_name=='entropy':
+        
+        Q_inds = bin_uncertainty_filter_multimg(
+            expr, model, sess, all_padded_imgs,
+            pool_inds, k)[0]
+
+    if method_name=='fi':
+        # uncertainty-filtering
+        sel_inds,sel_posts = bin_uncertainty_filter_multimg(
+            expr, model, sess, all_padded_imgs,
+            pool_inds, B)
+
+        # loading patches
+        img_inds = [np.array(pool_inds[i])[sel_inds[i]]
+                    for i in range(len(pool_inds))]
+        patches,_ = patch_utils.get_patches_multimg(
+            all_padded_imgs, img_inds,
+            expr.pars['patch_shape'], 
+            expr.train_stats)
+
+        # form A-matrices and extract features
+        A = []
+        F = [[] for i in range(len(patches))]
+        for i in range(len(patches)):
+            if len(img_inds[i])==0:
+                continue
+
+            stats = []
+            for j in range(m):
+                stats += [[expr.train_stats[i,2*j],
+                           expr.train_stats[i,2*j+1]]]
+
+            A += gen_A_matrices(expr,
+                                model,
+                                sess,
+                                patches[i],
+                                sel_posts[i])
+
+            F[i] = PW_NN.batch_eval(
+                model,sess,
+                all_padded_imgs[i][:-1],
+                img_inds[i],
+                expr.pars['patch_shape'],
+                expr.pars['ntb'],
+                stats,
+                'feature_layer')[0]
+
+        F = [F[i] for i in range(len(F)) if len(F[i])>0]
+        F = np.concatenate(F, axis=1)
+        ref_F = refine_feature_matrix(F, B)
+        # make the feature components zero-mean
+        ref_F -= np.repeat(np.expand_dims(
+            np.mean(ref_F, axis=1),
+            axis=1), F.shape[1], axis=1)
+
+        # SDP
+        # ----
+        lambda_ = expr.pars['lambda_']
+        soln = NNAL_tools.SDP_query_distribution(
+            A, lambda_, ref_F, k)
+        print('status: %s'% (soln['status']), end='\n\t')
+        q_opt = np.array(soln['x'][:F.shape[1]])
+        
+        # sampling from the optimal solution
+        draws = NNAL_tools.sample_query_dstr(
+            q_opt, k, replacement=True)
+
+        img_ind_sizes = [len(sel_inds[i]) for i
+                         in range(len(sel_inds))]
+        local_inds = patch_utils.global2local_inds(
+            draws, img_ind_sizes)
+        Q_inds = [np.array(sel_inds[i])[local_inds[i]]
+                  for i in range(len(sel_inds))]
+
     return Q_inds
+
+
+def binary_uncertainty_filter(posts, B):
+    """Uncertainty filtering for binary class
+    label distribution
+    
+    Since there are only two classes, posterior
+    probability of only one of the classes
+    are given in form of 1D array.
+    """
+    
+    return np.argsort(np.abs(
+        np.array(posts)-0.5))[:B]
+
+
+def bin_uncertainty_filter_multimg(expr,
+                                   model,
+                                   sess,
+                                   all_padded_imgs,
+                                   pool_inds,
+                                   B):
+
+    # computing entropies for voxels of each
+    # image separately
+    s = len(pool_inds)
+    img_ind_sizes = [len(pool_inds[i]) for i in range(s)]
+    m = len(all_padded_imgs[0])-1
+    n = np.sum(img_ind_sizes)
+    H = [[] for i in range(s)]
+    for i in range(s):
+        # set the stats
+        stats = []
+        for j in range(m):
+            stats += [[expr.train_stats[i,2*j],
+                       expr.train_stats[i,2*j+1]]]
+        posts = PW_NN.batch_eval(
+            model,
+            sess,
+            all_padded_imgs[i][:-1],
+            pool_inds[i],
+            expr.pars['patch_shape'],
+            expr.pars['ntb'],
+            stats,
+            'posteriors')[0]
+
+        H[i] = list(posts)
+
+    # sort with respect to entropy values
+    tH = np.concatenate(H)
+    tH = np.abs(tH - 0.5)
+    sorted_inds = np.argsort(tH)[:B]
+    sel_inds = patch_utils.global2local_inds(
+        sorted_inds, img_ind_sizes)
+    sel_posts = [np.array(H[i])[sel_inds[i]] 
+                 for i in range(s)]
+
+    return sel_inds, sel_posts
 
 def gen_A_matrices(expr, 
                    model, 
@@ -198,21 +350,16 @@ def gen_A_matrices(expr,
     # in each layer we have gradients with respect to
     # weights and bias terms --> number of layers that
     # are considered is obtained after dividing by 2
-    A_size = int(
-        len(model.grad_posts['1'])/2)
+    A_size = int(len(model.grad_posts['1'])/2)
+    d3 = expr.pars['patch_shape'][-1]
     c = expr.nclass
     A = []
 
-    d3 = expr.pars['patch_shape'][-1]
-    for i in range(B):
+    # len(sel_posts) == sel_patches.shape[0]
+    for i in range(len(sel_posts)):
 
         # normalizing the patch
-        X_i = np.zeros(sel_patches.shape[1:])
-        for j in range(len(expr.pars['img_paths'])):
-            X_i[:,:,d3*j:d3*(j+1)] = (
-                sel_patches[i,:,:,d3*j:d3*(j+1)]-
-                expr.pars['stats'][j][0]) / \
-                expr.pars['stats'][j][1]
+        X_i = sel_patches[i,:,:,:]
 
         feed_dict = {
             model.x: np.expand_dims(X_i,axis=0),
@@ -271,62 +418,38 @@ def gen_A_matrices(expr,
     return A
 
 
-def get_feature_vecs(inds,
-                     padded_imgs,
-                     expr,
-                     model,
-                     sess):
-    """Extracting feature vectors for different
-    data samples from the network, and refining 
-    them to have well-conditioned features
+def refine_feature_matrix(F, B):
+    """Refining a feature matrix to make it
+    full row-rank with a moderate condition number
     """
-
-    B = expr.pars['B']
-    lambda_ = expr.pars['lambda_']
-
-    # extracting features for pool samples
-    # using only few indices of the features
-    F = PW_NN.batch_eval(model,
-                         sess,
-                         padded_imgs,
-                         inds,
-                         expr.pars['patch_shape'],
-                         expr.pars['ntb'],
-                         expr.pars['stats'],
-                         'feature_layer')[0]
 
     # selecting from those features that have the most
     # non-zero values among the selected samples
     nnz_feats = np.sum(F>0, axis=1)
     feat_inds = np.argsort(-nnz_feats)[:int(B/2)]
-    F_sel = F[feat_inds,:]
+    ref_F = F[feat_inds,:]
     # taking care of the rank
-    while np.linalg.matrix_rank(F_sel)<len(feat_inds):
+    while np.linalg.matrix_rank(ref_F)<len(feat_inds):
         # if the matrix is not full row-rank, discard
         # the last selected index (worst among all)
         feat_inds = feat_inds[:-1]
-        F_sel = F[feat_inds,:]
+        ref_F = F[feat_inds,:]
 
     # taking care of the conditional number
-    while np.linalg.cond(F_sel) > 1e6:
+    while np.linalg.cond(ref_F) > 1e6:
         feat_inds = feat_inds[:-1]
-        F_sel = F[feat_inds,:]
+        ref_F = F[feat_inds,:]
         if len(feat_inds)==1:
-            lambda_=0
             print('Only one feature is selected.')
             break
 
-    # subtracting the mean
-    F_sel -= np.repeat(np.expand_dims(
-        np.mean(F_sel, axis=1),
-        axis=1), B, axis=1)
-
-    print('Cond. #: %f'% (np.linalg.cond(F_sel)),
+    print('Cond. #: %f'% (np.linalg.cond(ref_F)),
           end='\n\t')
     print('# selected features: %d'% 
           (len(feat_inds)), end='\n\t')
 
-    return F_sel
+    return ref_F
+
 
 def SuPix_query(expr,
                 run,
@@ -388,17 +511,6 @@ def SuPix_query(expr,
 
     return qSuPix, qSuPix_inds
 
-def binary_uncertainty_filter(posts, B):
-    """Uncertainty filtering for binary class
-    label distribution
-    
-    Since there are only two classes, posterior
-    probability of only one of the classes
-    are given in form of 1D array.
-    """
-    
-    return np.argsort(np.abs(
-        np.array(posts)-0.5))[:B]
 
 def superpix_scoring(overseg_img,
                      inds,
