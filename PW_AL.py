@@ -948,6 +948,30 @@ class Experiment_MultiImg(Experiment):
         else:
             self.get_stats()
 
+        # compute initial prediction if necessary
+        init_eval_path = os.path.join(self.root_dir,
+                                      'init_eval.txt')
+        if not(os.path.exists(init_eval_path)):
+            m = len(self.train_paths[0])-1
+            patch_shape = self.pars['patch_shape'][:2] + \
+                          (m*self.pars['patch_shape'][2],)
+            model = NN.create_model(
+                self.pars['model_name'],
+                self.pars['dropout_rate'], 
+                self.nclass, 
+                self.pars['learning_rate'], 
+                self.pars['grad_layers'],
+                self.pars['train_layers'],
+                self.pars['optimizer_name'],
+                patch_shape)
+
+            with tf.Session() as sess:
+                model.initialize_graph(sess)
+                model.load_weights(
+                    self.pars['init_weights_path'], sess)
+                F1 = self.test_eval(model,sess)
+                np.savetxt(init_eval_path, [F1])
+
     def get_stats(self):
         
         # training
@@ -977,88 +1001,65 @@ class Experiment_MultiImg(Experiment):
         self.train_stats = train_stats
         self.test_stats  = test_stats
 
-
-    def read_stats(self):
-        
+    def read_stats(self):        
         self.train_stats = np.loadtxt(os.path.join(
             self.root_dir, 'train_stats.txt'))
         self.test_stats = np.loadtxt(os.path.join(
             self.root_dir, 'test_stats.txt'))
 
+    def test_eval(self, model, sess,
+                  test_inds=[], test_labels=[]):
+
+        m = len(self.test_paths[0])-1
+        if len(test_inds)==0:
+            test_inds, test_labels = gen_multimg_inds(
+                self.test_paths, self.pars['grid_spacing'])
+            
+        tP,tTP,tFP = 0,0,0
+        for i in range(len(test_inds)):
+            stats = []
+            for j in range(m):
+                stats += [[self.train_stats[i,2*j],
+                           self.train_stats[i,2*j+1]]]
+            test_preds = PW_NN.batch_eval(
+                model,
+                sess,
+                self.test_paths[i][:-1],
+                test_inds[i],
+                self.pars['patch_shape'],
+                self.pars['ntb'],
+                stats,
+                'prediction')[0]
+
+            (P,N,TP,
+             FP,TN,FN) = PW_analyze_results.get_preds_stats(
+                 test_preds, np.array(test_labels[i]))
+            tP  += P
+            tTP += TP
+            tFP += FP
+        # compute total Pr/Rc and F1
+        Pr = tTP / (tTP + tFP)
+        Rc = tTP / tP
+        F1 = 2. / (1/Pr + 1/Rc)
+
+        return F1
 
     def add_method(self, method_name):
 
         method_path = os.path.join(self.root_dir, 
                                    method_name)
-        if os.path.exists(method_path):
-            print("Method alread exists")
-            print("Nothing else to do..")
-            return
-
-        """ Initial Prediction """
-        test_inds, test_labes = gen_multimg_inds(
-            self.test_paths, self.pars['grid_spacing'])
-        
-        # loading the model
-        tf.reset_default_graph()
-        m = len(self.test_paths[0])-1
-        patch_shape = self.pars['patch_shape'][:2] + \
-                      (m*self.pars['patch_shape'][2],)
-        model = NN.create_model(
-            self.pars['model_name'],
-            self.pars['dropout_rate'],
-            self.nclass,
-            self.pars['learning_rate'],
-            self.pars['grad_layers'],
-            self.pars['train_layers'],
-            self.pars['optimizer_name'],
-            patch_shape)
-
-        # start a session to do the training
-        with tf.Session() as sess:
-            # training from initial training data
-            model.initialize_graph(sess)
-            if 'init_weights_path' in self.pars:
-                model.load_weights(
-                    self.pars['init_weights_path'], 
-                    sess)
-                        
-            # compute prediction evaluations statistics
-            # one-by-one
-            tP,tTP,tFP = 0,0,0
-            for i in range(len(test_inds)):
-                test_preds = PW_NN.batch_eval(
-                    model,
-                    sess,
-                    self.test_paths[:-1],
-                    test_inds,
-                    self.pars['patch_shape'],
-                    self.pars['ntb'],
-                    self.test_stats[i],
-                    'prediction')[0]
-                (P,N,TP,
-                 FP,TN,FN) = PW_analyze_results.get_preds_stats(
-                     test_preds, test_labels[i])
-                tP  += P
-                tTP += TP
-                tFP += FP
-            # compute total Pr/Rc and F1
-            Pr = tTP / (tTP + tFP)
-            Rc = tTP / tP
-            F1 = 2. / (1/Pr + 1/Rc)
-            
-            print("Initial F-measure: %f"% F1)
-            perf_eval_path = os.path.join(
-                self.root_dir, 'perf_evals.txt')
-            with open(perf_eval_path, 'w') as f:
-                f.write('%f\n'% F1)
+        if not(os.path.exists(method_path)):
+            mkdir(method_path)
         
     def run_method(self, method_name, max_queries):
+        
+        method_path = os.path.join(self.root_dir,
+                                   method_name)
         
         """ Pool/Training Indices """
         # first load up all the indices for
         # pool images
-        pool_inds, pool_labels = gen_multimg_inds(
+        pool_inds,_ = gen_multimg_inds(
             self.train_paths, self.pars['grid_spacing'])
         test_inds, test_labels = gen_multimg_inds(
             self.test_paths, self.pars['grid_spacing'])
@@ -1067,11 +1068,8 @@ class Experiment_MultiImg(Experiment):
         # the training set
         training_inds = [[] for i in 
                          range(len(pool_inds))]
-        training_labels = [[] for i in 
-                           range(len(pool_inds))]
 
-        Q_path = os.path.join(self.root_dir, 
-                              method_name,
+        Q_path = os.path.join(method_path,
                               'queries')
         Q_files = os.listdir(Q_path)
         iters = len(Q_files)
@@ -1082,15 +1080,28 @@ class Experiment_MultiImg(Experiment):
                 I = Qs[Qs[:,1]==ind,0]
                 training_inds[ind] += I.tolist()
                 # get the locations to use for labels
-                I_locs = [pool_inds[ind].index(i) 
-                          for i in I]
-                sorted_inds = np.argsort(-np.array(I_locs))
-                I_locs.sort()
+                #I_locs = [pool_inds[ind].index(i) 
+                #          for i in I]
+                #sorted_inds = np.argsort(-np.array(I_locs))
+                #I_locs.sort()
                 [pool_inds[ind].remove(i) for i in I]
-                labels= [pool_labels[ind].pop(i) 
-                         for i in reversed(I_locs)]
-                training_labels[ind] += np.array(
-                    labels)[sorted_inds].tolist()
+
+        evals_path = os.path.join(method_path, 
+                                  'perf_evals.txt')
+        # check if initial prediction is already 
+        # available, if not copy
+        if not(os.path.exists(eval_path)):
+            shutil.copy(
+                os.path.join(self.root_dir,'init_eval.txt'),
+                os.path.join(method_path,'perf_evals.txt')
+            )
+
+        curr_fmeas = np.loadtxt(evals_path)
+        if curr_fmeas.size==1:
+            curr_fmeas = [curr_fmeas]
+        print("Current F-measures: ", end='')
+        print(*curr_fmeas, sep=', ')
+
 
         """ Load and Pad Training Images """
         rads = np.zeros(3, dtype=int)
@@ -1099,10 +1110,15 @@ class Experiment_MultiImg(Experiment):
                 (self.pars['patch_shape'][i]-1)/2.)
 
         all_padded_imgs = []
-        for paths in self.train_paths:
+        m = len(self.train_paths[0])-1
+        for sub_paths in self.train_paths:
             padded_imgs = []
-            for mod_path in paths:
+            for i, path in enumerate(sub_paths):
                 img,_ = nrrd.read(mod_path)
+                # if mask, do not pad
+                if i==m:
+                    padded_img += [img]
+                    continue
                 padded_img = np.pad(
                     img, 
                     ((rads[0],rads[0]),
@@ -1110,6 +1126,7 @@ class Experiment_MultiImg(Experiment):
                      (rads[2],rads[2])),
                     'constant')
                 padded_imgs += [padded_img]
+
             all_padded_imgs += [padded_imgs]
 
         """ Loading the Model """
@@ -1137,6 +1154,8 @@ class Experiment_MultiImg(Experiment):
             """ Start Generating the Queries """
             nqueries = 0
             while nqueries < max_queries:
+                print("Iter. %d: "% iters,end='\n\t')
+
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 
                     all_padded_imgs, 
@@ -1146,6 +1165,8 @@ class Experiment_MultiImg(Experiment):
                 # moving Qs from pool --> training
                 nQ = np.sum([len(qind) for qind in Q_inds])
                 nqueries += nQ
+                # Q_mat:  1st column=voxel indices
+                #         2nd column=training image index
                 Q_mat = np.zeros((nQ,2))
                 q_file = os.path.join(self.root_dir,
                                       method_name,
@@ -1161,13 +1182,10 @@ class Experiment_MultiImg(Experiment):
                         # ading to the training
                         training_inds[ind] += list(np.array(
                             pool_inds[ind])[Q_inds[ind]])
-                        training_labels[ind] += list(np.array(
-                            pool_labels[ind])[Q_inds[ind]])
                         # remove from the pool
                         sorted_inds = -np.sort(-Q_inds[ind])
                         [pool_inds[ind].pop(i) for i in sorted_inds]
-                        [pool_labels[ind].pop(i) for i in sorted_inds]
-
+                        
                 np.savetxt(q_file, Q_mat, fmt='%d')
                 iters += 1
 
@@ -1177,32 +1195,17 @@ class Experiment_MultiImg(Experiment):
                                  all_padded_imgs,
                                  training_inds)
 
-
                 """ Evaluating on Test Images """
-                # compute prediction evaluations statistics
-                # one-by-one
-                tP,tTP,tFP = 0,0,0
-                for i in range(len(test_inds)):
-                    test_preds = PW_NN.batch_eval(
-                        model,
-                        sess,
-                        self.pars['test_paths'][:-1],
-                        test_inds,
-                        self.pars['patch_shape'],
-                        self.pars['ntb'],
-                        self.test_stats[i],
-                        'prediction')[0]
-                    (P,N,TP,
-                     FP,TN,FN) = PW_analyze_results.get_preds_stats(
-                         test_preds, test_labels[i])
-                    tP  += P
-                    tTP += TP
-                    tFP += FP
-                # compute total Pr/Rc and F1
-                Pr = tTP / (tTP + tFP)
-                Rc = tTP / tP
-                F1 = 2. / (1/Pr + 1/Rc)
-            
+                F1 = self.test_eval(model,sess,
+                                    test_inds,test_labels)
+                with open(perf_eval_path, 'a') as f:
+                    f.write('%f\n'% F1)
+
+                # save the current weights
+                model.save_weights(
+                    os.path.join(self.root_dir, method_name,
+                                 'curr_weights.h5'))
+
 
 def gen_multimg_inds(dat_paths, grid_spacing):
     """Gegenerating inidices from a set of
@@ -1430,9 +1433,16 @@ def finetune_multimg(expr,
                 all_padded_imgs, img_inds,
                 expr.pars['patch_shape'], 
                 expr.train_stats)
+            
+            # stitching patches and labels
+            b_patches = [b_patches[j] for j in range(len(img_inds))
+                         if len(img_inds[j])>0]
             b_patches = np.concatenate(b_patches,
                                        axis=0)
+            b_labels = [b_labels[j] for j in range(len(img_inds))
+                        if len(img_inds[j])>0]
             b_labels = np.concatenate(b_labels)
+
 
             # converting to hot-one vectors
             hot_labels = np.zeros((2,len(b_labels)))
