@@ -369,7 +369,7 @@ def extract_Hakims_data_path():
                '0%d'% i for i in 
                np.arange(10,67)]
 
-    root_dir = '/common/data/raw/Hakim/For_Christine/Mrakotsky_IBD_Brain/Processed'
+    root_dir = '/fileserver/commondataraw/Hakim/For_Christine/Mrakotsky_IBD_Brain/Processed'
     mask_rest_of_path = 'scan01/common-processed/anatomical/03-ICC/'
     T1_rest_of_path = 'scan01/common-processed/anatomical/01-t1w-ref/'
     T2_rest_of_path = 'scan01/common-processed/anatomical/02-coregistration/'
@@ -416,7 +416,7 @@ def extract_newborn_data_path():
     """
 
     # common root directory 
-    root_dir = '/common/collections/dHCP/'+\
+    root_dir = '/fileserver/collections/dHCP/'+\
                'dHCP_DCI_spatiotemporal_atlas/'+\
                'Processed/'
     
@@ -493,7 +493,7 @@ def extract_newborn_data_path():
 def extract_ACElesion_data_path():
 
     # common directory
-    root_dir = '/common/segmentation/Xavi/ICC-Datasets/ACE/'
+    root_dir = '/fileserver/segmentation/Xavi/ICC-Datasets/ACE/'
 
     # common sub-directories
     # there are four scans, specify which
@@ -1118,8 +1118,8 @@ def get_patches_multimg(all_padded_imgs,
             for k in range(m):
                 mu = stats[j,k*2]
                 sigma = stats[j,k*2+1]
-                patches[:,:,:,j*d3:(j+1)*d3] = (
-                    patches[:,:,:,j*d3:(j+1)*d3]-mu)/sigma
+                patches[:,:,:,k*d3:(k+1)*d3] = (
+                    patches[:,:,:,k*d3:(k+1)*d3]-mu)/sigma
 
             b_patches[j] = patches
             b_labels[j] = labels
