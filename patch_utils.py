@@ -490,7 +490,7 @@ def extract_newborn_data_path():
     return T1_addrs, T2_addrs, mask_addrs, sub_codes
 
 
-def extract_ACElesion_data_path():
+def extract_ACElesion_data_path(scans=[]):
 
     # common directory
     root_dir = '/fileserver/segmentation/Xavi/ICC-Datasets/ACE/'
@@ -499,19 +499,30 @@ def extract_ACElesion_data_path():
     # there are four scans, specify which
     # one to use
     scan_idx = 1
-    T1_rest_of_path = 'scan0%d/t1w.nrrd'% scan_idx
-    T2_rest_of_path = 'scan0%d/t2w.nrrd'% scan_idx
-    mask_rest_of_path='scan0%d/Manual-ICC.nrrd'% scan_idx
-
+    if len(scans)==0:
+        T1_rest_of_path = 'scan0%d/t1w.nrrd'% scan_idx
+        T2_rest_of_path = 'scan0%d/t2w.nrrd'% scan_idx
+        mask_rest_of_path='scan0%d/Manual-ICC.nrrd'% scan_idx
 
     # subject-specific sub-directories
     dirs = get_subdirs(root_dir)
+    dirs = list(np.sort(np.array(dirs)))
     T1_addrs = []
     T2_addrs = []
     mask_addrs = []
     sub_codes = []
 
-    for dir in dirs:
+    for i,dir in enumerate(dirs):
+
+        if len(scans)==0:
+            T1_rest_of_path = 'scan0%d/t1w.nrrd'% scan_idx
+            T2_rest_of_path = 'scan0%d/t2w.nrrd'% scan_idx
+            mask_rest_of_path='scan0%d/Manual-ICC.nrrd'% scan_idx
+        else:
+            T1_rest_of_path = 'scan0%d/t1w.nrrd'% (scans[i])
+            T2_rest_of_path = 'scan0%d/t2w.nrrd'% (scans[i])
+            mask_rest_of_path='scan0%d/Manual-ICC.nrrd'% (scans[i])
+
         sub_codes += [dir]
 
         T1_path = os.path.join(
