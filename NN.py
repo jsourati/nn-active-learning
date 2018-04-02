@@ -418,7 +418,7 @@ class CNN(object):
                 f[layer_name]['Bias'])
             session.run(pars[1].assign(value_to_load))
             
-    def add_assign_ops(self, file_path):
+    def add_assign_ops(self):
         """Adding operations for assigning values to
         the nodes of the class's graph. This method
         is for creating repeatedly assigning values to
@@ -440,22 +440,24 @@ class CNN(object):
         finalizing the graph.
         """
 
-        f = h5py.File(file_path)
-        self.assign_dict = {}
+        self.assign_placeholders={}
+        self.assign_ops=[]
         for layer_name, pars in self.var_dict.items():
-            # weight
-            weight_to_load = np.array(
-                f[layer_name]['Weight'])
-            bias_to_load = np.array(
-                f[layer_name]['Bias'])
+            # assigning value placeholders
+            self.assign_placeholders.update(
+                {layer_name: [tf.placeholder(pars[0].dtype,
+                                             pars[0].get_shape()),
+                              tf.placeholder(pars[1].dtype,
+                                             pars[1].get_shape())]})
+
+            # assigning ops
+            self.assign_ops += [pars[0].assign(
+                self.assign_placeholders[layer_name][0])]
+            self.assign_ops += [pars[1].assign(
+                self.assign_placeholders[layer_name][1])]
+
             
-            self.assign_dict.update({
-                layer_name: [
-                    tf.assign(pars[0], weight_to_load),
-                    tf.assign(pars[1], bias_to_load)]
-            })
-            
-    def perform_assign_ops(self,sess):
+    def perform_assign_ops(self,file_path,sess):
         """Performing assignment operations that have
         been created by `self.add_assign_ops`.
 
@@ -464,9 +466,20 @@ class CNN(object):
         value assignment needs to be done repeatedly after
         finalizing the graph.
         """
-        
-        for _, assign_ops in self.assign_dict.items():
-            sess.run(assign_ops)
+
+        f = h5py.File(file_path)
+
+        # preparing feed_dict
+        feed_dict={}
+        for layer_name, pars in self.var_dict.items():
+            # weight
+            W = np.array(f[layer_name]['Weight'])
+            b = np.array(f[layer_name]['Bias'])
+            feed_dict.update({
+                self.assign_placeholders[layer_name][0]:W,
+                self.assign_placeholders[layer_name][1]:b})
+
+        sess.run(self.assign_ops, feed_dict=feed_dict)
 
         
     def extract_features(self, inds, 
