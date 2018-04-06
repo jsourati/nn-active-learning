@@ -353,9 +353,6 @@ class Experiment(object):
             self.pars['train_layers'],
             self.pars['optimizer_name'],
             patch_shape)
-        model.add_assign_ops(os.path.join(
-            method_path, 'curr_weights.h5'))
-        
         
         # printing the accuracies so far:
         curr_fmeas = np.loadtxt(os.path.join(
@@ -369,13 +366,15 @@ class Experiment(object):
         with tf.Session() as sess:
             # loading the stored weights
             model.initialize_graph(sess)
+            model.load_weights(os.path.join(
+                method_path,'curr_weights.h5'), sess)
             sess.graph.finalize()
 
             # starting the iterations
             print("Starting iterations of %s"%
                   method_name)
             nqueries = 0
-            model.perform_assign_ops(sess)
+
             while nqueries < max_queries:
                 
                 print("Iter. %d: "% iter_cnt,
@@ -951,7 +950,7 @@ class Experiment_MultiImg(Experiment):
         # compute initial prediction if necessary
         init_eval_path = os.path.join(self.root_dir,
                                       'init_eval.txt')
-        if not(os.path.exists(init_eval_path)):
+        if False:#not(os.path.exists(init_eval_path)):
             m = len(self.train_paths[0])-1
             patch_shape = self.pars['patch_shape'][:2] + \
                           (m*self.pars['patch_shape'][2],)
@@ -1019,8 +1018,8 @@ class Experiment_MultiImg(Experiment):
         for i in range(len(test_inds)):
             stats = []
             for j in range(m):
-                stats += [[self.train_stats[i,2*j],
-                           self.train_stats[i,2*j+1]]]
+                stats += [[self.test_stats[i,2*j],
+                           self.test_stats[i,2*j+1]]]
             test_preds = PW_NN.batch_eval(
                 model,
                 sess,
@@ -1049,7 +1048,9 @@ class Experiment_MultiImg(Experiment):
         method_path = os.path.join(self.root_dir, 
                                    method_name)
         if not(os.path.exists(method_path)):
-            mkdir(method_path)
+            os.mkdir(method_path)
+            os.mkdir(os.path.join(method_path,
+                                  'queries'))
         
     def run_method(self, method_name, max_queries):
         
@@ -1090,18 +1091,18 @@ class Experiment_MultiImg(Experiment):
                                   'perf_evals.txt')
         # check if initial prediction is already 
         # available, if not copy
-        if not(os.path.exists(eval_path)):
+        if False:#not(os.path.exists(eval_path)):
             shutil.copy(
                 os.path.join(self.root_dir,'init_eval.txt'),
                 os.path.join(method_path,'perf_evals.txt')
             )
 
-        curr_fmeas = np.loadtxt(evals_path)
-        if curr_fmeas.size==1:
-            curr_fmeas = [curr_fmeas]
-        print("Current F-measures: ", end='')
-        print(*curr_fmeas, sep=', ')
-
+            curr_fmeas = np.loadtxt(evals_path)
+            if curr_fmeas.size==1:
+                curr_fmeas = [curr_fmeas]
+                print("Current F-measures: ", end='')
+                print(*curr_fmeas, sep=', ')
+        
 
         """ Load and Pad Training Images """
         rads = np.zeros(3, dtype=int)
@@ -1113,14 +1114,14 @@ class Experiment_MultiImg(Experiment):
         m = len(self.train_paths[0])-1
         for sub_paths in self.train_paths:
             padded_imgs = []
-            for i, path in enumerate(sub_paths):
-                img,_ = nrrd.read(mod_path)
-                # if mask, do not pad
+            for i,path in enumerate(sub_paths):
+                img,_ = nrrd.read(path)
+                # if mask, don't pad it
                 if i==m:
-                    padded_img += [img]
+                    padded_imgs += [img]
                     continue
                 padded_img = np.pad(
-                    img, 
+                    img,
                     ((rads[0],rads[0]),
                      (rads[1],rads[1]),
                      (rads[2],rads[2])),
@@ -1196,15 +1197,15 @@ class Experiment_MultiImg(Experiment):
                                  training_inds)
 
                 """ Evaluating on Test Images """
-                F1 = self.test_eval(model,sess,
-                                    test_inds,test_labels)
-                with open(perf_eval_path, 'a') as f:
-                    f.write('%f\n'% F1)
+                #F1 = self.test_eval(model,sess,
+                #                    test_inds,test_labels)
+                #with open(perf_eval_path, 'a') as f:
+                #    f.write('%f\n'% F1)
 
                 # save the current weights
                 model.save_weights(
                     os.path.join(self.root_dir, method_name,
-                                 'curr_weights.h5'))
+                                 'curr_weights_%d.h5'% iters))
 
 
 def gen_multimg_inds(dat_paths, grid_spacing):
@@ -1305,39 +1306,6 @@ def prep_AL_data(expr):
     np.savetxt(os.path.join(
         expr.root_dir, 'test_labels.txt'),
                test_labels, fmt='%d')
-
-
-def get_statistics(expr, run, hist_flag=False):
-    """Getting statistics of intensity values
-    of the pool samples in an experiment's 
-    run
-    """
-
-    pool_lines = np.int32(np.loadtxt(
-        os.path.join(expr.root_dir,
-                     str(run),
-                     'init_pool_lines.txt')))
-    pool_patches = load_patches(
-        expr, run, pool_lines)
-
-    # mean and std
-    mu = np.mean(pool_patches)
-    sigma = np.std(pool_patches)
-    
-    if hist_flag:
-        npool = np.prod(pool_patches.shape)
-        # preparing histogram bins
-        M = pool_patches.max()
-        nbin = 100
-        bin_seq = np.linspace(0, M, nbin)
-
-        # histogram of intensities
-        hist = np.histogram(
-            pool_patches, bin_seq)[0]/npool
-
-        return mu, sigma, bin_seq, hist
-
-    return mu, sigma
 
     
 def finetune(model,
@@ -1649,4 +1617,3 @@ def sequential_AL(base_expr,
         # when it is done, modify the path
         # to the previous experiment
         prev_expr_dir = E.root_dir
-        
