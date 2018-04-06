@@ -5,7 +5,9 @@ from pydensecrf.utils import create_pairwise_bilateral
 from pydensecrf.utils import create_pairwise_gaussian
 import pydensecrf.densecrf as dcrf
 
-#from matplotlib import pyplot as plt
+#import matplotlib
+#matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 import numpy as np
 import linecache
 import shutil
@@ -786,3 +788,94 @@ def grid_based_F1(model, sess,
     return 2./(1/Pr + 1/Rc)
 
 
+def eval_multimg_AL(expr,method_name,img_paths,start_ind=0):
+
+    m = len(expr.train_paths[0])-1
+    patch_shape = expr.pars['patch_shape'][:2] + \
+        (m*expr.pars['patch_shape'][2],)
+
+    model = NN.create_model(
+        expr.pars['model_name'],
+        expr.pars['dropout_rate'],
+        expr.nclass,
+        expr.pars['learning_rate'],
+        expr.pars['grad_layers'],
+        expr.pars['train_layers'],
+        expr.pars['optimizer_name'],
+        patch_shape)
+
+    method_path = os.path.join(expr.root_dir,
+                               method_name)
+
+    Qs = get_queries(expr, method_name)
+    qnum = len(Qs)
+    imgnum = len(img_paths)
+
+    save_dir = os.path.join(method_path,
+                            'test_scores.txt')
+
+    if start_ind>0:
+        scores = np.loadtxt(save_dir)
+    else:
+        scores = np.zeros((imgnum, qnum))
+
+    with tf.Session() as sess:
+        model.initialize_graph(sess)
+
+        for i in range(start_ind,qnum):
+            weights_path = os.path.join(method_path,
+                                        'curr_weights_%d.h5'% (i+1))
+            print('Loading weights %s'% weights_path)
+            model.load_weights(weights_path, sess)
+
+            for j in range(imgnum):
+                 # grid-samples from the j-th image
+                 expr.test_paths = img_paths[j:j+1]
+                 T1_img,_ = nrrd.read(expr.test_paths[0][0])
+                 T2_img,_ = nrrd.read(expr.test_paths[0][1])
+                 stats = np.array([np.mean(T1_img),np.std(T1_img),
+                                   np.mean(T2_img),np.std(T2_img)])
+                 expr.test_stats = np.expand_dims(stats,axis=0)
+
+                 scores[j,i] = expr.test_eval(model, sess)
+                 np.savetxt(save_dir, scores)
+
+                 print(j, end=',')
+            print()
+
+
+def get_Qsims(model,sess, expr, method_name):
+    
+    Qs = get_queries(expr, method_name)
+
+    imgs = []
+    for path in expr.pars['img_paths']:
+        img,_ = nrrd.read(path)
+        imgs += [img]
+
+    # get similarities
+    sims = []
+    d3 = expr.pars['patch_shape'][2]
+    stats = expr.pars['stats']
+    for i in range(len(Qs)):
+        patches = patch_utils.get_patches(
+            imgs, Qs[i], 
+            expr.pars['patch_shape'], False)
+        for j in range(len(imgs)):
+            patches[:,:,:,j*d3:(j+1)*d3] = (patches[
+                :,:,:,j*d3:(j+1)*d3]-stats[j][0])/\
+                stats[j][1]
+
+        # flattened version of the output of
+        # the last convolutional layer as features
+        F = sess.run(model.probes[0],
+                     feed_dict={model.x:patches,
+                                model.keep_prob:1.})
+        # cosine similarities
+        inners = np.dot(F.T,F)
+        norms = np.sqrt(np.sum(F**2, axis=0))
+        cos_sims = inners / np.outer(norms,norms)
+
+        sims += [cos_sims]
+
+    return sims
