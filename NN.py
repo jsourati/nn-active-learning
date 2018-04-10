@@ -62,7 +62,8 @@ class CNN(object):
                  layer_dict, 
                  name,
                  feature_layer=None,
-                 dropout=None):
+                 dropout=None,
+                 probes=[]):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
         key is a 2-element list inlcuding  depth of this layer and its type,
@@ -141,7 +142,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.FC_inputs = []
+        self.probes = []
         with tf.name_scope(name):
             for i in range(len(layer_dict)):
                 # extract previous depth
@@ -173,6 +174,9 @@ class CNN(object):
                 # the features that the network will extract
                 if i==feature_layer:
                     self.feature_layer = self.output
+
+                if i in probes:
+                    self.probes += [self.output]
                 
                 self.layer_type += [
                     layer_dict[layer_names[i]][1]]                
@@ -225,10 +229,6 @@ class CNN(object):
                               flatten=False)
 
         elif layer_specs[1]=='fc': 
-            # adding the input into the list
-            # of FC_inputs before adding the layer
-            self.FC_inputs += [[name,
-                               self.output]]
             # apply relu activation only if we are NOT 
             # at the last layer 
             if last_layer:
@@ -834,6 +834,38 @@ def add_loss_grad(model, pars=[]):
         model.loss, pars)
 
 
+def LLFC_hess(model,sess,feed_dict):
+    """Explicit Hessian matrix of the loss with 
+    respect to the last (FC) layer when the loss
+    is the soft-max and the last layer does not
+    have any additional activation except this
+    soft-max
+    """
+
+    # input to the last layer (u)
+    u = sess.run(model.feature_layer,
+                 feed_dict=feed_dict)
+    d = u.shape[0]
+
+    # the class probabilities
+    pi = sess.run(model.posteriors,
+                  feed_dict=feed_dict)
+
+    # A(pi)
+    c = pi.shape[0]
+    repM = np.repeat(pi,c,axis=1) - np.eye(c)
+    A = np.diag(pi[:,0]) @ repM.T
+
+    # Hessian
+    H = np.zeros(((d+1)*c, (d+1)*c))
+    H[:c*d,:c*d] = np.kron(A, np.outer(u,u))
+    H[:c*d,c*d:] = np.kron(A,u)
+    H[c*d:,:c*d] = np.kron(A,u.T)
+    H[c*d:,c*d:] = A
+
+    return H
+
+
 class AlexNet_CNN(AlexNet):
     """
     """
@@ -1148,10 +1180,12 @@ def create_PW1(nclass,
          patch_shape[2]],
         name='input')
     feature_layer = len(pw_dict) - 2
+    probes = [5]
     
     # the model
     model = CNN(x, pw_dict, 'PatchWise', 
-                   feature_layer, dropout)
+                feature_layer, 
+                dropout, probes)
     # optimizers
     model.get_optimizer(learning_rate, [],
                         optimizer_name)
