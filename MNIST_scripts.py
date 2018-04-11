@@ -154,3 +154,37 @@ def eval_test_model(model, sess, test_dat):
     F1 = 2. / (1/Pr + 1/Rc)
 
     return F1
+
+
+def stoch_approx_Influence(model, sess, 
+                           X_train, X_pool,
+                           pool_inds):
+
+    n = X_train.shape[1]
+    max_iter = n
+
+    # preparing feed_dict
+    feed_dict = {model.x: X_pool[:,pool_inds],
+                 model.keep_prob: 1.}
+
+    # loss gradients of the pool samples
+    grads = NN.LLFC_grads(model,sess,feed_dict)
+
+    # start the stochastic estimatin
+    V_t = grads
+    for t in range(max_iter):
+        # Hessian of a random labeled data
+        rand_ind = [np.random.randint(n)]
+        feed_dict = {model.x:X_train[:,rand_ind],
+                     model.keep_prob:1.}
+        H = NN.LLFC_hess(model,sess,feed_dict)/10
+
+        # iteration's step
+        V_t = grads + (np.eye(H.shape[0])-H)@V_t
+        if t==100:
+            pdb.set_trace()
+
+    return V_t
+
+        
+    
