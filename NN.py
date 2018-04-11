@@ -865,6 +865,127 @@ def LLFC_hess(model,sess,feed_dict):
 
     return H
 
+def LLFC_grads(model, sess, feed_dict, labels=None):
+    """General module for computing gradients
+    of the log-loss with respect to parameters
+    of the (FC) last layer of the network
+    """
+
+    # posteriors (pi)
+    pies = sess.run(model.posteriors,
+                    feed_dict=feed_dict)
+    c,n = pies.shape
+
+    # input to the last layer (u)
+    U = sess.run(model.feature_layer,
+                 feed_dict=feed_dict)
+    d = U.shape[0]
+
+    # term containing [pi_1.u_1 ,..., pi_1.u_d,
+    #                  pi_2.u_1 ,..., pi_2.u_d,...]
+    rep_pies = np.repeat(pies, d, axis=0)
+    rep_U = np.tile(U, (c,1))
+    pies_dot_U = rep_pies * rep_U
+
+    # sparse term containing columns
+    #         [0,...,0, u_1,...,u_d, 0,...,0].T
+    #                   |____ ____|
+    #                        v
+    #                   y*-th block
+    if labels is None:
+        labels = sess.run(model.prediction,
+                          feed_dict=feed_dict)
+    hot_labels = np.zeros((c,n))
+    for j in range(c):
+        hot_labels[j,labels==j]=1
+
+    sparse_term = np.repeat(
+        hot_labels, d, axis=0) * rep_U
+
+    # dJ/dW
+    dJ_dW = sparse_term - pies_dot_U
+
+    # dJ/db
+    dJ_db = hot_labels = pies
+
+    return np.concatenate((dJ_dW,dJ_db),axis=0)
+
+def PW_LLFC_grads(model, sess, 
+                  expr,
+                  all_padded_imgs,
+                  img_inds,
+                  labels):
+    """Computing gradients of the log-likelihoods
+    with respect to the parameters of the last
+    layer of a given model
+
+    Given labels are not necessarily the true
+    labels of the indexed sampels (i.e. not
+    necessarily those based on the mask image
+    present in `all_padded_imgs`)
+    """
+
+    s = len(img_inds)
+    n = np.sum([len(img_inds[i]) for i in range(s)])
+    d = model.feature_layer.shape[0].value
+    c = expr.nclass
+
+    all_pies = np.zeros((c,n))
+    all_a = np.zeros((d,n))
+
+    # loading patches
+    patches,_ = patch_utils.get_patches_multimg(
+        all_padded_imgs, img_inds, 
+        expr.pars['patch_shape'], 
+        expr.train_stats)
+
+    cnt=0
+    for i in range(s):
+        # posteriors pie's
+        pies = sess.run(model.posteriors,
+                        feed_dict={model.x:patches[i],
+                                   model.keep_prob:1.})
+        all_pies[:,cnt:cnt+len(img_inds[i])] = pies
+
+        # last layer's inputs a^{n1-1}
+        a_s = sess.run(model.feature_layer,
+                       feed_dict={model.x:patches[i],
+                                  model.keep_prob:1.})
+        all_a[:,cnt:cnt+len(img_inds[i])] = a_s
+
+        cnt += len(img_inds[i])
+
+    # repeating the matrices
+    rep_pies = np.repeat(all_pies, d, axis=0)
+    rep_a = np.tile(all_a, (c,1))
+    pies_dot_as = rep_pies * rep_a
+
+    # forming dJ / dW_(nl-1)
+    term_1 = np.zeros((c*d, n))
+    multinds = (np.zeros(n*d, dtype=int), 
+                np.zeros(n*d, dtype=int))
+    for i in range(n):
+        multinds[0][i*d:(i+1)*d] = np.arange(
+            labels[i]*d,(labels[i]+1)*d)
+        multinds[1][i*d:(i+1)*d] = i
+    term_1[multinds] = np.ravel(a_s.T)
+
+    dJ_dW = term_1 - pies_dot_as
+
+    # appending with dJ / db_{nl-1}
+    term_1 = np.zeros((c,n))
+    multinds = (np.array(labels),
+                np.arange(n))
+    term_1[multinds] = 1.
+    dJ_db = term_1 - pies
+    
+    pdb.set_trace()
+    # final gradient vectors
+    grads = np.concatenate((dJ_dW,dJ_db), axis=0)
+
+    return grads
+
+
 
 class AlexNet_CNN(AlexNet):
     """
