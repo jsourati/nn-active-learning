@@ -364,8 +364,8 @@ def PW_train_epoch_MultiModal(
     one modality, we have a list of 
     dictionary, one for each modality
 
-    Data = [[P_11, P_12, ..., P_1M, PM_1, I_1],
-            [P_21, P_22, ..., P_2M, PM_2, I_2],
+    Data = [[P_11, P_12, ..., P_1M, PL_1, I_1],
+            [P_21, P_22, ..., P_2M, PL_2, I_2],
             ...] 
 
     where P_ij is the path that refers to
@@ -385,6 +385,7 @@ def PW_train_epoch_MultiModal(
 
     # number of modalities
     m = len(tr_data[0])-2
+    d3 = patch_shape[2]
 
     # number of subjects
     s = len(tr_data)
@@ -445,7 +446,7 @@ def PW_train_epoch_MultiModal(
             cnt = 0
             for j in range(s):
                 if len(local_inds[j])>0:
-                    img_inds = np.array(tr_data[j][-2])[
+                    img_inds = np.array(tr_data[j][-1])[
                         local_inds[j]]
                     patches, labels = patch_utils.\
                                       get_patches(
@@ -454,6 +455,12 @@ def PW_train_epoch_MultiModal(
                                           patch_shape,
                                           True,
                                           masks[j])
+                    # normalizing the patches
+                    for jj in range(m):
+                        patches[:,:,:,jj*d3:(jj+1)*d3] = (
+                            patches[:,:,:,jj*d3:(jj+1)*d3]-stats[
+                                j,2*jj])/stats[j,2*jj+1]
+
                     b_patches[cnt:cnt+len(img_inds),
                               :,:,:] = patches
                     b_labels[
@@ -464,12 +471,6 @@ def PW_train_epoch_MultiModal(
             hot_b_labels = np.zeros((2, len(b_labels)))
             hot_b_labels[0,b_labels==0]=1
             hot_b_labels[1,b_labels==1]=1
-
-            # normalizing the patches
-            for j in range(m):
-                b_patches[:,:,:,j] = (
-                    b_patches[:,:,:,j]-stats[
-                        j][0])/stats[j][1] 
 
             # finally the data is ready to
             # perform this iteration

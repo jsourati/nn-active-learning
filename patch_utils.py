@@ -540,6 +540,48 @@ def extract_ACElesion_data_path(scans=[]):
     return T1_addrs, T2_addrs, mask_addrs, sub_codes
     
 
+def extract_NVM_data_path():
+
+    root_dir = '/fileserver/commondataprocessed/' +\
+               'atlases/pipelinetemplates/NVMRelease'
+
+    # get data codes
+    files = os.listdir(root_dir)
+    sub_codes = np.array([f[:4] for f in files])
+    sub_codes = np.sort(np.unique(sub_codes))
+
+    # construct full paths
+    T1_rest_of_path = '-t1w.nrrd'
+    mask_rest_of_path = '-parcellation.nrrd'
+
+    T1_addrs = []
+    mask_addrs = []
+    for code in sub_codes:
+        T1_addrs += [os.path.join(
+            root_dir,code+T1_rest_of_path)]
+
+        mask_addrs += [os.path.join(
+            root_dir,code+mask_rest_of_path)]
+
+    return T1_addrs, mask_addrs, list(sub_codes)
+
+def preprop_NVM_data(inds, labels, parc_path):
+    """Pre-processing NVM data by removing voxels
+    that have zero labels in the parcellation map
+    """
+
+    parc,_ = nrrd.read(parc_path)
+
+    # pacellation labels for the indices
+    multinds = np.unravel_index(inds, parc.shape)
+    parc_labels = parc[multinds]
+
+    # choose only those with nnz parcellation
+    inds = np.array(inds)[parc_labels>0]
+    labels = np.array(labels)[parc_labels>0]
+
+    return list(inds), list(labels)
+
 def get_subdirs(path):
     """returning all sub-directories of a 
     given path

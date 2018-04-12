@@ -144,7 +144,7 @@ class Experiment(object):
                           os.path.join(self.root_dir, str(i)))
                 
 
-    def prep_data(self):
+    def prep_data(self, flag=''):
         """Adding a run to this experiment
         
         Each run will have its pool and test
@@ -157,7 +157,7 @@ class Experiment(object):
         
         # preparing the indices
         # -----------------------
-        prep_AL_data(self)
+        prep_AL_data(self, flag)
         
         # get the test indices for initial
         # performance evaluation
@@ -212,7 +212,7 @@ class Experiment(object):
                                     'init_predicts.txt'), 
                        np.expand_dims(test_preds,axis=0),
                        fmt='%d')
-            
+
             # initial, performance evaluation
             Fmeas = PW_analyze_results.get_Fmeasure(
                 test_preds, test_labels)
@@ -344,6 +344,7 @@ class Experiment(object):
         m = len(self.pars['img_paths'])
         patch_shape = self.pars['patch_shape'][:2] + \
                       (m*self.pars['patch_shape'][2],)
+
         model = NN.create_model(
             self.pars['model_name'],
             self.pars['dropout_rate'], 
@@ -417,7 +418,7 @@ class Experiment(object):
                         train_inds, Q)
                 pool_inds = np.delete(
                     pool_inds, Q_inds)
-                                
+
                 """ updating the model """
                 for i in range(self.pars['epochs']):
                     finetune(model,
@@ -427,7 +428,7 @@ class Experiment(object):
                              mask,
                              train_inds)
                     print('%d'% i, end=',')
-                    
+
                 """ evluating the updated model """
                 test_preds = PW_NN.batch_eval(
                     model,
@@ -1257,7 +1258,7 @@ def gen_multimg_inds(dat_paths, grid_spacing):
     return all_inds, all_labels
         
 
-def prep_AL_data(expr):
+def prep_AL_data(expr, flag=''):
     """Preparing the target data set, including
     unlabeled pool and test samples for running
     an active learning experiment, based on a 
@@ -1281,6 +1282,10 @@ def prep_AL_data(expr):
         img_addr, mask_addr,
         expr.pars['grid_spacing'], 
         expr.pars['grid_offset'])
+
+    if flag=='NVM':
+        inds, labels = patch_utils.preprop_NVM_data(
+            inds, labels, expr.pars['parc_path'])
 
     img,_ = nrrd.read(img_addr)
     multinds = np.unravel_index(inds, img.shape)
