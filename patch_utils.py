@@ -542,8 +542,8 @@ def extract_ACElesion_data_path(scans=[]):
 
 def extract_NVM_data_path():
 
-    root_dir = '/fileserver/commondataprocessed/' +\
-               'atlases/pipelinetemplates/NVMRelease'
+    root_dir = '/fileserver/external/rawabd/Jamshid/' + \
+               'PWNNAL_results/unimodal_NVM/preprop_data/'
 
     # get data codes
     files = os.listdir(root_dir)
@@ -552,18 +552,24 @@ def extract_NVM_data_path():
 
     # construct full paths
     T1_rest_of_path = '-t1w.nrrd'
-    mask_rest_of_path = '-parcellation.nrrd'
+    parc_rest_of_path = '-parcellation.nrrd'
+    mask_rest_of_path = '-mask.nrrd'
 
     T1_addrs = []
+    parc_addrs = []
     mask_addrs = []
     for code in sub_codes:
         T1_addrs += [os.path.join(
             root_dir,code+T1_rest_of_path)]
 
+        parc_addrs += [os.path.join(
+            root_dir,code+parc_rest_of_path)]
+
         mask_addrs += [os.path.join(
             root_dir,code+mask_rest_of_path)]
 
-    return T1_addrs, mask_addrs, list(sub_codes)
+    return T1_addrs, parc_addrs, mask_addrs, list(sub_codes)
+
 
 def preprop_NVM_data(inds, labels, parc_path):
     """Pre-processing NVM data by removing voxels
