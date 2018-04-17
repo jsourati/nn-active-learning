@@ -887,18 +887,20 @@ def LLFC_grads(model, sess, feed_dict, labels=None):
     rep_U = np.tile(U, (c,1))
     pies_dot_U = rep_pies * rep_U
 
+    flag=0
+    if labels is None:
+        labels = sess.run(model.prediction,
+                          feed_dict=feed_dict)
+        flag = 1
+    hot_labels = np.zeros((c,n))
+    for j in range(c):
+        hot_labels[j,labels==j]=1
+
     # sparse term containing columns
     #         [0,...,0, u_1,...,u_d, 0,...,0].T
     #                   |____ ____|
     #                        v
     #                   y*-th block
-    if labels is None:
-        labels = sess.run(model.prediction,
-                          feed_dict=feed_dict)
-    hot_labels = np.zeros((c,n))
-    for j in range(c):
-        hot_labels[j,labels==j]=1
-
     sparse_term = np.repeat(
         hot_labels, d, axis=0) * rep_U
 
@@ -906,9 +908,14 @@ def LLFC_grads(model, sess, feed_dict, labels=None):
     dJ_dW = sparse_term - pies_dot_U
 
     # dJ/db
-    dJ_db = hot_labels = pies
+    dJ_db = hot_labels - pies
 
-    return np.concatenate((dJ_dW,dJ_db),axis=0)
+    if flag==1:
+        return np.concatenate(
+            (dJ_dW,dJ_db),axis=0), labels
+    else:
+        return np.concatenate(
+            (dJ_dW,dJ_db),axis=0)
 
 def PW_LLFC_grads(model, sess, 
                   expr,
@@ -979,7 +986,6 @@ def PW_LLFC_grads(model, sess,
     term_1[multinds] = 1.
     dJ_db = term_1 - pies
     
-    pdb.set_trace()
     # final gradient vectors
     grads = np.concatenate((dJ_dW,dJ_db), axis=0)
 
@@ -1315,85 +1321,6 @@ def create_PW1(nclass,
     
     return model
 
-    
-def train_CNN_MNIST(epochs, batch_size):
-    """Trianing a classification network for MNIST data set which includes
-    two layers of convolution (CNN) followed by two fully connected  layers.
-    """
-    
-    # data
-    mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
-    
-    x = tf.placeholder(tf.float32, [784, None])
-    x_image = tf.reshape(tf.transpose(x), [-1, 28, 28, 1])
-    y_ = tf.placeholder(tf.float32, [10, None])
-    
-    # creating the CNN layers
-    W_dict, b_dict = CNN_variables([5,5], [1, 32, 64])
-    CNN_output = CNN_layers(W_dict, b_dict, x_image)
-    
-    # creating the first fully-connected layer
-    CNN_output = tf.reshape(tf.transpose(CNN_output), [7*7*64, -1])
-    W_fc1 = weight_variable([1024, 7*7*64])
-    b_fc1 = bias_variable([1024,1])
-    fc1_output = tf.nn.relu(tf.matmul(W_fc1, CNN_output) + b_fc1)
-    
-    # applying drop-out
-    keep_prob = tf.placeholder(tf.float32)
-    fc1_output_drop = tf.nn.dropout(fc1_output, keep_prob)
-    
-    # creating the second (last) fully-connected layer
-    W_fc2 = weight_variable([10, 1024])
-    b_fc2 = bias_variable([10,1])
-    y = tf.matmul(W_fc2, fc1_output_drop) + b_fc2
-    
-    # training this network
-    cross_entropy = tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits(labels=tf.transpose(y_), 
-                                                logits=tf.transpose(y)))
-    train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
-    correct_prediction = tf.equal(tf.argmax(y, 0), tf.argmax(y_, 0))
-    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-    
-    train_size = mnist.train.images.shape[0]
-    
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-    
-        for i in range(epochs):
-            # preparing batches
-            batch_inds = prep_dat.gen_batch_inds(train_size, batch_size)
-            batch_of_data = prep_dat.gen_batch_matrices(mnist.train.images.T, batch_inds)
-            batch_of_labels = prep_dat.gen_batch_matrices(mnist.train.labels.T, batch_inds)
-
-            #batch = mnist.train.next_batch(50)
-            for j in range(len(batch_of_data)):
-                if j % 100 == 0:
-                    train_accuracy = accuracy.eval(feed_dict={
-                            x: batch_of_data[j], y_: batch_of_labels[j], keep_prob: 1.0})
-                    print('epoch %d-iteratin %d, training accuracy %g' % (i, j, train_accuracy))
-            
-                train_step.run(feed_dict={x: batch_of_data[j], y_: batch_of_labels[j], keep_prob: 0.5})
-
-        print('test accuracy %g' % accuracy.eval(feed_dict={
-                    x: mnist.test.images.T, y_: mnist.test.labels.T, keep_prob: 1.0}))
-        
-        # extracting features, in a loop
-        print("Extracting the features..")
-        d_extracted = 1024
-        c = 10
-        train_features = np.zeros((d_extracted, mnist.train.images.shape[0]))
-        train_labels = np.zeros((c, mnist.train.images.shape[0]))
-        for j in range(len(batch_of_data)):
-            train_features[:,batch_inds[j]] = sess.run(fc1_output, feed_dict={
-                    x: batch_of_data[j], y_: batch_of_labels[j], keep_prob: 1.0})
-            train_labels[:, batch_inds[j]] = mnist.train.labels[batch_inds[j], :].T
-        test_features = sess.run(fc1_output, feed_dict={
-                x: mnist.test.images.T, y_: mnist.test.labels.T, keep_prob: 1.0})
-        
-    return (train_features, train_labels), (test_features, mnist.test.labels.T)   
-    
-
 def CNN_layers(W_dict, b_dict, x):
     """Creating the output of CNN layers 
     and return them as TF variables
@@ -1589,8 +1516,5 @@ def gen_batch_inds(data_size, batch_size):
         batches += [rand_perm[-rem:]]
         
     return batches
-
     
-        
-        
-        
+    
