@@ -123,6 +123,29 @@ def train_LogisticReg(save_dir,
 
     return init_dat, pool_dat, test_dat
 
+def finetune(model, sess, 
+             X_init, Y_init, 
+             X_new, Y_new, epochs):
+
+    print('\tFine-tuning with generated queries..')
+
+    X = np.concatenate((X_init, X_new), axis=1)
+    Y = np.concatenate((Y_init, Y_new), axis=1)
+
+    n = X.shape[1]
+    b = 50
+    for i in range(epochs):
+        batches = NN.gen_batch_inds(n,b)
+
+        for batch_inds in batches:
+            batch_X = X[:,batch_inds]
+            batch_Y = Y[:,batch_inds]
+
+            sess.run(model.train_step,feed_dict={
+                model.x:batch_X,
+                model.y_:batch_Y,
+                model.keep_prob:model.dropout_rate})
+
 
 def eval_test_model(model, sess, test_dat):
     
@@ -197,7 +220,7 @@ def stoch_approx_Influence_train(model, sess,
                  model.keep_prob: 1.}
 
     # loss gradients of the pool samples
-    grads = NN.LLFC_grads(model,sess,feed_dict, Y_train)
+    grads = NN.LLFC_grads(model,sess,feed_dict,Y_train)
 
     # start the stochastic estimatin
     V_t = grads
@@ -214,4 +237,71 @@ def stoch_approx_Influence_train(model, sess,
     return V_t
 
         
-    
+def get_IF_queries(model, sess, 
+                   X_train, Y_train, 
+                   X_pool, k, rep=5):
+
+    # dimensionality of the IFs
+    d = (model.feature_layer.shape[0].value + 1) * \
+        model.output.shape[0].value
+
+    npl = X_pool.shape[1]
+    ntr = X_train.shape[1]
+
+    IFs_pool = np.zeros((d, npl))
+    IFs_train = np.zeros((d, ntr))
+    yp_hats = np.zeros(npl)
+
+    """ IFs for pool samples """
+    # Fixing their labels to a random draw from posteriors
+
+    batches = NN.gen_batch_inds(npl, 1000)
+    print('\tComputing IFs for test samples')
+
+    for i in range(len(batches)):
+        # holders of influences
+        Vt = np.zeros((d, len(batches[i])))
+        labels = np.zeros(len(batches[i]))
+        pies = sess.run(model.posteriors, 
+                        feed_dict={model.x:X_pool[:,batches[i]],
+                                   model.keep_prob:1.})
+        for j in range(len(labels)):
+            labels[j] = NNAL_tools.sample_query_dstr(
+                pies[:,j], 1)[0]
+        yp_hats[batches[i]] = labels
+
+        for r in range(rep):        
+            V, labels = stoch_approx_Influence_pool(
+                model, sess, X_train, X_pool, batches[i])
+            Vt += V
+
+        # note that Vt here is an estimation of -inv(H).grad,
+        # hence, a negative sign is needed here
+        IFs_pool[:,batches[i]] = -Vt/rep
+
+    """ IFs for training samples """
+    batches = NN.gen_batch_inds(ntr, 1000)
+    print('\tComputing IFs for training samples')
+
+    for i in range(len(batches)):
+        # holders of influences
+        Vt = np.zeros((d, len(batches[i])))
+        for r in range(rep):        
+            V = stoch_approx_Influence_train(
+                model, sess, X_train, Y_train, batches[i])
+            Vt += V
+        IFs_train[:,batches[i]] = -Vt/rep
+
+    print('\tComputing loo scores..')
+    # gradiemts at training samples
+    feed_dict = {model.x:X_train, model.keep_prob:1.}
+    dLL_train = NN.LLFC_grads(model,sess,
+                              feed_dict, Y_train)
+
+    A = dLL_train.T @ IFs_pool - np.tile(
+        np.diag(dLL_train.T @ IFs_train), (npl,1)).T
+    A /= ntr
+
+    scores = np.max(A, axis=0)
+
+    return np.argsort(-scores)[:k]
