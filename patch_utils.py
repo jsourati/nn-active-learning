@@ -553,7 +553,7 @@ def extract_NVM_data_path():
     # construct full paths
     T1_rest_of_path = '-t1w.nrrd'
     parc_rest_of_path = '-parcellation.nrrd'
-    mask_rest_of_path = '-mask.nrrd'
+    mask_rest_of_path = '-mask-wnan.nrrd'
 
     T1_addrs = []
     parc_addrs = []
@@ -1044,7 +1044,7 @@ def generate_rgb_mask(img,mask,mask2):
     
     # create a mask in one of the channels
     if len(mask)>0:
-        img_rgb[:,:,0][mask>0] = 150.
+        img_rgb[:,:,0][mask>0] = 190.
 
     if len(mask2)>0:
         img_rgb[:,:,1][mask2>0] = 200.

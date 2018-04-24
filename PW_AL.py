@@ -195,7 +195,7 @@ class Experiment(object):
                 model.load_weights(
                     self.pars['init_weights_path'], 
                     sess)
-                        
+
             # get a prediction of the test samples
             test_preds = PW_NN.batch_eval(
                 model,
@@ -906,6 +906,13 @@ class Experiment_MultiImg(Experiment):
     """Active learning experiments that use multiple
     images as for training/pool and test data set
     (to be used for Universal active learning)
+
+    Note that for applications such as hippocampus
+    segmentation where a mask not only contain 
+    labels, but also indicates those voxels we
+    should ignore, we also have NaN label. We 
+    will discrad grid samples (in testing or 
+    training) that are NaN in the mask
     """
 
     def __init__(self, root_dir, 
@@ -940,6 +947,7 @@ class Experiment_MultiImg(Experiment):
         else:
             with open(test_file, 'r') as f:
                 self.test_paths = yaml.load(f)
+
 
         # take care of the statistics
         if os.path.exists(os.path.join(
@@ -979,10 +987,11 @@ class Experiment_MultiImg(Experiment):
         n = len(self.train_paths)
         train_stats=np.zeros((n, 2*m))
         for i, dat_paths in enumerate(self.train_paths):
+            mask,_ = nrrd.read(dat_paths[-1])
             for j in range(m):
                 img,_ = nrrd.read(dat_paths[j])
-                train_stats[i,j*m] = np.mean(img)
-                train_stats[i,j*m+1] = np.std(img)
+                train_stats[i,j*m] = np.mean(img[~np.isnan(mask)])
+                train_stats[i,j*m+1] = np.std(img[~np.isnan(mask)])
         np.savetxt(os.path.join(
             self.root_dir,'train_stats.txt'),train_stats)
 
@@ -991,10 +1000,11 @@ class Experiment_MultiImg(Experiment):
         n = len(self.test_paths)
         test_stats=np.zeros((n, 2*m))
         for i, dat_paths in enumerate(self.test_paths):
+            mask,_ = nrrd.read(dat_paths[-1])
             for j in range(m):
                 img,_ = nrrd.read(dat_paths[j])
-                test_stats[i,j*m] = np.mean(img)
-                test_stats[i,j*m+1] = np.std(img)
+                test_stats[i,j*m] = np.mean(img[~np.isnan(mask)])
+                test_stats[i,j*m+1] = np.std(img[~np.isnan(mask)])
         np.savetxt(os.path.join(
             self.root_dir,'test_stats.txt'),test_stats)
 
@@ -1061,16 +1071,34 @@ class Experiment_MultiImg(Experiment):
         """ Pool/Training Indices """
         # first load up all the indices for
         # pool images
-        pool_inds,_ = gen_multimg_inds(
-            self.train_paths, self.pars['grid_spacing'])
+        if 'pool_paths' in self.pars:
+            pool_inds = [[] for i in 
+                          range(len(self.train_paths))]
+            for i in self.pars['pool_paths']:
+                pinds,_ = gen_multimg_inds(
+                    [self.train_paths[i]], self.pars['grid_spacing'])
+                pool_inds[i] = pinds[0]
+        else:
+            pool_inds,_ = gen_multimg_inds(
+                self.train_paths, self.pars['grid_spacing'])
+        
         test_inds, test_labels = gen_multimg_inds(
             self.test_paths, self.pars['grid_spacing'])
 
-        # moving already selected queries into
-        # the training set
-        training_inds = [[] for i in 
-                         range(len(pool_inds))]
 
+        """ Training Indices """
+        training_inds = [[] for i in 
+                         range(len(self.train_paths))]
+        # initial indices, if any
+        init_train_path = os.path.join(
+            self.root_dir,'init_train_inds.txt') 
+        if os.path.exists(init_train_path):
+            init_inds = np.int32(
+                np.loadtxt(init_train_path))
+            for ind in np.unique(init_inds[:,1]):
+                I = init_inds[init_inds[:,1]==ind,0]
+                training_inds[ind] += I.tolist()
+        # already labeled queries
         Q_path = os.path.join(method_path,
                               'queries')
         Q_files = os.listdir(Q_path)
@@ -1081,11 +1109,6 @@ class Experiment_MultiImg(Experiment):
             for ind in np.unique(Qs[:,1]):
                 I = Qs[Qs[:,1]==ind,0]
                 training_inds[ind] += I.tolist()
-                # get the locations to use for labels
-                #I_locs = [pool_inds[ind].index(i) 
-                #          for i in I]
-                #sorted_inds = np.argsort(-np.array(I_locs))
-                #I_locs.sort()
                 [pool_inds[ind].remove(i) for i in I]
 
         evals_path = os.path.join(method_path, 
@@ -1192,6 +1215,7 @@ class Experiment_MultiImg(Experiment):
                 iters += 1
 
                 """ Finetuning the Model """
+                print('\tFinetuning..')
                 finetune_multimg(self,
                                  model, sess,
                                  all_padded_imgs,
@@ -1218,6 +1242,9 @@ def gen_multimg_inds(dat_paths, grid_spacing):
     least two elements: raw image path(s), 
     and the corresponding mask path as the
     last element.
+
+    NOTE: We discard those voxels that are
+    NaN within the mask.
     """
 
     # number of test subjects
@@ -1252,8 +1279,13 @@ def gen_multimg_inds(dat_paths, grid_spacing):
                 grid_X, grid_Y, grid_Z]
             labels += list(slice_labels)
 
-        all_inds += [inds]
-        all_labels += [labels]
+        # discard NaN voxels
+        inds_to_keep = ~np.isnan(labels)
+        inds = np.array(inds)[inds_to_keep]
+        labels = np.array(labels)[inds_to_keep]
+
+        all_inds += [list(inds)]
+        all_labels += [list(labels)]
 
     return all_inds, all_labels
         

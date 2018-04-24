@@ -7,9 +7,10 @@ import nrrd
 import pdb
 import os
 
-import NNAL_tools
+import NN
 import PW_NN
 import PW_AL
+import NNAL_tools
 import patch_utils
 
 
@@ -278,6 +279,65 @@ def query_multimg(expr,
         Q_inds = [np.array(sel_inds[i])[local_inds[i]]
                   for i in range(len(sel_inds))]
 
+    if method_name=='if':
+
+        max_iter = 100
+        n = np.sum(img_ind_sizes)
+        d = (model.feature_layer.shape[0].value + 1) * \
+            model.output.shape[0].value
+        IFs = np.zeros((d,n))
+
+        # computing gradients of the training samples
+        tr_patches,_ = patch_utils.get_patches_multimg(
+            all_padded_imgs, tr_inds,
+            expr.pars['patch_shape'], 
+            expr.train_stats)
+        tr_grads = []
+        for i in range(len(tr_patches)):
+            if len(tr_patches[i])==0:
+                continue
+            feed_dict={model.x:tr_patches[i],
+                       model.keep_prob:1.}
+            # getting training labels
+            multinds = np.unravel_index(
+                tr_inds[i], all_padded_imgs[i][-1].shape)
+            labels = all_padded_imgs[i][-1][multinds]
+            tr_grads += [NN.LLFC_grads(model,sess,
+                                       feed_dict,labels)]
+        tr_grads = np.concatenate(tr_grads, axis=1)
+        tr_patches = [tr_patches[i] for i in range(len(tr_patches))
+                      if len(tr_patches[i])>0]
+        tr_patches = np.concatenate(tr_patches, axis=0)
+
+        # batch-wise computing of IFs
+        print('Computing IF vectors')
+        batches = NN.gen_batch_inds(n,expr.pars['ntb'])
+        for i in range(len(batches)):
+            loc_inds = patch_utils.global2local_inds(
+                batches[i], img_ind_sizes)
+            img_inds = [np.array(pool_inds[i])[loc_inds[i]]
+                for i in range(len(pool_inds))]
+
+            patches,_ = patch_utils.get_patches_multimg(
+                all_padded_imgs, img_inds,
+                expr.pars['patch_shape'], 
+                expr.train_stats)
+            patches = [patches[i] for i in range(len(patches))
+                       if len(patches[i])>0]
+            patches = np.concatenate(patches, axis=0)
+            bIFs, weak_labels = stoch_approx_IF(
+                model,sess,tr_patches,patches,max_iter)
+
+            IFs[:,batches[i]] = bIFs
+
+        # expected change in training log-likelhoods
+        print('\tComputing LOOCV scores')
+        tr_ll_change = tr_grads.T @ IFs
+        scores = np.mean(tr_ll_change, axis=0)
+        global_inds = np.argsort(-scores)[:k]
+        Q_inds = patch_utils.global2local_inds(
+            global_inds, img_ind_sizes)
+
     return Q_inds
 
 
@@ -450,6 +510,37 @@ def refine_feature_matrix(F, B):
 
     return ref_F
 
+def stoch_approx_IF(model,sess,
+                    tr_patches,
+                    pool_patches,
+                    max_iter,
+                    scale=10):
+
+    ntr = tr_patches.shape[0]
+
+    # gradient of the pool samples at
+    # their weak labels
+    feed_dict = {model.x:pool_patches,
+                 model.keep_prob:1.}
+    weak_labels = sess.run(model.prediction,
+                           feed_dict=feed_dict)
+    grads = NN.LLFC_grads(
+        model,sess,feed_dict,weak_labels)
+
+    # starting the iterations 
+    V_t = grads
+    for t in range(max_iter):
+        # Hessian of a random training sample
+        rand_ind = [np.random.randint(ntr)]
+        feed_dict = {
+            model.x:tr_patches[rand_ind,:,:,:],
+            model.keep_prob:1.}
+        H = -NN.LLFC_hess(model,sess,feed_dict)
+
+        # iteration's step
+        V_t = grads - H@V_t/scale
+
+    return V_t, weak_labels
 
 def SuPix_query(expr,
                 run,

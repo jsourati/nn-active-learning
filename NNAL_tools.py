@@ -15,6 +15,7 @@ import pickle
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
 import prep_dat
+import patch_utils
 
 def uncertainty_filtering(posteriors, B):
     """Filtering data by keeping only the most `B` uncertain
@@ -679,6 +680,9 @@ def inequality_cvx_matrix(A, k=None):
         h += [matrix(np.eye(n)/np.float(k))]
     
     return G, h
+
+
+    
 
 def FC_gradnorms_batch(model, X, sess):
     """Computing norm of gradients of the FC 
