@@ -1,4 +1,5 @@
 from matplotlib import pyplot as plt
+from sklearn.metrics import f1_score
 import numpy as np
 import linecache
 import shutil
@@ -20,7 +21,8 @@ import NN
 
 
 def prep_dat(init_size=100,
-             digits=None):
+             digits=None,
+             global_init_inds=None):
     mnist = input_data.read_data_sets(
         'MNIST_data', one_hot=True)
 
@@ -36,55 +38,54 @@ def prep_dat(init_size=100,
     if digits is not None:
         digits = np.array(digits)
         # training
-        inds = np.zeros(ntrain, dtype=bool)
-        labels = np.argmax(Y_train, axis=1)
-        for digit in digits:
-            inds[labels==digit] = 1
-        X_train = X_train[inds,:]
-        Y_train = Y_train[inds,:]
         Y_train = Y_train[:,digits]
-        ntrain = np.sum(inds)
+        train_inds = np.where(np.sum(
+            Y_train, axis=1)>0)[0]
+        ntrain = np.sum(train_inds)
         # test
-        inds = np.zeros(ntest, dtype=bool)
-        labels = np.argmax(Y_test, axis=1)
-        for digit in digits:
-            inds[labels==digit] = 1
-        X_test = X_test[inds,:]
-        Y_test = Y_test[inds,:]
         Y_test = Y_test[:,digits]
-        ntest = np.sum(inds)
+        test_inds = np.where(np.sum(
+            Y_test, axis=1)>0)[0]
+        Y_test = Y_test[test_inds,:]
+        X_test = X_test[test_inds,:]
+        ntest = np.sum(test_inds)
 
-    # random selection of initial labels
-    init_inds = np.random.permutation(
-        ntrain)[:init_size]
-    init_X_train = X_train[init_inds,:].T
-    init_Y_train = Y_train[init_inds,:].T
+    if global_init_inds is None:
+        # random selection if not given
+        init_inds = np.random.permutation(
+            ntrain)[:init_size]
+        global_init_inds = train_inds[init_inds]
+
+    init_X_train = X_train[global_init_inds,:].T
+    init_Y_train = Y_train[global_init_inds,:].T
+    
 
     # remaining of the trainin data 
-    pool_inds = set(np.arange(ntrain)) - \
-                set(init_inds)
-    pool_inds = list(pool_inds)
+    pool_inds = list(set(train_inds) - 
+                     set(global_init_inds))
     X_pool = X_train[pool_inds,:].T
     Y_pool = Y_train[pool_inds,:].T
 
-    return (init_X_train, init_Y_train), \
+    return global_init_inds, \
+        (init_X_train, init_Y_train), \
         (X_pool, Y_pool), (X_test.T, Y_test.T)
 
 
-def train_LogisticReg(save_dir,
-                      init_size=100,
-                      digits=None,
-                      batch_size=50,
-                      learning_rate=1e-4,
-                      epochs=60):
+def train_model(save_dir,
+                init_size=100,
+                digits=None,
+                batch_size=50,
+                learning_rate=1e-4,
+                epochs=60):
     """Create and train a simple logistic regression
     for classifying all or a subset of MNIST
     digits
     """
 
     """ preparing the data """
-    init_dat, pool_dat, test_dat = prep_dat(
-        init_size, digits)
+    (global_init_inds, init_dat, 
+     pool_dat, test_dat) = prep_dat(
+         init_size, digits)
     init_X_train, init_Y_train = init_dat
     X_pool, Y_pool = pool_dat
     X_test, Y_test = test_dat
@@ -93,7 +94,7 @@ def train_LogisticReg(save_dir,
     dropout = [[0], 0.5]
     c = [10 if digits is None else len(digits)][0]
     x = tf.placeholder(tf.float32, [784,None])
-    pw_dict = {'fc1': [100, 'fc'],
+    pw_dict = {'fc1': [50, 'fc'],
                'fc2': [c, 'fc']}
     model = NN.CNN(x, pw_dict, 'LogisticReg',
                    dropout=dropout)
@@ -121,7 +122,7 @@ def train_LogisticReg(save_dir,
 
         model.save_weights(save_dir)
 
-    return init_dat, pool_dat, test_dat
+    return global_init_inds, init_dat, pool_dat, test_dat
 
 def finetune(model, sess, 
              X_init, Y_init, 
@@ -151,31 +152,24 @@ def eval_test_model(model, sess, test_dat):
     
     b = 5000
     X_test, Y_test = test_dat
+    Y_test = np.argmax(Y_test, axis=0)
     n = X_test.shape[1]
     
     batches = NN.gen_batch_inds(n,b)
-    tP, tTP, tFP = 0,0,0
+    preds = np.zeros(n)
     for batch_inds in batches:
         batch_X = X_test[:,batch_inds]
-        batch_Y = Y_test[:,batch_inds]
-        
-        preds = sess.run(model.prediction,feed_dict={
-            model.x:batch_X,
-            model.keep_prob:1.})
+        batch_preds = sess.run(
+            model.prediction,
+            feed_dict={model.x:batch_X,
+                       model.keep_prob:1.})
 
-        batch_Y = np.argmax(batch_Y, axis=0)
-        (P,N,TP,
-         FP,TN,FN) = PW_analyze_results.get_preds_stats(
-             preds, batch_Y)
+        preds[batch_inds] = batch_preds
 
-        tP += P
-        tTP += TP
-        tFP += FP
-
-    # compute total Pr/Rc and F1
-    Pr = tTP / (tTP + tFP)
-    Rc = tTP / tP
-    F1 = 2. / (1/Pr + 1/Rc)
+    # (multi-class) F1 score
+    F1 = f1_score(y_true=Y_test,
+                  y_pred=preds,
+                  average='weighted')
 
     return F1
 
@@ -185,7 +179,7 @@ def stoch_approx_Influence_pool(model, sess,
                                 pool_inds):
 
     n = X_train.shape[1]
-    max_iter = 500
+    max_iter = 100
 
     # preparing feed_dict
     feed_dict = {model.x: X_pool[:,pool_inds],
@@ -213,14 +207,15 @@ def stoch_approx_Influence_train(model, sess,
                                  train_inds):
 
     n = X_train.shape[1]
-    max_iter = 500
+    max_iter = 100
 
     # preparing feed_dict
     feed_dict = {model.x: X_train[:,train_inds],
                  model.keep_prob: 1.}
 
     # loss gradients of the pool samples
-    grads = NN.LLFC_grads(model,sess,feed_dict,Y_train)
+    grads = NN.LLFC_grads(model,sess,feed_dict,
+                          Y_train[train_inds])
 
     # start the stochastic estimatin
     V_t = grads
@@ -255,7 +250,7 @@ def get_IF_queries(model, sess,
     """ IFs for pool samples """
     # Fixing their labels to a random draw from posteriors
 
-    batches = NN.gen_batch_inds(npl, 1000)
+    batches = NN.gen_batch_inds(npl, 5000)
     print('\tComputing IFs for test samples')
 
     for i in range(len(batches)):
@@ -270,7 +265,7 @@ def get_IF_queries(model, sess,
                 pies[:,j], 1)[0]
         yp_hats[batches[i]] = labels
 
-        for r in range(rep):        
+        for r in range(rep):
             V, labels = stoch_approx_Influence_pool(
                 model, sess, X_train, X_pool, batches[i])
             Vt += V
@@ -279,29 +274,36 @@ def get_IF_queries(model, sess,
         # hence, a negative sign is needed here
         IFs_pool[:,batches[i]] = -Vt/rep
 
-    """ IFs for training samples """
-    batches = NN.gen_batch_inds(ntr, 1000)
-    print('\tComputing IFs for training samples')
-
-    for i in range(len(batches)):
-        # holders of influences
-        Vt = np.zeros((d, len(batches[i])))
-        for r in range(rep):        
-            V = stoch_approx_Influence_train(
-                model, sess, X_train, Y_train, batches[i])
-            Vt += V
-        IFs_train[:,batches[i]] = -Vt/rep
-
     print('\tComputing loo scores..')
     # gradiemts at training samples
     feed_dict = {model.x:X_train, model.keep_prob:1.}
     dLL_train = NN.LLFC_grads(model,sess,
                               feed_dict, Y_train)
 
-    A = dLL_train.T @ IFs_pool - np.tile(
-        np.diag(dLL_train.T @ IFs_train), (npl,1)).T
-    A /= ntr
+    A = dLL_train.T @ IFs_pool 
 
-    scores = np.max(A, axis=0)
+    scores = np.mean(A, axis=0)
+    Q_inds = np.argsort(-scores)[:k]
+    
+    return Q_inds, yp_hats[Q_inds]
 
-    return np.argsort(-scores)[:k]
+def get_entropy_queries(model, sess, X_pool, k):
+
+    n = X_pool.shape[1]
+    c = model.output.shape[0].value
+    pies = np.zeros((c,n))
+
+    batches = NN.gen_batch_inds(n, 1000)
+    for batch_inds in batches:
+        X_batch = X_pool[:,batch_inds]
+        P = sess.run(model.posteriors, 
+                     feed_dict={model.x:X_batch,
+                                model.keep_prob:1.})
+        pies[:,batch_inds] = P
+
+    pies[pies==0] += 1e-6
+    H = np.sum(-pies * np.log(pies), axis=0)
+
+    return np.argsort(-H)[:k]
+
+#def run_IF_AL(base_dir):
