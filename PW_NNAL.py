@@ -39,36 +39,10 @@ def CNN_query(expr,
         # selecting queries from regions
         # with high local variance
         
-        thr = 2.   # variance threshold
-        rads = np.int8((np.array(expr.pars[
-            'patch_shape'])-1)/2)
-        # use T1 to compute the variances
-        (d1,d2,d3) = padded_imgs[0].shape
-        # un-padding
-        img_1 = padded_imgs[0][
-            rads[0]:d1-rads[0],
-            rads[1]:d2-rads[1],
-            rads[2]:d3-rads[2]]
-
-        # compute 2D variance map
-        # (choosing first component of
-        # the patch shape as the radius of
-        # the loal variance computation)
-        var_map = np.zeros(img_1.shape)
-        for i in range(img_1.shape[2]):
-            slice_var = patch_utils.get_vars_2d(
-                img_1[:,:,i], rads[0])
-            var_map[:,:,i] = slice_var
-
-        # get variance scores of 
-        # all given pool indices
-        pool_multinds = np.unravel_index(
-            pool_inds, img_1.shape)
-        inds_vscores = var_map[pool_multinds]
-        # filter-out the low-variance 
-        # pool indices, and select randomly
-        valid_pool_inds = np.where(
-            inds_vscores>thr)[0]
+        thr = 2.   # threhsold over the variance
+        valid_pool_inds = get_HV_inds(
+            padded_imgs[0], exp.pars['patch_shape'],
+            thr, pool_inds)
         rand_inds = np.random.permutation(
             len(valid_pool_inds))[:expr.pars['k']]
         q = valid_pool_inds[rand_inds]
@@ -205,6 +179,27 @@ def query_multimg(expr,
         Q_inds = patch_utils.global2local_inds(
             inds, inds_num)
 
+    if method_name=='ps-random':
+
+        thr = 2.   # threhsold over the variance
+
+        valid_pool_inds = []
+        for i in range(len(all_padded_imgs)):
+            valid_pool_inds += [get_HV_inds(
+                all_padded_imgs[i][0], expr.pars['patch_shape'],
+                thr, pool_inds[i])]
+
+        valid_inds_sizes = [len(valid_pool_inds[i]) for
+                            i in range(len(valid_pool_inds))]
+        nHV = np.sum(valid_inds_sizes)
+
+        rand_inds = np.random.permutation(nHV)[:k]
+        local_inds = patch_utils.global2local_inds(
+            rand_inds, valid_inds_sizes)
+
+        Q_inds = [valid_pool_inds[i][local_inds[i]] for
+                  i in range(len(valid_pool_inds))]
+
     if method_name=='entropy':
         
         Q_inds = bin_uncertainty_filter_multimg(
@@ -293,6 +288,7 @@ def query_multimg(expr,
             expr.pars['patch_shape'], 
             expr.train_stats)
         tr_grads = []
+        tr_labels = []
         for i in range(len(tr_patches)):
             if len(tr_patches[i])==0:
                 continue
@@ -304,7 +300,10 @@ def query_multimg(expr,
             labels = all_padded_imgs[i][-1][multinds]
             tr_grads += [NN.LLFC_grads(model,sess,
                                        feed_dict,labels)]
+            tr_labels += [labels]
+
         tr_grads = np.concatenate(tr_grads, axis=1)
+        tr_labels = np.concatenate(tr_labels)
         tr_patches = [tr_patches[i] for i in range(len(tr_patches))
                       if len(tr_patches[i])>0]
         tr_patches = np.concatenate(tr_patches, axis=0)
@@ -312,6 +311,7 @@ def query_multimg(expr,
         # batch-wise computing of IFs
         print('Computing IF vectors')
         batches = NN.gen_batch_inds(n,expr.pars['ntb'])
+        all_weak_labels = np.zeros(n)
         for i in range(len(batches)):
             loc_inds = patch_utils.global2local_inds(
                 batches[i], img_ind_sizes)
@@ -328,18 +328,63 @@ def query_multimg(expr,
             bIFs, weak_labels = stoch_approx_IF(
                 model,sess,tr_patches,patches,max_iter)
 
-            IFs[:,batches[i]] = bIFs
+            IFs[:,batches[i]] = -bIFs
+            all_weak_labels[batches[i]] = weak_labels
 
         # expected change in training log-likelhoods
         print('\tComputing LOOCV scores')
         tr_ll_change = tr_grads.T @ IFs
-        scores = np.mean(tr_ll_change, axis=0)
+
+        classw = [.25, .75]
+        scores = np.mean(tr_ll_change[tr_labels==0,:],
+                         axis=0)*classw[0] + \
+            np.mean(tr_ll_change[tr_labels==1,:],
+                    axis=0)*classw[1]
         global_inds = np.argsort(-scores)[:k]
         Q_inds = patch_utils.global2local_inds(
             global_inds, img_ind_sizes)
 
     return Q_inds
 
+
+def get_HV_inds(padded_img, patch_shape, 
+                thr, pool_inds):
+    """Getting the local indices of the pool samples
+    that have local variance higher than a threshold
+    (the output are indices of the samples in terms
+    their location in the `pool_inds` array)
+    """
+
+    rads = np.int8((np.array(patch_shape)-1)/2)
+    # use T1 to compute the variances
+    (d1,d2,d3) = padded_img.shape
+    # un-padding
+    img_1 = padded_img[rads[0]:d1-rads[0],
+                       rads[1]:d2-rads[1],
+                       rads[2]:d3-rads[2]]
+
+    # compute 2D variance map
+    # (choosing first component of
+    # the patch shape as the radius of
+    # the loal variance computation)
+    var_map = np.zeros(img_1.shape)
+    for i in range(img_1.shape[2]):
+        slice_var = patch_utils.get_vars_2d(
+            img_1[:,:,i], rads[0])
+        var_map[:,:,i] = slice_var
+
+    # get variance scores of 
+    # all given pool indices
+    pool_multinds = np.unravel_index(
+        pool_inds, img_1.shape)
+    inds_vscores = var_map[pool_multinds]
+
+    # filter-out the low-variance 
+    # pool indices, and select randomly
+    valid_pool_inds = np.where(
+        inds_vscores>thr)[0]
+
+    return valid_pool_inds
 
 def binary_uncertainty_filter(posts, B):
     """Uncertainty filtering for binary class
@@ -369,6 +414,9 @@ def bin_uncertainty_filter_multimg(expr,
     n = np.sum(img_ind_sizes)
     H = [[] for i in range(s)]
     for i in range(s):
+        if len(pool_inds[i])==0:
+            continue
+
         # set the stats
         stats = []
         for j in range(m):
@@ -514,7 +562,7 @@ def stoch_approx_IF(model,sess,
                     tr_patches,
                     pool_patches,
                     max_iter,
-                    scale=10):
+                    scale=50):
 
     ntr = tr_patches.shape[0]
 
@@ -538,7 +586,7 @@ def stoch_approx_IF(model,sess,
         H = -NN.LLFC_hess(model,sess,feed_dict)
 
         # iteration's step
-        V_t = grads - H@V_t/scale
+        V_t = grads + V_t - H@V_t/scale
 
     return V_t, weak_labels
 
