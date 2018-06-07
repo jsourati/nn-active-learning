@@ -354,7 +354,8 @@ def PW_train_epoch_MultiModal(
         b,
         ntb,
         stats,
-        save_dir,
+        save_dir=[],
+        costs=[1.,1.],
         ts_data=None,
         tb_dir=None):
     """This function is similar to 
@@ -469,8 +470,8 @@ def PW_train_epoch_MultiModal(
                     
             # hot-one vector for labels
             hot_b_labels = np.zeros((2, len(b_labels)))
-            hot_b_labels[0,b_labels==0]=1
-            hot_b_labels[1,b_labels==1]=1
+            hot_b_labels[0,b_labels==0]=1*costs[0]
+            hot_b_labels[1,b_labels==1]=1*costs[1]
 
             # finally the data is ready to
             # perform this iteration
@@ -499,12 +500,13 @@ def PW_train_epoch_MultiModal(
 
                     tb_cnt += 1
                     
-        model.save_weights(
-            os.path.join(save_dir,
-                         'model_pars.h5'))
-        np.savetxt(os.path.join(save_dir,
-                                'epoch.txt'),
-                   [t])
+        if len(save_dir)>0:
+            model.save_weights(
+                os.path.join(save_dir,
+                             'model_pars.h5'))
+            np.savetxt(os.path.join(save_dir,
+                                    'epoch.txt'),
+                       [t])
 
                 
 def eval_to_TB(model, 
@@ -778,15 +780,18 @@ def batch_eval(model,
                     model.x:batch_tensors,
                     model.y_:hot_labels,
                     model.keep_prob: 1.}
-                feed_dict.update(x_feed_dict)
-                batch_vals = sess.run(
-                    model_var,
-                    feed_dict=feed_dict)
             else:
-                batch_vals = sess.run(
-                    model_var,
-                    feed_dict={model.x:batch_tensors,
-                               model.keep_prob: 1.})
+                feed_dict = {model.x:batch_tensors,
+                             model.keep_prob: 1.}
+
+            # if a keep-probability different than
+            # 1. is to be used (e.g. in MC-dropout)
+            # put it in x_feed_dict and it will 
+            # replace 1. in the feed_dict.
+            feed_dict.update(x_feed_dict)
+            batch_vals = sess.run(
+                model_var,
+                feed_dict=feed_dict)
 
             if var=='posteriors':
                 # keeping only posterior probability
