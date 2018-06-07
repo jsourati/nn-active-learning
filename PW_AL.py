@@ -1050,7 +1050,10 @@ class Experiment_MultiImg(Experiment):
         # compute total Pr/Rc and F1
         Pr = tTP / (tTP + tFP)
         Rc = tTP / tP
-        F1 = 2. / (1/Pr + 1/Rc)
+        if Pr>0 and Rc>0:
+            F1 = 2. / (1/Pr + 1/Rc)
+        else:
+            F1 = 0
 
         return F1
 
@@ -1073,7 +1076,7 @@ class Experiment_MultiImg(Experiment):
         # pool images
         if 'pool_paths' in self.pars:
             pool_inds = [[] for i in 
-                          range(len(self.train_paths))]
+                         range(len(self.train_paths))]
             for i in self.pars['pool_paths']:
                 pinds,_ = gen_multimg_inds(
                     [self.train_paths[i]], self.pars['grid_spacing'])
@@ -1082,14 +1085,14 @@ class Experiment_MultiImg(Experiment):
             pool_inds,_ = gen_multimg_inds(
                 self.train_paths, self.pars['grid_spacing'])
         
-        test_inds, test_labels = gen_multimg_inds(
-            self.test_paths, self.pars['grid_spacing'])
+        #test_inds, test_labels = gen_multimg_inds(
+        #    self.test_paths, self.pars['grid_spacing'])
 
 
         """ Training Indices """
-        training_inds = [[] for i in 
-                         range(len(self.train_paths))]
         # initial indices, if any
+        init_training_inds = [[] for i in 
+                              range(len(self.train_paths))]
         init_train_path = os.path.join(
             self.root_dir,'init_train_inds.txt') 
         if os.path.exists(init_train_path):
@@ -1097,8 +1100,10 @@ class Experiment_MultiImg(Experiment):
                 np.loadtxt(init_train_path))
             for ind in np.unique(init_inds[:,1]):
                 I = init_inds[init_inds[:,1]==ind,0]
-                training_inds[ind] += I.tolist()
+                init_training_inds[ind] += I.tolist()
         # already labeled queries
+        training_inds = [[] for i in 
+                         range(len(self.train_paths))]
         Q_path = os.path.join(method_path,
                               'queries')
         Q_files = os.listdir(Q_path)
@@ -1181,11 +1186,18 @@ class Experiment_MultiImg(Experiment):
             while nqueries < max_queries:
                 print("Iter. %d: "% iters,end='\n\t')
 
+                # take queries labeled so far (if any) and use 
+                # them in IF-based AL 
+                init_training_inds = training_inds[:]
+                method_name_q = method_name 
+                if method_name=='if' and iters==0:
+                    method_name_q='entropy'
+                
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 
                     all_padded_imgs, 
-                    pool_inds,training_inds,
-                    method_name)
+                    pool_inds,init_training_inds,
+                    method_name_q)
 
                 # moving Qs from pool --> training
                 nQ = np.sum([len(qind) for qind in Q_inds])
@@ -1204,7 +1216,7 @@ class Experiment_MultiImg(Experiment):
                         Q_mat[cnt:cnt+len(Q_inds[ind]),
                               1] = ind
                         cnt += len(Q_inds[ind])
-                        # ading to the training
+                        # adding to the training
                         training_inds[ind] += list(np.array(
                             pool_inds[ind])[Q_inds[ind]])
                         # remove from the pool
@@ -1310,14 +1322,11 @@ def prep_AL_data(expr, flag=''):
     
     """Sampling from the slices"""
     # grid sampling
-    inds, labels, types = patch_utils.generate_grid_samples(
-        img_addr, mask_addr,
-        expr.pars['grid_spacing'], 
-        expr.pars['grid_offset'])
-
-    if flag=='NVM':
-        inds, labels = patch_utils.preprop_NVM_data(
-            inds, labels, expr.pars['parc_path'])
+    inds, labels = gen_multimg_inds(
+        [[expr.pars['img_paths']]+[expr.pars['mask_path']]],
+        expr.pars['grid_spacing'])
+    inds = np.array(inds[0])
+    labels = np.array(labels[0])
 
     img,_ = nrrd.read(img_addr)
     multinds = np.unravel_index(inds, img.shape)
@@ -1326,9 +1335,9 @@ def prep_AL_data(expr, flag=''):
     pool_inds = np.array(inds)[even_slices]
     pool_labels = np.array(labels)[even_slices]
 
-    odd_slices = np.where(multinds[2]%2==1)[0]
-    test_inds = np.array(inds)[odd_slices]
-    test_labels = np.array(labels)[odd_slices]
+    #odd_slices = np.where(multinds[2]%2==1)[0]
+    test_inds = np.array(inds)#[odd_slices]
+    test_labels = np.array(labels)#[odd_slices]
     
     """write the text files"""
     np.savetxt(os.path.join(
