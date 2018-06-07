@@ -25,73 +25,128 @@ import PW_NN
 import NN
 
 
+def get_explicit_hess_ops(model,layers):
+    """
+    """
+    
+    pars = []
+    d = 0
+    for layer in layers:
+        pars += [model.var_dict[layer][0]]
+        d += np.prod([s.value for s in pars[-1].shape])
+
+        pars += [model.var_dict[layer][1]]
+        d += np.prod([s.value for s in pars[-1].shape])
+
+    # 1D gradient op
+    grad_op = tf.gradients(model.loss,pars)
+    G = []
+    for g_elem in grad_op:
+        G += [tf.reshape(g_elem,[-1])]
+    G = tf.concat(G, axis=0)
+
+    # second-derivative ops (a list of 2nd
+    # derivatives where each member will be 
+    # one row of the Hessian)
+    hess_rows = []
+    for i in range(d):
+        tensor_hess = tf.gradients(G[i], pars)
+        # flattening
+        HR = []
+        for elem in tensor_hess:
+          HR += [tf.reshape(elem,[-1])]
+        hess_rows += [tf.concat(HR,axis=0)]
+
+        print(i)
+
+    return hess_rows
 
 def hessian_vector_product(ys, xs, v):
-  """This function is written by Pang Wei Koh, to 
-  be used in their paper "Understanding Black-bx 
-  Predictions via Influence Functions."
+    """This function is written by Pang Wei Koh, to 
+    be used in their paper "Understanding Black-bx 
+    Predictions via Influence Functions."
 
-  Multiply the Hessian of `ys` wrt `xs` by `v`.
-  This is an efficient construction that uses a backprop-like approach
-  to compute the product between the Hessian and another vector. The
-  Hessian is usually too large to be explicitly computed or even
-  represented, but this method allows us to at least multiply by it
-  for the same big-O cost as backprop.
-  Implicit Hessian-vector products are the main practical, scalable way
-  of using second derivatives with neural networks. They allow us to
-  do things like construct Krylov subspaces and approximate conjugate
-  gradient descent.
-  Example: if `y` = 1/2 `x`^T A `x`, then `hessian_vector_product(y,
-  x, v)` will return an expression that evaluates to the same values
-  as (A + A.T) `v`.
-  Args:
-    ys: A scalar value, or a tensor or list of tensors to be summed to
-        yield a scalar.
-    xs: A list of tensors that we should construct the Hessian over.
-    v: A list of tensors, with the same shapes as xs, that we want to
-       multiply by the Hessian.
-  Returns:
-    A list of tensors (or if the list would be length 1, a single tensor)
-    containing the product between the Hessian and `v`.
-  Raises:
-    ValueError: `xs` and `v` have different length.
-  """ 
+    Multiply the Hessian of `ys` wrt `xs` by `v`.
+    This is an efficient construction that uses a backprop-like approach
+    to compute the product between the Hessian and another vector. The
+    Hessian is usually too large to be explicitly computed or even
+    represented, but this method allows us to at least multiply by it
+    for the same big-O cost as backprop.
+    Implicit Hessian-vector products are the main practical, scalable way
+    of using second derivatives with neural networks. They allow us to
+    do things like construct Krylov subspaces and approximate conjugate
+    gradient descent.
+    Example: if `y` = 1/2 `x`^T A `x`, then `hessian_vector_product(y,
+    x, v)` will return an expression that evaluates to the same values
+    as (A + A.T) `v`.
+    Args:
+      ys: A scalar value, or a tensor or list of tensors to be summed to
+          yield a scalar.
+      xs: A list of tensors that we should construct the Hessian over.
+      v: A list of tensors, with the same shapes as xs, that we want to
+         multiply by the Hessian.
+    Returns:
+      A list of tensors (or if the list would be length 1, a single tensor)
+      containing the product between the Hessian and `v`.
+    Raises:
+      ValueError: `xs` and `v` have different length.
+    """ 
 
-  # Validate the input
-  length = len(xs)
-  if len(v) != length:
-    raise ValueError(
-        "xs and v must have the same length.")
+    # Validate the input
+    length = len(xs)
+    if len(v) != length:
+        raise ValueError(
+          "xs and v must have the same length.")
 
-  # First backprop
-  grads = gradients(ys, xs)
+    # First backprop
+    grads = gradients(ys, xs)
+    
+    # grads = xs
 
-  # grads = xs
+    assert len(grads) == length
 
-  assert len(grads) == length
+    elemwise_products = [
+        math_ops.multiply(grad_elem, 
+                          array_ops.stop_gradient(
+                              v_elem))
+        for grad_elem, v_elem in zip(grads, v) 
+        if grad_elem is not None]
 
-  elemwise_products = [
-      math_ops.multiply(grad_elem, 
-                        array_ops.stop_gradient(
-                            v_elem))
-      for grad_elem, v_elem in zip(grads, v) 
-      if grad_elem is not None]
+    # Second backprop  
+    grads_with_none = gradients(
+        elemwise_products, xs)
+    return_grads = [
+        grad_elem if grad_elem is not None \
+        else tf.zeros_like(x) \
+        for x, grad_elem in zip(xs, grads_with_none)]
 
-  # Second backprop  
-  grads_with_none = gradients(
-      elemwise_products, xs)
-  return_grads = [
-      grad_elem if grad_elem is not None \
-      else tf.zeros_like(x) \
-      for x, grad_elem in zip(xs, grads_with_none)]
-  
-  return return_grads
+    return return_grads
 
 
-def get_hess_vec_product(model):
+def get_hess_vec_product(model, layers):
+    """Providing access to hessian-vector
+    provider for a given model, by defining
+    the vector placeholders attribute for the
+    model (so that the vector can be assigned 
+    values), and a method for computing its
+    Hessian-vector product
+    """
 
+    if layers=='all':
+        layers = list(model.var_dict.keys())
+        pars = tf.trainable_variables()
+        model.Hess_layers = list(model.var_dict.keys())
+    else:
+        # preparing the parameters that the Hessian
+        # should be taken with respect to
+        pars = []
+        model.Hess_layers = layers
+        for layer in layers:
+            pars += [model.var_dict[layer][0]]
+            pars += [model.var_dict[layer][1]]
+    
     v_placeholder = []
-    for layer in model.var_dict:
+    for layer in layers:
         v_placeholder += [tf.placeholder(
             tf.float32, 
             shape=model.var_dict[layer][0].get_shape(),
@@ -105,7 +160,7 @@ def get_hess_vec_product(model):
     model.v_placeholder = v_placeholder
     hess_vecp = hessian_vector_product(
         model.loss, 
-        tf.trainable_variables(),
+        pars,
         model.v_placeholder)
 
     model.hess_vecp = hess_vecp
@@ -286,11 +341,12 @@ def unravel_vec(model, vec):
     tensor_list = []
 
     cnt = 0
-    for i,layer in enumerate(model.var_dict):
+    for layer in model.Hess_layers:
         # weights
         var_shape = model.var_dict[layer][0].shape
         var_shape = [var_shape[i].value for i 
                      in range(len(var_shape))]
+
         tensor = np.reshape(
             vec[cnt:cnt+np.prod(var_shape)], 
             var_shape)
@@ -310,7 +366,7 @@ def unravel_vec(model, vec):
     return tensor_list
         
 
-def sample_influence(model,
+def PW_sample_influence(model,
                      sess,
                      tr_padded_imgs,
                      tr_mask,
@@ -321,13 +377,26 @@ def sample_influence(model,
                      q_ind,
                      q_stats,
                      patch_shape,
-                     batch_size):
+                     batch_size,
+                     layers='all'):
 
     if not(hasattr(model, 'hess_vecp')):
-        get_hess_vec_product(model)
+        model.Hess_layers = layers
+        get_hess_vec_product(model, layers)
 
     if not(hasattr(model, 'loss_grad')):
-        NN.add_loss_grad(model)
+        # preparing loss-gradients (with 
+        # respect to given parameters)
+        if layers=='all':
+            pars=[]
+        else:
+            pars=[]
+            for layer in layers:
+                pars += [
+                    model.var_dict[layer][0]]
+                pars += [
+                    model.var_dict[layer][1]]
+        NN.add_loss_grad(model, pars)
 
     # loss gradient of the (query) sample
     Lq_grad = eval_loss_grad_q(model,
@@ -372,6 +441,7 @@ def sample_influence(model,
         batch_size,
         tr_stats)
     
+    pdb.set_trace()
     soln = fmin_ncg(
         f=f,
         x0=ravel_tensors(Lq_grad),
