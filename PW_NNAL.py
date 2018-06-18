@@ -62,6 +62,28 @@ def CNN_query(expr,
         # k most uncertain (binary classes)
         q = np.argsort(np.abs(posts-.5))[
             :expr.pars['k']]
+
+    if method_name=='MC-entropy':
+        x_feed_dict = {model.keep_prob:
+                       model.dropout_rate}
+        # iterative averaging over MC iterations
+        total_posts = 0
+        for i in range(expr.pars['MC_iters']):
+            posts = PW_NN.batch_eval(
+                model,
+                sess,
+                padded_imgs,
+                pool_inds,
+                expr.pars['patch_shape'],
+                expr.pars['ntb'],
+                expr.pars['stats'],
+                'posteriors',
+                x_feed_dict)[0]
+            total_posts = (posts+i*total_posts)/(i+1)
+        
+        # k most uncertain (binary classes)
+        q = np.argsort(np.abs(total_posts-.5))[
+            :expr.pars['k']]
         
     if method_name=='fi':
         n = len(pool_inds)
@@ -205,6 +227,24 @@ def query_multimg(expr,
         Q_inds = bin_uncertainty_filter_multimg(
             expr, model, sess, all_padded_imgs,
             pool_inds, k)[0]
+
+    if method_name=='MC-entropy':
+        
+        x_feed_dict = {model.keep_prob:
+                       model.dropout_rate}
+        total_posts = 0
+        for i in range(expr.pars['MC_iters']):
+            # the argument `k` won't be really used
+            # in this line
+            posts = bin_uncertainty_filter_multimg(
+                expr, model, sess, all_padded_imgs,
+                pool_inds, k, x_feed_dict)
+            total_posts = (posts+i*total_posts)/(i+1)
+
+        inds = np.argsort(np.abs(total_posts-.5))[:k]
+
+        Q_inds = patch_utils.global2local_inds(
+            inds, img_ind_sizes)
 
     if method_name=='fi':
         # uncertainty-filtering
@@ -404,7 +444,8 @@ def bin_uncertainty_filter_multimg(expr,
                                    sess,
                                    all_padded_imgs,
                                    pool_inds,
-                                   B):
+                                   B,
+                                   x_feed_dict={}):
 
     # computing entropies for voxels of each
     # image separately
@@ -430,12 +471,19 @@ def bin_uncertainty_filter_multimg(expr,
             expr.pars['patch_shape'],
             expr.pars['ntb'],
             stats,
-            'posteriors')[0]
+            'posteriors',
+            None,
+            x_feed_dict)[0]
 
         H[i] = list(posts)
 
-    # sort with respect to entropy values
+    # spit out only the posteriors only if 
+    # extra-feed-dict is given
     tH = np.concatenate(H)
+    if len(x_feed_dict)>0:
+        return tH
+
+    # sort with respect to entropy values
     tH = np.abs(tH - 0.5)
     sorted_inds = np.argsort(tH)[:B]
     sel_inds = patch_utils.global2local_inds(
