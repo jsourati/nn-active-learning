@@ -37,9 +37,13 @@ def get_queries(expr, method_name):
         expr.root_dir,
         method_name, 'queries')
     Q_files = os.listdir(Q_dir)
-    for f in Q_files:
+    file_inds = [int(Q_files[i].split('.')[0]) for 
+                 i in range(len(Q_files))]
+    sorted_inds = np.argsort(file_inds)
+
+    for ind in sorted_inds:
         fullpath = os.path.join(
-            Q_dir, f)
+            Q_dir, Q_files[ind])
         Qs += [np.int32(np.loadtxt(
             fullpath))]
         
@@ -163,6 +167,7 @@ def visualize_eval_metrics(expr,
                 run_path, 
                 method_name,
                 'perf_evals.txt'))
+            F[np.isnan(F)] = 0
         elif metric=='Precision':
             F = get_eval_metrics(
                 expr, run, method_name)[0,:]
@@ -282,6 +287,12 @@ def get_Fmeasure(preds, mask):
     
     # F measure
     return 2/(1/Pr + 1/Rc)
+
+def F1_scores(preds,labels):
+    P,N,TP,FP,TN,FN = get_preds_stats(preds, labels)
+    Pr = TP / (TP+FP)
+    Rc = TP/P 
+    return 2*Pr*Rc / (Pr+Rc)
 
 def get_eval_metrics(expr,
                      run,
@@ -613,8 +624,8 @@ def full_model_eval(expr,
             sess)
         preds[:,:,ind] = slice_evals[0]
         
-        #print('%d / %d'% (i, len(slice_inds)),
-        #      end=',')
+        print('%d / %d'% (i, len(slice_inds)),
+              end=',')
 
         # save the results, with showing both
         # model evaluations and mask boundaries
@@ -788,7 +799,10 @@ def grid_based_F1(model, sess,
     return 2./(1/Pr + 1/Rc)
 
 
-def eval_multimg_AL(expr,method_name,img_paths,start_ind=0):
+def eval_MultimgAL(expr,method_name,
+                    img_paths,
+                    start_ind=0,
+                    save_dir=[]):
 
     m = len(expr.train_paths[0])-1
     patch_shape = expr.pars['patch_shape'][:2] + \
@@ -803,6 +817,7 @@ def eval_multimg_AL(expr,method_name,img_paths,start_ind=0):
         expr.pars['train_layers'],
         expr.pars['optimizer_name'],
         patch_shape)
+    model.add_assign_ops()
 
     method_path = os.path.join(expr.root_dir,
                                method_name)
@@ -810,7 +825,7 @@ def eval_multimg_AL(expr,method_name,img_paths,start_ind=0):
     Qs = get_queries(expr, method_name)
     qnum = len(Qs)
     imgnum = len(img_paths)
-
+    
     save_dir = os.path.join(method_path,
                             'test_scores.txt')
 
@@ -821,27 +836,51 @@ def eval_multimg_AL(expr,method_name,img_paths,start_ind=0):
 
     with tf.Session() as sess:
         model.initialize_graph(sess)
+        sess.graph.finalize()
 
         for i in range(start_ind,qnum):
             weights_path = os.path.join(method_path,
                                         'curr_weights_%d.h5'% (i+1))
             print('Loading weights %s'% weights_path)
-            model.load_weights(weights_path, sess)
+            model.perform_assign_ops(weights_path, sess)
 
             for j in range(imgnum):
                  # grid-samples from the j-th image
                  expr.test_paths = img_paths[j:j+1]
-                 T1_img,_ = nrrd.read(expr.test_paths[0][0])
-                 T2_img,_ = nrrd.read(expr.test_paths[0][1])
-                 stats = np.array([np.mean(T1_img),np.std(T1_img),
-                                   np.mean(T2_img),np.std(T2_img)])
-                 expr.test_stats = np.expand_dims(stats,axis=0)
+                 stats_arr = np.zeros((1,2*m))
+                 mask,_ = nrrd.read(expr.test_paths[0][-1])
+                 for t in range(m):
+                     img,_ = nrrd.read(expr.test_paths[0][t])
+                     stats_arr[0,2*t:2*(t+1)] = np.array(
+                         [np.mean(img[~np.isnan(mask)]),
+                          np.std(img[~np.isnan(mask)])])
+                 expr.test_stats = stats_arr
 
-                 scores[j,i] = expr.test_eval(model, sess)
+                 scores[j,i],test_preds = expr.test_eval(model, sess)
                  np.savetxt(save_dir, scores)
 
                  print(j, end=',')
             print()
+
+
+def get_interp_slice_posts(x, y, vals, slice_shape):
+    
+    slice_vals = np.zeros(slice_shape)
+    
+    # interpolator 
+    f = scipy.interpolate.interp2d(x, y, vals)
+
+    # evaluate interpolator on the mesh
+    xgrid = np.arange(slice_shape[0])
+    ygrid = np.arange(slice_shape[1])
+    yy,xx = np.meshgrid(ygrid,xgrid)
+    xx = np.ravel(xx)
+    yy = np.ravel(yy)
+    
+    for i in range(len(xx)):
+        slice_vals[xx[i], yy[i]] = f(xx[i], yy[i])
+
+    return slice_vals
 
 
 def get_Qsims(model,sess, expr, method_name):

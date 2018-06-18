@@ -1044,7 +1044,7 @@ def generate_rgb_mask(img,mask,mask2):
     
     # create a mask in one of the channels
     if len(mask)>0:
-        img_rgb[:,:,0][mask>0] = 190.
+        img_rgb[:,:,0][mask>0] = 230.
 
     if len(mask2)>0:
         img_rgb[:,:,1][mask2>0] = 200.

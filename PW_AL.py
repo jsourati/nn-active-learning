@@ -1055,7 +1055,7 @@ class Experiment_MultiImg(Experiment):
         else:
             F1 = 0
 
-        return F1
+        return F1, test_preds
 
     def add_method(self, method_name):
 
