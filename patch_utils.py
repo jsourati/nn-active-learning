@@ -4,6 +4,7 @@ import warnings
 #import nibabel
 import nrrd
 import pdb
+import csv
 import os
 
 import NN
@@ -570,6 +571,28 @@ def extract_NVM_data_path():
 
     return T1_addrs, parc_addrs, mask_addrs, list(sub_codes)
 
+def extract_Crohns_data_path(csv_path=[]):
+    
+
+    root_dir = '/fileserver/external/rawabd/Jamshid/' + \
+               'PWNNAL_results/unimodal_Crohns/dat/'
+
+    # get data codes
+    sub_codes = np.sort(os.listdir(root_dir))
+
+    #if len(csv_path)>0:
+    #    with open(csv_path) as f:
+    #        A = csv.reader(f)
+    #        next(A)
+    #        sub_paths = [r[1] for r in A]
+
+    T1_addrs = []
+    mask_addrs = []
+    for sub in sub_codes:
+        T1_addrs += [os.path.join(root_dir,sub,'img.nrrd')]
+        mask_addrs += [os.path.join(root_dir,sub,'wall_label.nrrd')]
+
+    return T1_addrs, mask_addrs, list(sub_codes)
 
 def preprop_NVM_data(inds, labels, parc_path):
     """Pre-processing NVM data by removing voxels
