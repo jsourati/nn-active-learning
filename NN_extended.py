@@ -74,11 +74,18 @@ class CNN(object):
                 this class supports only three types of layers:
                
                 - Convolutional:   [# output channel, kernel size, strides, padding]
+                - Transpose Convolutional:
+                                   [# output channel, kernel size, strides]
                 - Fully-connected: [# output channel]
                 - max-pooling:     [pool size]
                 
                  Note that "kernel size", "strides" and "pool size" are a list with 
-                 two elements, and "padding" is a string
+                 two elements, and "padding" is a string. For now the class
+                 only supports `SAME` padding for transpose 2D-convolution; also
+                 the second and third elements of `strides` for this layer
+                 specifies height and width of the output tensor as 
+                 `width=strides[1]*input.shape[1]`
+                 `height=strides[2]*input.shape[2]`
         
             **name**: string
                 Name of Tensorflow scope of all the variables defined in
@@ -109,6 +116,8 @@ class CNN(object):
         """
         
         self.x = x
+        self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
+
         self.layer_type = []
         self.name = name
         
@@ -225,6 +234,8 @@ class CNN(object):
                 # main operation
                 if layer_type=='conv':
                     self.add_conv(layer_name, layer_specs)
+                elif layer_type=='conv_transpose':
+                    self.add_conv_transpose(layer_name, layer_specs)
                 elif layer_type=='fc':
                     self.add_fc(layer_name, layer_specs)
                 elif layer_type=='pool':
@@ -232,7 +243,7 @@ class CNN(object):
                 else:
                     raise ValueError(
                         "Layer's type should be either 'fc'" + 
-                        ", 'conv' or 'pool'.")
+                        ", 'conv', 'conv_transpose' or 'pool'.")
 
             elif op=='B':
                 # batch normalization
@@ -281,9 +292,9 @@ class CNN(object):
         new_vars = [weight_variable([kernel_dim[0], 
                                      kernel_dim[1], 
                                      prev_depth, 
-                                     layer_specs[0]], 
+                                     kernel_num], 
                                     name=layer_name+'_weight'),
-                    bias_variable([layer_specs[0]],
+                    bias_variable([kernel_num],
                                   name=layer_name+'_bias')
         ]
 
@@ -366,13 +377,52 @@ class CNN(object):
             self.var_dict[layer_name][-2],
             1e-6)
 
-    def add_unpool(self, layer_specs, flatten=False):
-        """Adding an unpooling layer as the opposite layer of a
-        pooling one, to increase size of the output
+    def add_conv_transpose(self, 
+                           layer_name,
+                           layer_specs):
+        """Adding a transpose convolutional layer
         
-        For now, we are using NN interpolation.
+        Any transpose convolution is indeed the backward 
+        direction of a convolution layer with some 
+        ambiguity on the output's size (not fully clear)
+
+        Number of elements in `layer_specs` of this
+        layer should be EXACTLY three
         """
-        pool_size = layer_specs[0]
+        kernel_num = layer_specs[0]
+        kernel_dim = layer_specs[1]
+        strides = layer_specs[2]
+
+        # adding new variables
+        prev_depth = self.output.get_shape()[-1].value
+        new_vars = [weight_variable([kernel_dim[0],
+                                     kernel_dim[1],
+                                     kernel_num, 
+                                     prev_depth], 
+                                    name=layer_name+'_weight'),
+                    bias_variable([kernel_num],
+                                  name=layer_name+'_bias')]
+        # there may have already been some variables
+        # created for this layer (through BN)
+        if layer_name in self.var_dict:
+            self.var_dict[layer_name] += new_vars
+        else:
+            self.var_dict.update({layer_name: new_vars})
+
+
+        # output of the layer
+        input_size = [self.output.shape[i].value for
+                      i in range(1,3)]
+        output_shape = [self.batch_size, 
+                        strides[0]*input_size[0],
+                        strides[1]*input_size[1],
+                        kernel_num]
+        strides = [1,] + strides + [1,]
+        # padding will stay `SAME` for now
+        self.output = tf.nn.conv2d_transpose(
+            self.output, self.var_dict[layer_name][-2],
+            output_shape, strides) + self.var_dict[layer_name][-1]
+        
             
     def initialize_graph(self, 
                          session,
