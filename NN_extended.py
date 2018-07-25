@@ -174,7 +174,7 @@ class CNN(object):
                 # the features that the network will extract
                 if i==feature_layer:
                     self.feature_layer = self.output
-
+                    
                 if i in probes:
                     self.probes += [self.output]
                 
@@ -371,11 +371,22 @@ class CNN(object):
 
         mu_B, Sigma_B = tf.nn.moments(self.output, axes=ax,
                                       keep_dims=False)
-        self.output = tf.nn.batch_normalization(
-            self.output, mu_B, Sigma_B, 
-            self.var_dict[layer_name][-1],
-            self.var_dict[layer_name][-2],
-            1e-6)
+
+        if len(output_shape)==2:
+
+            self.output = tf.transpose(tf.nn.batch_normalization(
+                tf.transpose(self.output), mu_B, Sigma_B, 
+                self.var_dict[layer_name][-1],
+                self.var_dict[layer_name][-2],
+                1e-6))
+
+        else:
+
+            self.output = tf.nn.batch_normalization(
+                self.output, mu_B, Sigma_B, 
+                self.var_dict[layer_name][-1],
+                self.var_dict[layer_name][-2],
+                1e-6)
 
     def add_conv_transpose(self, 
                            layer_name,
@@ -445,7 +456,13 @@ class CNN(object):
                 Path to the pre-trained weights, if the
                 the given model has one
         """
-        session.run(tf.global_variables_initializer())
+
+        # initializing of variables of only this model
+        model_vars = list(np.concatenate(
+            [self.var_dict[layer_name] for layer_name
+             in list(self.var_dict.keys())]))
+
+        session.run(tf.variables_initializer(model_vars))
         
         if path:
             if self.name=="VGG19":
