@@ -138,8 +138,9 @@ class CNN(object):
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
+        self.layer_names = list(layer_dict.keys())
+
         self.output = x
-        layer_names = list(layer_dict.keys())
         with tf.name_scope(name):
             for i, layer_name in enumerate(layer_dict):
                 
@@ -167,7 +168,7 @@ class CNN(object):
                     self.output = tf.nn.dropout(
                         self.output, self.keep_prob)
                 
-                if i  in sources_idx:
+                if i in sources_idx:
                     sources_output += [self.output]
 
                 # set the output of the layer one before last as 
@@ -183,7 +184,7 @@ class CNN(object):
                 # layer is 'fc' (hence needs flattenned input)
                 if i<len(layer_dict)-1:
                     next_layer_type = layer_dict[
-                        layer_names[i+1]][0]
+                        self.layer_names[i+1]][0]
                     if (layer[0]=='conv' or layer[0]=='pool') \
                        and next_layer_type=='fc':
                         # flattening the output
@@ -228,35 +229,39 @@ class CNN(object):
                 any activation at the output
         """
         
-        for op in layer_op_order:
+        with tf.name_scope(layer_name):
+            for op in layer_op_order:
 
-            if op=='M':
-                # main operation
-                if layer_type=='conv':
-                    self.add_conv(layer_name, layer_specs)
-                elif layer_type=='conv_transpose':
-                    self.add_conv_transpose(layer_name, layer_specs)
-                elif layer_type=='fc':
-                    self.add_fc(layer_name, layer_specs)
-                elif layer_type=='pool':
-                    self.add_pool(layer_specs)
+                if op=='M':
+                    # main operation
+                    if layer_type=='conv':
+                        self.add_conv(layer_name, 
+                                      layer_specs)
+                    elif layer_type=='conv_transpose':
+                        self.add_conv_transpose(layer_name, 
+                                                layer_specs)
+                    elif layer_type=='fc':
+                        self.add_fc(layer_name, 
+                                    layer_specs)
+                    elif layer_type=='pool':
+                        self.add_pool(layer_specs)
+                    else:
+                        raise ValueError(
+                            "Layer's type should be either 'fc'" + 
+                            ", 'conv', 'conv_transpose' or 'pool'.")
+
+                elif op=='B':
+                    # batch normalization
+                    self.add_BN(layer_name, layer_specs)
+
+                elif op=='A':
+                    # activation (ReLU)
+                    self.output = tf.nn.relu(self.output)
+
                 else:
                     raise ValueError(
-                        "Layer's type should be either 'fc'" + 
-                        ", 'conv', 'conv_transpose' or 'pool'.")
-
-            elif op=='B':
-                # batch normalization
-                self.add_BN(layer_name, layer_specs)
-
-            elif op=='A':
-                # activation (ReLU)
-                self.output = tf.nn.relu(self.output)
-
-            else:
-                raise ValueError(
-                    "Operations should be either 'M'" + 
-                    ", 'B' or 'A'.")
+                        "Operations should be either 'M'" + 
+                        ", 'B' or 'A'.")
                 
     def add_conv(self, 
                  layer_name,
@@ -293,9 +298,9 @@ class CNN(object):
                                      kernel_dim[1], 
                                      prev_depth, 
                                      kernel_num], 
-                                    name=layer_name+'_weight'),
+                                    name='Weight'),
                     bias_variable([kernel_num],
-                                  name=layer_name+'_bias')
+                                  name='Bias')
         ]
 
         # there may have already been some variables
@@ -321,9 +326,9 @@ class CNN(object):
         """
         prev_depth = self.output.get_shape()[0].value
         new_vars = [weight_variable([layer_specs[0], prev_depth], 
-                                    name=layer_name+'_weight'),
+                                    name='Weight'),
                     bias_variable([layer_specs[0], 1],
-                                  name=layer_name+'_bias')
+                                  name='Bias')
         ]
 
         if layer_name in self.var_dict:
@@ -359,10 +364,12 @@ class CNN(object):
             ax = [0]
             shape = [output_shape[i].value for i 
                      in range(1,len(output_shape))]
-        # new_vars = [ gamma  , beta  ]
+        # new_vars = [ gamma ,  beta  ]
         #            [(scale), (offset)
-        new_vars = [tf.Variable(tf.constant(1., shape=shape)),
-                    tf.Variable(tf.constant(0., shape=shape))]
+        new_vars = [tf.Variable(tf.constant(1., shape=shape), 
+                                name='Scale'),
+                    tf.Variable(tf.constant(0., shape=shape), 
+                                name='Offset')]
 
         if layer_name in self.var_dict:
             self.var_dict[layer_name] += new_vars
@@ -435,6 +442,33 @@ class CNN(object):
             output_shape, strides) + self.var_dict[layer_name][-1]
         
             
+    def get_layer_vars(self, layer_names=[]):
+        """Returning trainable variables (parameters)
+        of given layers
+        """
+        if len(layer_names)==0:
+            layer_names = self.layer_names
+
+        if type(layer_names)==str:
+            layer_names = [layer_names]
+
+        assert set(layer_names) <= set(self.layer_names), \
+            'One or more layer names do not exist in ' + \
+            'this model.'
+
+        # get the real name of the model
+        model_real_name = self.output.name.split('/')[0]
+
+        vars_dict = {}
+        for layer_name in layer_names:
+            scope_name = '/'.join([model_real_name, 
+                                   layer_name])
+            layer_vars = tf.get_collection(
+                tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_name)
+            vars_dict.update({layer_name: layer_vars})
+
+        return vars_dict
+
     def initialize_graph(self, 
                          session,
                          path=None):
@@ -482,10 +516,14 @@ class CNN(object):
         """
         
         f = h5py.File(file_path, 'w')
-        for layer_name, pars in self.var_dict.items():
+        for layer_name in self.layer_names:
             L = f.create_group(layer_name)
-            L.create_dataset('Weight', data=pars[0].eval())
-            L.create_dataset('Bias', data=pars[1].eval())
+            layer_vars = self.var_dict[layer_name]
+            for var in layer_vars:
+                var_name = var.name.split('/')[-1][:-2]
+                # last line, [:-2] accounts for ':0' in 
+                # TF variables
+                L.create_dataset(var_name, data=var.eval())
             
         f.close()
         
@@ -501,16 +539,19 @@ class CNN(object):
         """
         
         f = h5py.File(file_path)
-        for layer_name, pars in self.var_dict.items():
-            # weight
-            value_to_load = np.array(
-                f[layer_name]['Weight'])
-            session.run(pars[0].assign(value_to_load))
-            
-            # bias
-            value_to_load = np.array(
-                f[layer_name]['Bias'])
-            session.run(pars[1].assign(value_to_load))
+        model_real_name = self.output.name.split('/')[0]
+
+        for layer_name in self.layer_names:
+            var_names = list(f[layer_name].keys())
+            for var_name in var_names:
+                var_value = np.array(f[layer_name][var_name])
+                full_var_name = '/'.join([model_real_name,
+                                          layer_name,
+                                          var_name])
+                tf_var = tf.get_collection(
+                    tf.GraphKeys.GLOBAL_VARIABLES, 
+                    scope=full_var_name)[0]
+                session.run(tf_var.assign(var_value))
             
     def add_assign_ops(self):
         """Adding operations for assigning values to
@@ -532,23 +573,51 @@ class CNN(object):
         will be used instead of `self.load_weights` when 
         value assignment needs to be done repeatedly after
         finalizing the graph.
+
+        The function defines a new attribute called `assign_dict`,
+        a dictionary of layer names as the keys. Each item
+        of `assign_dict` is itself a dictionary with keys
+        equal to the variables names of that layer (from
+        among `Weight`, `Bias`, `Scale` and `Offset`). Each
+        item of this dictionary then has two elements: 
+
+            - the assigning operation for the variable
+              with the given name
+            - the placeholder that will carry the value
+              to be assigned to this variable
+
+        In summary `assign_dict` has the following structure:
+
+            {'layer_name_1': 
+                             {'Weight': [<assign_op>,
+                                         <placeholder>],
+                              'Bias':   [<assign_op>,
+                                         <placeholder>],
+                                 :
+                              }
+                 :
+             }
+        
         """
 
-        self.assign_placeholders={}
-        self.assign_ops=[]
-        for layer_name, pars in self.var_dict.items():
-            # assigning value placeholders
-            self.assign_placeholders.update(
-                {layer_name: [tf.placeholder(pars[0].dtype,
-                                             pars[0].get_shape()),
-                              tf.placeholder(pars[1].dtype,
-                                             pars[1].get_shape())]})
+        self.assign_dict = {}
+        for layer_name in self.layer_names:
+            layer_vars = self.var_dict[layer_name]
 
-            # assigning ops
-            self.assign_ops += [pars[0].assign(
-                self.assign_placeholders[layer_name][0])]
-            self.assign_ops += [pars[1].assign(
-                self.assign_placeholders[layer_name][1])]
+            layer_dict = {}
+            for var in layer_vars:
+                var_name = var.name.split('/')[-1][:-2]
+
+                # value placeholder
+                var_placeholder = tf.placeholder(var.dtype,
+                                                 var.get_shape())
+                # assigning ops
+                assign_op = var.assign(var_placeholder)
+
+                layer_dict.update({var_name:[assign_op,
+                                             var_placeholder]})
+
+            self.assign_dict.update({layer_name: layer_dict})
 
             
     def perform_assign_ops(self,file_path,sess):
@@ -561,19 +630,26 @@ class CNN(object):
         finalizing the graph.
         """
 
-        f = h5py.File(file_path)
+        layer_vars_dict = self.get_layer_vars()
+        model_real_name = self.output.name.split('/')[0]
 
-        # preparing feed_dict
+        f = h5py.File(file_path)        
+
+        # preparing the operation list to be performed
+        # and the necessary `feed_dict`
         feed_dict={}
-        for layer_name, pars in self.var_dict.items():
-            # weight
-            W = np.array(f[layer_name]['Weight'])
-            b = np.array(f[layer_name]['Bias'])
-            feed_dict.update({
-                self.assign_placeholders[layer_name][0]:W,
-                self.assign_placeholders[layer_name][1]:b})
+        ops_list = []
+        for layer_name in self.layer_names:
+            var_names = list(f[layer_name].keys())
+            for var_name in var_names:
+                var_value = np.array(f[layer_name][var_name])
+                # adding the operation
+                ops_list += [self.assign_dict[layer_name][var_name][0]]
+                # adding the corresponding value into feed_dict
+                feed_dict.update({
+                    self.assign_dict[layer_name][var_name][1]: var_value})
 
-        sess.run(self.assign_ops, feed_dict=feed_dict)
+        sess.run(ops_list, feed_dict=feed_dict)
 
         
     def extract_features(self, inds, 
