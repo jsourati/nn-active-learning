@@ -441,12 +441,21 @@ class CNN(object):
         self.output = tf.nn.conv2d_transpose(
             self.output, self.var_dict[layer_name][-2],
             output_shape, strides) + \
-            self.var_dict[layer_name][-1] + \
-            tf.constant(0., shape=[1,]+output_shape[1:])
+            self.var_dict[layer_name][-1] 
+        
+
         # last line is adding zeros with the same size of the 
         # output (except batch size) only in order to
         # remove the size ambiguities that is created by 
         # tf.nn.conv2d_transpsoe
+        if output_shape[-1]>1:
+            self.output += tf.constant(1., shape=[1,]+output_shape[1:])
+        else:
+            output_shape[-1]=2
+            self.output += tf.constant(1., shape=[1,]+output_shape[1:])
+            self.output = self.output[:,:,:,:1]
+
+        
             
     def get_layer_vars(self, layer_names=[]):
         """Returning trainable variables (parameters)
