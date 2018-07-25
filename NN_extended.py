@@ -251,6 +251,7 @@ class CNN(object):
                             ", 'conv', 'conv_transpose' or 'pool'.")
 
                 elif op=='B':
+
                     # batch normalization
                     self.add_BN(layer_name, layer_specs)
 
@@ -439,8 +440,13 @@ class CNN(object):
         # padding will stay `SAME` for now
         self.output = tf.nn.conv2d_transpose(
             self.output, self.var_dict[layer_name][-2],
-            output_shape, strides) + self.var_dict[layer_name][-1]
-        
+            output_shape, strides) + \
+            self.var_dict[layer_name][-1] + \
+            tf.constant(0., shape=[1,]+output_shape[1:])
+        # last line is adding zeros with the same size of the 
+        # output (except batch size) only in order to
+        # remove the size ambiguities that is created by 
+        # tf.nn.conv2d_transpsoe
             
     def get_layer_vars(self, layer_names=[]):
         """Returning trainable variables (parameters)
@@ -651,42 +657,7 @@ class CNN(object):
 
         sess.run(ops_list, feed_dict=feed_dict)
 
-        
-    def extract_features(self, inds, 
-                         expr, 
-                         session):
-        """Extracting features
-        """
-        
-        n = len(inds)
-        d = self.feature_layer.get_shape()[0].value
-        features = np.zeros((d, n))
-        batch_size = expr.pars['batch_size']
-        # preparing batch_of_inds, whose
-        # indices are in terms of "inds"
-        if batch_size > n: 
-            batch_of_inds = [np.arange(
-                n).tolist()]
-        else:
-            batch_of_inds = gen_batch_inds(
-                n, batch_size)
 
-        # extracting the features
-        for inner_inds in batch_of_inds:
-            # loading the data for this patch
-            X,_ = load_winds(inds[inner_inds],
-                           expr.imgs_path_file,
-                           expr.pars['target_shape'],
-                           expr.pars['mean'])
-
-            features[:,inner_inds] = session.run(
-                self.feature_layer, 
-                feed_dict={self.x: X,
-                           self.keep_prob:1.})
-            
-        return features
-                    
-        
     def get_optimizer(self, learning_rate, 
                       train_layers=[], 
                       optimizer_name='SGD'):
