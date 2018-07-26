@@ -198,17 +198,16 @@ class CNN(object):
                             tf.transpose(self.output), 
                             [out_size, -1])
                         
-            # posterior
-            posteriors = tf.nn.softmax(
-                tf.transpose(self.output))
-            self.posteriors = tf.transpose(
-                posteriors, name='Posteriors')
-            # prediction node
-            self.prediction = tf.argmax(
-                self.posteriors, 0, name='Prediction')
-
             # creating the label node
             if len(self.output.shape)==2:
+                # posterior
+                posteriors = tf.nn.softmax(
+                    tf.transpose(self.output))
+                self.posteriors = tf.transpose(
+                    posteriors, name='Posteriors')
+                # prediction node
+                self.prediction = tf.argmax(
+                    self.posteriors, 0, name='Prediction')
                 c = self.output.get_shape()[0].value
                 self.y_ = tf.placeholder(tf.float32, 
                                          [c, None],
@@ -682,6 +681,8 @@ class CNN(object):
 
         if len(self.output.shape)==2:
             get_loss_scalar_output(self, loss_name)
+        else:
+            get_loss_2d_output(self, loss_name)
 
         get_optimizer(self, optimizer_name, train_layers)
         
@@ -783,6 +784,19 @@ def get_loss_scalar_output(model, loss_name='CE'):
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=tf.transpose(model.y_), 
                     logits=tf.transpose(model.output)),
+                name='Loss')
+
+def get_loss_2d_output(model, loss_name='CE'):
+    
+    with tf.name_scope(model.name):
+            
+        # Loss 
+        # (for now, only cross entropy)
+        if loss_name=='CE':
+            model.loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(
+                    labels=model.y_, logits=model.output, 
+                    dim=-1),
                 name='Loss')
 
 def get_optimizer(model, 
