@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
+from sklearn.metrics import f1_score
 import linecache
 import copy
 import h5py
@@ -153,6 +154,9 @@ class CNN(object):
                                       skips, 
                                       sources_output)
 
+                if i in probes['in']:
+                    self.probes += [self.output]
+
                 layer = layer_dict[layer_name]
                 if len(layer)==2:
                     layer += ['M']
@@ -162,6 +166,9 @@ class CNN(object):
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
                 
+                if i in probes['out']:
+                    self.probes += [self.output]
+
                 # dropping out the output layers if the layer
                 # is in the list of dropped-out layers
                 if i in self.dropout_layers:
@@ -175,9 +182,6 @@ class CNN(object):
                 # the features that the network will extract
                 if i==feature_layer:
                     self.feature_layer = self.output
-                    
-                if i in probes:
-                    self.probes += [self.output]
                 
                 # flatenning the output of the current layer
                 # if it is 'conv' or 'pool' and the next
@@ -198,7 +202,23 @@ class CNN(object):
             posteriors = tf.nn.softmax(
                 tf.transpose(self.output))
             self.posteriors = tf.transpose(
-                posteriors, name='posteriors')
+                posteriors, name='Posteriors')
+            # prediction node
+            self.prediction = tf.argmax(
+                self.posteriors, 0, name='Prediction')
+
+            # creating the label node
+            if len(self.output.shape)==2:
+                c = self.output.get_shape()[0].value
+                self.y_ = tf.placeholder(tf.float32, 
+                                         [c, None],
+                                         name='labels')
+            else:
+                w = self.output.shape[1].value
+                h = self.output.shape[2].value
+                c = self.output.shape[3].value
+                self.y_ = tf.placeholder(tf.float32,
+                                         [None,h,w,c])
             
     def add_layer(self, 
                   layer_name,
@@ -455,34 +475,6 @@ class CNN(object):
             self.output += tf.constant(1., shape=[1,]+output_shape[1:])
             self.output = self.output[:,:,:,:1]
 
-        
-            
-    def get_layer_vars(self, layer_names=[]):
-        """Returning trainable variables (parameters)
-        of given layers
-        """
-        if len(layer_names)==0:
-            layer_names = self.layer_names
-
-        if type(layer_names)==str:
-            layer_names = [layer_names]
-
-        assert set(layer_names) <= set(self.layer_names), \
-            'One or more layer names do not exist in ' + \
-            'this model.'
-
-        # get the real name of the model
-        model_real_name = self.output.name.split('/')[0]
-
-        vars_dict = {}
-        for layer_name in layer_names:
-            scope_name = '/'.join([model_real_name, 
-                                   layer_name])
-            layer_vars = tf.get_collection(
-                tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_name)
-            vars_dict.update({layer_name: layer_vars})
-
-        return vars_dict
 
     def initialize_graph(self, 
                          session,
@@ -531,7 +523,7 @@ class CNN(object):
         """
         
         f = h5py.File(file_path, 'w')
-        for layer_name in self.layer_names:
+        for layer_name in list(self.var_dict):
             L = f.create_group(layer_name)
             layer_vars = self.var_dict[layer_name]
             for var in layer_vars:
@@ -556,7 +548,7 @@ class CNN(object):
         f = h5py.File(file_path)
         model_real_name = self.output.name.split('/')[0]
 
-        for layer_name in self.layer_names:
+        for layer_name in list(self.var_dict):
             var_names = list(f[layer_name].keys())
             for var_name in var_names:
                 var_value = np.array(f[layer_name][var_name])
@@ -616,7 +608,7 @@ class CNN(object):
         """
 
         self.assign_dict = {}
-        for layer_name in self.layer_names:
+        for layer_name in list(self.var_dict):
             layer_vars = self.var_dict[layer_name]
 
             layer_dict = {}
@@ -645,7 +637,6 @@ class CNN(object):
         finalizing the graph.
         """
 
-        layer_vars_dict = self.get_layer_vars()
         model_real_name = self.output.name.split('/')[0]
 
         f = h5py.File(file_path)        
@@ -654,7 +645,7 @@ class CNN(object):
         # and the necessary `feed_dict`
         feed_dict={}
         ops_list = []
-        for layer_name in self.layer_names:
+        for layer_name in list(self.var_dict):
             var_names = list(f[layer_name].keys())
             for var_name in var_names:
                 var_value = np.array(f[layer_name][var_name])
@@ -667,9 +658,11 @@ class CNN(object):
         sess.run(ops_list, feed_dict=feed_dict)
 
 
-    def get_optimizer(self, learning_rate, 
-                      train_layers=[], 
-                      optimizer_name='SGD'):
+    def get_optimizer(self, 
+                      learning_rate, 
+                      loss_name='CE',
+                      optimizer_name='SGD',
+                      train_layers=[]):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -684,52 +677,13 @@ class CNN(object):
                 the layers will be included. This list should
                 be a subset of `self.var_dict.keys()`.
         """
-        
-        # number of classes
-        c = self.output.get_shape()[0].value
-        self.y_ = tf.placeholder(tf.float32, 
-                                 [c, None],
-                                 name='labels')
-        
-        # loss function
-        self.loss = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits(
-                labels=tf.transpose(self.y_), 
-                logits=tf.transpose(self.output)),
-            name='loss')
-        
-        tf.summary.scalar('Loss', self.loss)
-        
-        # optimizer
-        if len(train_layers)==0:
-            if optimizer_name=='SGD':
-                self.train_step = tf.train.GradientDescentOptimizer(
-                    learning_rate).minimize(
-                        self.loss)
-            elif optimizer_name=='Adam':
-                self.train_step = tf.train.AdamOptimizer(
-                    learning_rate).minimize(
-                        self.loss)
-        else:
-            self.train_layers = train_layers
-            # if some layers are specified, only
-            # modify these layers in the training
-            var_list = []
-            for layer in train_layers:
-                var_list += self.var_dict[layer]
 
-            if optimizer_name=='SGD':
-                self.train_step = tf.train.GradientDescentOptimizer(
-                    learning_rate).minimize(
-                        self.loss, var_list=var_list)
-            elif optimizer_name=='Adam':
-                self.train_step = tf.train.AdamOptimizer(
-                    learning_rate).minimize(
-                        self.loss, var_list=var_list)
-        
-        # define the accuracy
-        self.prediction = tf.argmax(
-            self.posteriors, 0, name='prediction')
+        self.learning_rate = learning_rate
+
+        if len(self.output.shape)==2:
+            get_loss_scalar_output(self, loss_name)
+
+        get_optimizer(self, optimizer_name, train_layers)
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -756,185 +710,6 @@ class CNN(object):
                     gpars, name='score_class_%d'% j)
              }
             )
-        
-    def train_graph_one_epoch(self, expr,
-                              train_inds,
-                              session,
-                              TB_opt={}):
-        """Randomly partition the data into 
-        batches and complete one epoch of training
-        
-        
-        :Parameters:
-        
-            **expr** : AL.Experiment object
-        
-            **train_inds** : list or array of integers
-                indices of the samples in terms of the
-                `img_path_list` of the give experiment
-                based on which the model is to be modified
-
-            **batch_size** : integer
-                size of the batch for training or
-                evaluating the accuracy
-        
-            **session** : Tensorflow Session 
-
-            **TB_opt** : dictionary (default={})
-                If the results are to be saved for 
-                Tensorboard's use, this dictionary
-                includes all the necessary information
-                for saving the TB files:
-
-                * `summs`: the merged summaries that are
-                           are created outisde the function
-                * `writer`: file writer f the TB for these
-                            this epoch (it contains the path
-                            in which the TB files will be saved)
-                * `epoch_id`: index of the current epoch
-                * `tag`: a tag for the current training epoch
-        """
-        
-        # random partitioning into batches
-        batch_size = expr.pars['batch_size']
-        train_size = len(train_inds)
-        if train_size > batch_size:
-            batch_of_inds = gen_batch_inds(
-                train_size, batch_size)
-        else:
-            batch_of_inds = [np.arange(
-                train_size).tolist()]
-        
-        # completing an epoch
-        for j in range(len(batch_of_inds)):
-            # create the 4D array of batch images
-            iter_inds = train_inds[batch_of_inds[j]]
-            batch_of_imgs, batch_of_labels = load_winds(
-                iter_inds, 
-                expr.imgs_path_file, 
-                expr.pars['target_shape'],
-                expr.pars['mean'],
-                expr.labels_file)
-            
-            batch_of_labels = AL.make_onehot(
-                batch_of_labels, expr.nclass)
-
-            if TB_opt:
-                summary, _ = session.run(
-                    [TB_opt['summs'], self.train_step], 
-                    feed_dict={self.x: batch_of_imgs, 
-                               self.y_: batch_of_labels,
-                               self.keep_prob: self.dropout_rate})
-            else:
-                session.run(
-                    self.train_step, 
-                    feed_dict={self.x: batch_of_imgs, 
-                               self.y_: batch_of_labels,
-                               self.keep_prob: self.dropout_rate})
-
-            # writing tensorboard files if necessary
-            # (every 50 iterations)
-            if TB_opt:
-                if j%50 == 0:
-                    # compute the accuracy
-                    train_preds = self.predict(
-                        expr, train_inds, session)
-                    iter_acc = AL.get_accuracy(
-                        train_preds, expr.labels[:,train_inds])
-                    # adding accuracy to a summary
-                    acc_summary = tf.Summary()
-                    acc_summary.value.add(
-                        tag='Accuracy',
-                        simple_value=iter_acc)
-
-                    TB_opt['writer'].add_summary(
-                        summary, 
-                        TB_opt['epoch_id']*len(batch_of_inds)+j)
-                    TB_opt['writer'].add_summary(
-                        acc_summary, 
-                        TB_opt['epoch_id']*len(batch_of_inds)+j)
-                    
-    def validated_train(self,
-                        expr,
-                        sess,
-                        train_inds,
-                        valid_ratio,
-                        const_inds=None,
-                        print_flag=False):
-        """Validated training of a CNN model
-
-        :Parameters:
-
-            **model** : CNN object
-                the CNN model which has the method
-                `train_graph_one_epoch()`
-
-            **expr** : active learning experiment
-                the experiment's object which contains
-                the path to data directories
-
-            **sess** : Tensorflow session
-
-
-            **train_inds** : array of positive integers
-                indices of samples inside the training
-                data set
-
-            **valid_ratio** : positive float (<1)
-                ratio of the validatio data set and the
-                one that is used for training
-
-            **cosnt_inds** : array of positive integerses
-                If given, it represents a set of samples
-                that are constrained to be inside the 
-                partition that is used for fine-tuning
-                (and not the validation data set)
-        
-        """
-
-        # separate the training indices to validation
-        # and the ones to be used for fine-tuning
-        labels = np.loadtxt(expr.labels_file)
-        tuning_inds, valid_inds = NNAL_tools.test_training_part(
-            labels[train_inds], valid_ratio)
-
-        if const_inds:
-            tuning_inds = np.append(tuning_inds, const_inds)
-
-
-        # best accuracy is the initial accuracy 
-        # in the beginning (like sorting)
-        predicts = self.predict(expr,valid_inds,sess)
-        best_acc = AL.get_accuracy(predicts,
-                                   expr.labels_file,
-                                   valid_inds)
-        # save the initial weights in the current directory
-        # as the temporary "best" weights so far
-        self.save_weights('tmp_weights.h5')
-        print('init. acc.: %f'% best_acc)
-
-        for i in range(expr.pars['epochs']):
-            self.train_graph_one_epoch(expr,tuning_inds,sess)
-
-            # validating the model after each epoch
-            predicts = self.predict(expr,valid_inds,sess)
-            acc = AL.get_accuracy(predicts,
-                                  expr.labels_file,
-                                  valid_inds)
-            if acc > best_acc + 1e-6:
-                best_acc = acc
-                self.save_weights("tmp_weights.h5")
-            
-            if print_flag:
-                print('%d- (%f,%f)'% (i,acc,best_acc))
-
-        # after fix number of iterations load the best
-        # weights that is stored
-        self.load_weights("tmp_weights.h5", sess)
-
-        # delete the temporary file
-        os.remove("tmp_weights.h5")
-
 
 def combine_layer_outputs(model,
                           layer_index,
@@ -959,7 +734,7 @@ def combine_layer_outputs(model,
                 model.output = tf.add(model.output,
                                 sources_output[j])
             elif skips[j][2]=='con':
-                output = concat_outputs(
+                model.output = concat_outputs(
                     model.output, sources_output[j])
 
 
@@ -983,6 +758,7 @@ def concat_outputs(curr_output, prev_output):
 
     return output
 
+
 def add_loss_grad(model, pars=[]):
     """Adding the gradient of the loss
     with respect to parameters if necessary
@@ -994,6 +770,47 @@ def add_loss_grad(model, pars=[]):
     model.loss_grad = tf.gradients(
         model.loss, pars)
 
+
+
+def get_loss_scalar_output(model, loss_name='CE'):
+
+    with tf.name_scope(model.name):
+            
+        # Loss 
+        # (for now, only cross entropy)
+        if loss_name=='CE':
+            model.loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(
+                    labels=tf.transpose(model.y_), 
+                    logits=tf.transpose(model.output)),
+                name='Loss')
+
+def get_optimizer(model, 
+                  optimizer_name='SGD', 
+                  train_layers=[]):
+
+    # optimizer
+    if optimizer_name=='SGD':
+        model.optimizer = tf.train.GradientDescentOptimizer(
+            model.learning_rate)
+    elif optimizer_name=='Adam':
+        model.optimizer = tf.train.AdamOptimizer(
+            model.learning_rate)
+
+
+    # training step
+    if len(train_layers)==0:
+            model.train_step = model.optimizer.minimize(
+                model.loss, name='Train_Step')
+    else:
+        model.train_layers = train_layers
+        # if some layers are specified, only
+        # modify these layers in the training
+        var_list = []
+        for layer in train_layers:
+            var_list += model.var_dict[layer]
+        model.train_step = model.optimizer.minimize(
+            model.loss, var_list=var_list, name='Train_Step')
 
 def LLFC_hess(model,sess,feed_dict):
     """Explicit Hessian matrix of the loss with 
@@ -1415,55 +1232,35 @@ def max_pool(x, w_size, stride):
         strides=[1, stride, stride, 1], 
         padding='SAME')
     
-def load_winds(inds, 
-               imgs_path_file, 
-               target_shape,
-               mean=None,
-               labels_file=None):
-    """Creating a 4D array that contains a
-    number of 3D images 
-    """
 
-    ntrain = len(inds)
-    # read the first image to get the number of 
-    path = linecache.getline(
-        imgs_path_file, 
-        inds[0]+1).splitlines()[0]
-    img = np.float64(cv2.imread(path))
-    img = cv2.resize(img,target_shape)
-    if mean:
-        img -= mean
+def test_model(model, sess, test_dat):
+    
+    b = 1000
+    X_test, Y_test = test_dat
+    n = Y_test.shape[1]
+    Y_test = np.argmax(Y_test, axis=0)
+    batches = gen_batch_inds(n,b)
+    preds = np.nan*np.zeros(n)
 
-    nchannels = img.shape[-1]
-    batch_of_data = np.zeros(
-        (ntrain,)+target_shape+(nchannels,))
-    batch_of_data[0,:,:,:] = img
+    for batch_inds in batches:
+        if len(X_test.shape)==2:
+            batch_X = X_test[:,batch_inds]
+            batch_X = np.reshape(batch_X.T, (len(batch_inds),28,28,1))
+        else:
+            batch_X = X_test[batch_inds,:,:,:]
 
-    labels = []
-    if labels_file:
-        label = linecache.getline(
-            labels_file,
-            inds[0]+1).splitlines()[0]
-        labels += [int(label)]
-
-    # reading batch of images
-    for i in range(1,ntrain):
-        img_path = linecache.getline(
-            imgs_path_file, 
-            inds[i]+1).splitlines()[0]
-        img = np.float64(cv2.imread(img_path))
-        img = cv2.resize(img,target_shape)
-        if mean:
-            img -= mean
-        batch_of_data[i,:,:,:] = img
+        feed_dict={model.x:batch_X, model.keep_prob:1.}
+        batch_preds = sess.run(
+            model.prediction,
+            feed_dict=feed_dict)
+        preds[batch_inds] = batch_preds
         
-        if labels_file:
-            label = linecache.getline(
-                labels_file,
-                inds[i]+1).splitlines()[0]
-            labels += [int(label)]
-            
-    return (batch_of_data, labels)
+    # (multi-class) F1 score
+    F1 = f1_score(y_true=Y_test,
+                  y_pred=preds,
+                  average='weighted')
+    return F1
+
 
 def gen_batch_inds(data_size, batch_size):
     """Generating a list of random indices 
