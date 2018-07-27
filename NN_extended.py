@@ -35,7 +35,7 @@ class CNN(object):
                  skips=[],
                  feature_layer=None,
                  dropout=None,
-                 probes=[]):
+                 probes=[[],[]]):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
         key is a 2-element list inlcuding  depth of this layer and its type,
@@ -154,7 +154,7 @@ class CNN(object):
                                       skips, 
                                       sources_output)
 
-                if i in probes['in']:
+                if i in probes[0]:
                     self.probes += [self.output]
 
                 layer = layer_dict[layer_name]
@@ -166,7 +166,7 @@ class CNN(object):
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
                 
-                if i in probes['out']:
+                if i in probes[1]:
                     self.probes += [self.output]
 
                 # dropping out the output layers if the layer
@@ -559,7 +559,7 @@ class CNN(object):
                     scope=full_var_name)[0]
                 session.run(tf_var.assign(var_value))
             
-    def add_assign_ops(self):
+    def add_assign_ops(self, parameters='layers'):
         """Adding operations for assigning values to
         the nodes of the class's graph. This method
         is for creating repeatedly assigning values to
@@ -618,7 +618,14 @@ class CNN(object):
                 var_placeholder = tf.placeholder(var.dtype,
                                                  var.get_shape())
                 # assigning ops
-                assign_op = var.assign(var_placeholder)
+                if parameters=='layers':
+                    assign_op = var.assign(var_placeholder)
+                elif parameters=='m':
+                    assign_op = self.optimizer.get_slot(
+                        var,parameters).assign(var_placeholder)
+                elif parameters=='v':
+                    assign_op = self.optimizer.get_slot(
+                        var,parameters).assign(var_placeholder)
 
                 layer_dict.update({var_name:[assign_op,
                                              var_placeholder]})
@@ -798,6 +805,33 @@ def get_loss_2d_output(model, loss_name='CE'):
                     labels=model.y_, logits=model.output, 
                     dim=-1),
                 name='Loss')
+
+def get_LwF_loss(model):
+    """Taking for which a loss has been already defined,
+    and modifying it to LwF (learning without forgetting)
+
+    CAUTIOUS: modify it for FCNs
+    """
+
+    # needs introducing two hyper-parameters to model
+    model.lambda_o = tf.placeholder(tf.float32)
+    model.T = tf.placeholder(tf.float32)
+
+    # defining output of the previous model
+    model.y__ = tf.placeholder(tf.float32, model.y_.get_shape())
+
+    # knowledge distillation (soft soft-max)
+    soft_target = tf.nn.softmax(tf.transpose(
+        tf.divide(model.y__, model.T)))
+    loss_old_term = tf.reduce_mean(
+        tf.nn.softmax_cross_entropy_with_logits(
+            labels=soft_target, 
+            logits=tf.transpose(tf.divide(model.output, model.T))))
+
+    model.LwF_loss = tf.add(model.loss, 
+                            tf.multiply(loss_old_term,
+                                        model.lambda_o))
+
 
 def get_optimizer(model, 
                   optimizer_name='SGD', 
