@@ -510,7 +510,7 @@ class CNN(object):
                     self, path, session)
             
 
-    def save_weights(self, file_path):
+    def save_weights(self, file_path, save_moments=False):
         """Saving only the parameter values of the 
         current model into a .h5 file
         
@@ -525,11 +525,30 @@ class CNN(object):
         for layer_name in list(self.var_dict):
             L = f.create_group(layer_name)
             layer_vars = self.var_dict[layer_name]
-            for var in layer_vars:
-                var_name = var.name.split('/')[-1][:-2]
-                # last line, [:-2] accounts for ':0' in 
-                # TF variables
-                L.create_dataset(var_name, data=var.eval())
+
+            if save_moments:
+                # create three groups for parameter
+                # values, first and second moments
+                L0 = L.create_group('Values')
+                L1 = L.create_group('Moments1')
+                L2 = L.create_group('Moments2')
+                for var in layer_vars:
+                    var_name = var.name.split('/')[-1][:-2]
+                    # last line, [:-2] accounts for ':0' in 
+                    # TF variables
+                    L0.create_dataset(var_name, data=var.eval())
+                    L1.create_dataset(
+                        var_name, 
+                        data=self.optimizer.get_slot(var,'m').eval())
+                    L2.create_dataset(
+                        var_name, 
+                        data=self.optimizer.get_slot(var,'v').eval())
+            else:
+                for var in layer_vars:
+                    var_name = var.name.split('/')[-1][:-2]
+                    # last line, [:-2] accounts for ':0' in 
+                    # TF variables
+                    L.create_dataset(var_name, data=var.eval())
             
         f.close()
         
@@ -559,7 +578,7 @@ class CNN(object):
                     scope=full_var_name)[0]
                 session.run(tf_var.assign(var_value))
             
-    def add_assign_ops(self, parameters='layers'):
+    def add_assign_ops(self):
         """Adding operations for assigning values to
         the nodes of the class's graph. This method
         is for creating repeatedly assigning values to
@@ -611,6 +630,7 @@ class CNN(object):
             layer_vars = self.var_dict[layer_name]
 
             layer_dict = {}
+
             for var in layer_vars:
                 var_name = var.name.split('/')[-1][:-2]
 
@@ -618,21 +638,50 @@ class CNN(object):
                 var_placeholder = tf.placeholder(var.dtype,
                                                  var.get_shape())
                 # assigning ops
-                if parameters=='layers':
-                    assign_op = var.assign(var_placeholder)
-                elif parameters=='m':
-                    assign_op = self.optimizer.get_slot(
-                        var,parameters).assign(var_placeholder)
-                elif parameters=='v':
-                    assign_op = self.optimizer.get_slot(
-                        var,parameters).assign(var_placeholder)
-
+                assign_op = var.assign(var_placeholder)
                 layer_dict.update({var_name:[assign_op,
                                              var_placeholder]})
 
             self.assign_dict.update({layer_name: layer_dict})
 
-            
+    def add_assign_ops_AdamMoments(self):
+
+        self.assign_dict_moments1 = {}
+        self.assign_dict_moments2 = {}
+        for layer_name in list(self.var_dict):
+            layer_vars = self.var_dict[layer_name]
+
+            if (len(self.train_layers)>0) and \
+               not(layer_name in self.train_layers):
+                continue
+
+            layer_dict_m = {}
+            layer_dict_v = {}
+            for var in layer_vars:
+                var_name = var.name.split('/')[-1][:-2]
+
+                # value placeholder
+                var_m_placeholder = tf.placeholder(var.dtype,
+                                                   var.get_shape())
+                var_v_placeholder = tf.placeholder(var.dtype,
+                                                   var.get_shape())
+                # assigning ops
+                assign_op_m = self.optimizer.get_slot(
+                    var,'m').assign(var_m_placeholder)
+                assign_op_v = self.optimizer.get_slot(
+                    var,'v').assign(var_v_placeholder)
+
+                layer_dict_m.update({var_name:[assign_op_m,
+                                               var_m_placeholder]})
+                layer_dict_v.update({var_name:[assign_op_v,
+                                               var_v_placeholder]})
+
+            self.assign_dict_moments1.update({layer_name: 
+                                              layer_dict_m})
+            self.assign_dict_moments2.update({layer_name: 
+                                              layer_dict_v})
+
+
     def perform_assign_ops(self,file_path,sess):
         """Performing assignment operations that have
         been created by `self.add_assign_ops`.
@@ -651,15 +700,36 @@ class CNN(object):
         # and the necessary `feed_dict`
         feed_dict={}
         ops_list = []
-        for layer_name in list(self.var_dict):
-            var_names = list(f[layer_name].keys())
-            for var_name in var_names:
-                var_value = np.array(f[layer_name][var_name])
-                # adding the operation
-                ops_list += [self.assign_dict[layer_name][var_name][0]]
-                # adding the corresponding value into feed_dict
-                feed_dict.update({
-                    self.assign_dict[layer_name][var_name][1]: var_value})
+        for layer_name in list(self.assign_dict):
+            if 'Values' in list(f[layer_name].keys()):
+                var_names = list(f[layer_name]['Values'].keys())
+                for var_name in var_names:
+                    # for Values
+                    var_value = np.array(f[layer_name]['Values'][var_name])
+                    ops_list += [self.assign_dict[layer_name][var_name][0]]
+                    feed_dict.update({
+                        self.assign_dict[layer_name][var_name][1]: var_value})
+                    # for Moment 1
+                    var_value = np.array(f[layer_name]['Moments1'][var_name])
+                    ops_list += [self.assign_dict_moments1[
+                        layer_name][var_name][0]]
+                    feed_dict.update({self.assign_dict_moments1[
+                        layer_name][var_name][1]: var_value})
+                    # for Moment 2
+                    var_value = np.array(f[layer_name]['Moments2'][var_name])
+                    ops_list += [self.assign_dict_moments2[
+                        layer_name][var_name][0]]
+                    feed_dict.update({self.assign_dict_moments2[
+                        layer_name][var_name][1]: var_value})
+            else:
+                var_names = list(f[layer_name].keys())
+                for var_name in var_names:
+                    var_value = np.array(f[layer_name][var_name])
+                    # adding the operation
+                    ops_list += [self.assign_dict[layer_name][var_name][0]]
+                    # adding the corresponding value into feed_dict
+                    feed_dict.update({
+                        self.assign_dict[layer_name][var_name][1]: var_value})
 
         sess.run(ops_list, feed_dict=feed_dict)
 
@@ -691,6 +761,7 @@ class CNN(object):
         else:
             get_loss_2d_output(self, loss_name)
 
+        self.train_layers = train_layers
         get_optimizer(self, optimizer_name, train_layers)
         
     def get_gradients(self, grad_layers=[]):
@@ -848,10 +919,9 @@ def get_optimizer(model,
 
     # training step
     if len(train_layers)==0:
-            model.train_step = model.optimizer.minimize(
-                model.loss, name='Train_Step')
+        model.train_step = model.optimizer.minimize(
+            model.loss, name='Train_Step')
     else:
-        model.train_layers = train_layers
         # if some layers are specified, only
         # modify these layers in the training
         var_list = []
