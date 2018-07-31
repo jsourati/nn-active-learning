@@ -121,6 +121,7 @@ class CNN(object):
 
         self.layer_type = []
         self.name = name
+        self.skips = skips
         
         self.keep_prob = tf.placeholder(
             tf.float32, name='keep_prob')
@@ -762,7 +763,7 @@ class CNN(object):
             get_loss_2d_output(self, loss_name)
 
         self.train_layers = train_layers
-        get_optimizer(self, optimizer_name, train_layers)
+        get_optimizer(self, optimizer_name, loss_name)
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -877,9 +878,48 @@ def get_loss_2d_output(model, loss_name='CE'):
                     dim=-1),
                 name='Loss')
 
-def get_LwF_loss(model):
+
+def get_optimizer(model, 
+                  optimizer_name='SGD',
+                  loss_name='CE'):
+    """Creating an optimizer (if needed) together with
+    training step for a given loss
+    """
+
+    # optimizer
+    if not(hasattr(model, 'optmizer')):
+        if optimizer_name=='SGD':
+            model.optimizer = tf.train.GradientDescentOptimizer(
+                model.learning_rate)
+        elif optimizer_name=='Adam':
+            model.optimizer = tf.train.AdamOptimizer(
+                model.learning_rate)
+
+    # training step
+    if len(model.train_layers)==0:
+        loss_train_step = model.optimizer.minimize(
+            model.loss, name=loss_name+'train_step')
+    else:
+        # if some layers are specified, only
+        # modify these layers in the training
+        var_list = []
+        for layer in model.train_layers:
+            var_list += model.var_dict[layer]
+        loss_train_step = model.optimizer.minimize(
+            model.loss, var_list=var_list, 
+            name=loss_name+'_train_step')
+
+    if loss_name=='CE':
+        model.train_step = loss_train_step
+    else:
+        setattr(model, loss_name+'_train_step')
+
+def get_LwF(model):
     """Taking for which a loss has been already defined,
     and modifying it to LwF (learning without forgetting)
+
+    REMARK: this function needs model.get_optimizer() to be
+        called beforehand 
 
     CAUTIOUS: modify it for FCNs
     """
@@ -903,32 +943,7 @@ def get_LwF_loss(model):
                             tf.multiply(loss_old_term,
                                         model.lambda_o))
 
-
-def get_optimizer(model, 
-                  optimizer_name='SGD', 
-                  train_layers=[]):
-
-    # optimizer
-    if optimizer_name=='SGD':
-        model.optimizer = tf.train.GradientDescentOptimizer(
-            model.learning_rate)
-    elif optimizer_name=='Adam':
-        model.optimizer = tf.train.AdamOptimizer(
-            model.learning_rate)
-
-
-    # training step
-    if len(train_layers)==0:
-        model.train_step = model.optimizer.minimize(
-            model.loss, name='Train_Step')
-    else:
-        # if some layers are specified, only
-        # modify these layers in the training
-        var_list = []
-        for layer in train_layers:
-            var_list += model.var_dict[layer]
-        model.train_step = model.optimizer.minimize(
-            model.loss, var_list=var_list, name='Train_Step')
+    get_optimizer(model, 'Adam', 'LwF_loss')
 
 def LLFC_hess(model,sess,feed_dict):
     """Explicit Hessian matrix of the loss with 
@@ -1363,7 +1378,9 @@ def test_model(model, sess, test_dat):
     for batch_inds in batches:
         if len(X_test.shape)==2:
             batch_X = X_test[:,batch_inds]
-            batch_X = np.reshape(batch_X.T, (len(batch_inds),28,28,1))
+            if len(model.output.shape)>2:
+                batch_X = np.reshape(batch_X.T, 
+                                     (len(batch_inds),28,28,1))
         else:
             batch_X = X_test[batch_inds,:,:,:]
 
