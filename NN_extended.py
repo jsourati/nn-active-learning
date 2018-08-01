@@ -710,6 +710,10 @@ class CNN(object):
                     ops_list += [self.assign_dict[layer_name][var_name][0]]
                     feed_dict.update({
                         self.assign_dict[layer_name][var_name][1]: var_value})
+
+                    if (len(self.train_layers)>0) and \
+                       not(layer_name in self.train_layers):
+                        continue
                     # for Moment 1
                     var_value = np.array(f[layer_name]['Moments1'][var_name])
                     ops_list += [self.assign_dict_moments1[
@@ -739,7 +743,8 @@ class CNN(object):
                       learning_rate, 
                       loss_name='CE',
                       optimizer_name='SGD',
-                      train_layers=[]):
+                      train_layers=[],
+                      **kwargs):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -763,7 +768,7 @@ class CNN(object):
             get_loss_2d_output(self, loss_name)
 
         self.train_layers = train_layers
-        get_optimizer(self, optimizer_name, loss_name)
+        get_optimizer(self, optimizer_name, loss_name, **kwargs)
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -844,13 +849,16 @@ def add_loss_grad(model, pars=[]):
     with respect to parameters if necessary
     """
 
-    if pars==[]:
-        pars = tf.trainable_variables()
+    model.loss_grads = {}
+    for layer in model.var_dict:
+        layer_grads_dict = {}
 
-    model.loss_grad = tf.gradients(
-        model.loss, pars)
+        for var in model.var_dict[layer]:
+            var_name = var.name.split('/')[-1][:-2]
+            grad = tf.gradients(model.loss, var)
+            layer_grads_dict.update({var_name: grad})
 
-
+        model.loss_grads.update({layer:layer_grads_dict})
 
 def get_loss_scalar_output(model, loss_name='CE'):
 
@@ -863,7 +871,7 @@ def get_loss_scalar_output(model, loss_name='CE'):
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=tf.transpose(model.y_), 
                     logits=tf.transpose(model.output)),
-                name='Loss')
+                name='CE_Loss')
 
 def get_loss_2d_output(model, loss_name='CE'):
     
@@ -881,7 +889,8 @@ def get_loss_2d_output(model, loss_name='CE'):
 
 def get_optimizer(model, 
                   optimizer_name='SGD',
-                  loss_name='CE'):
+                  loss_name='CE',
+                  **kwargs):
     """Creating an optimizer (if needed) together with
     training step for a given loss
     """
@@ -892,13 +901,18 @@ def get_optimizer(model,
             model.optimizer = tf.train.GradientDescentOptimizer(
                 model.learning_rate)
         elif optimizer_name=='Adam':
+            kwargs.setdefault('beta1', 0.9)
+            kwargs.setdefault('beta2', 0.999)
+            model.__dict__.update(kwargs)
             model.optimizer = tf.train.AdamOptimizer(
-                model.learning_rate)
+                model.learning_rate, 
+                model.beta1, 
+                model.beta2)
 
     # training step
     if len(model.train_layers)==0:
         loss_train_step = model.optimizer.minimize(
-            model.loss, name=loss_name+'train_step')
+            model.loss, name=loss_name+'_train_step')
     else:
         # if some layers are specified, only
         # modify these layers in the training
@@ -912,7 +926,8 @@ def get_optimizer(model,
     if loss_name=='CE':
         model.train_step = loss_train_step
     else:
-        setattr(model, loss_name+'_train_step')
+        setattr(model, loss_name+'_train_step', 
+                loss_train_step)
 
 def get_LwF(model):
     """Taking for which a loss has been already defined,
@@ -943,7 +958,15 @@ def get_LwF(model):
                             tf.multiply(loss_old_term,
                                         model.lambda_o))
 
-    get_optimizer(model, 'Adam', 'LwF_loss')
+    if len(model.train_layers)==0:
+        model.LwF_train_step = model.optimizer.minimize(
+            model.LwF_loss)
+    else:
+        var_list = []
+        for layer in model.train_layers:
+            var_list += model.var_dict[layer]
+        model.LwF_train_step = model.optimizer.minimize(
+            model.LwF, var_list=var_list)
 
 def LLFC_hess(model,sess,feed_dict):
     """Explicit Hessian matrix of the loss with 
@@ -1378,7 +1401,7 @@ def test_model(model, sess, test_dat):
     for batch_inds in batches:
         if len(X_test.shape)==2:
             batch_X = X_test[:,batch_inds]
-            if len(model.output.shape)>2:
+            if len(model.x.shape)>2:
                 batch_X = np.reshape(batch_X.T, 
                                      (len(batch_inds),28,28,1))
         else:
