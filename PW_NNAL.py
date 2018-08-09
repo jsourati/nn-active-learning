@@ -323,6 +323,7 @@ def query_multimg(expr,
         dots = np.dot(F.T, F_uncertain)
         norms_outer = np.outer(norms_rem, norms_uncertain)
         sims = dots / norms_outer
+        del dots, norms_rem, norms_uncertain, norms_outer
 
         # start from empty set
         Q_inds = []
