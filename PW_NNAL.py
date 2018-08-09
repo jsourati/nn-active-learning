@@ -280,6 +280,74 @@ def query_multimg(expr,
         Q_inds = patch_utils.global2local_inds(
             inds, img_ind_sizes)
 
+    if method_name=='rep-entropy':
+
+        # extracting features
+        F = [[] for i in range(len(pool_inds))]
+        for i in range(len(pool_inds)):
+            stats = []
+            for j in range(m):
+                stats += [[expr.train_stats[i,2*j],
+                           expr.train_stats[i,2*j+1]]]
+
+            F[i] = PW_NN.batch_eval(
+                model,sess,
+                all_padded_imgs[i][:-1],
+                pool_inds[i],
+                expr.pars['patch_shape'],
+                expr.pars['ntb'],
+                stats,
+                'feature_layer')[0]
+
+        # get the most uncertain samples
+        sel_inds,sel_posts = bin_uncertainty_filter_multimg(
+            expr, model, sess, all_padded_imgs,
+            pool_inds, B)
+
+        F_uncertain = [F[i][:,sel_inds[i]] for i in
+                       range(len(sel_inds)) if 
+                       len(sel_inds[i])>0]
+        F_uncertain = np.concatenate(F_uncertain, axis=1)
+        for i in range(len(pool_inds)):
+            rem_inds = list(set(np.arange(len(pool_inds[i]))) - 
+                            set(sel_inds[i]))
+            F[i] = F[i][:, rem_inds]
+        F = np.concatenate(F, axis=1)
+
+        # norms
+        norms_rem = np.sqrt(np.sum(F**2, axis=0))
+        norms_uncertain = np.sqrt(np.sum(F_uncertain**2, 
+                                         axis=0))
+        # compute cos-similarities between filtered images
+        # and the rest of the unlabeled samples
+        dots = np.dot(F.T, F_uncertain)
+        norms_outer = np.outer(norms_rem, norms_uncertain)
+        sims = dots / norms_outer
+
+        # start from empty set
+        Q_inds = []
+        nQ_inds = np.arange(B)
+        # add most representative samples one by one
+        for i in range(expr.pars['k']):
+            rep_scores = np.zeros(B-i)
+            for j in range(B-i):
+                cand_Q = Q_inds + [nQ_inds[j]]
+                rep_scores[j] = np.sum(
+                    np.max(sims[:, cand_Q], axis=1))
+            iter_sel = nQ_inds[np.argmax(rep_scores)]
+            # update the iterating sets
+            Q_inds += [iter_sel]
+            nQ_inds = np.delete(
+                nQ_inds, np.argmax(rep_scores))
+        
+        # transforming global Q_inds into local one
+        img_ind_sizes = [len(sel_inds[i]) for i
+                         in range(len(sel_inds))]
+        local_inds = patch_utils.global2local_inds(
+            Q_inds, img_ind_sizes)
+        Q_inds = [np.array(sel_inds[i])[local_inds[i]]
+                  for i in range(len(sel_inds))]
+
     if method_name=='fi':
         # uncertainty-filtering
         sel_inds,sel_posts = bin_uncertainty_filter_multimg(
@@ -347,76 +415,6 @@ def query_multimg(expr,
             draws, img_ind_sizes)
         Q_inds = [np.array(sel_inds[i])[local_inds[i]]
                   for i in range(len(sel_inds))]
-
-    if method_name=='if':
-
-        max_iter = 100
-        n = np.sum(img_ind_sizes)
-        d = (model.feature_layer.shape[0].value + 1) * \
-            model.output.shape[0].value
-        IFs = np.zeros((d,n))
-
-        # computing gradients of the training samples
-        tr_patches,_ = patch_utils.get_patches_multimg(
-            all_padded_imgs, tr_inds,
-            expr.pars['patch_shape'], 
-            expr.train_stats)
-        tr_grads = []
-        tr_labels = []
-        for i in range(len(tr_patches)):
-            if len(tr_patches[i])==0:
-                continue
-            feed_dict={model.x:tr_patches[i],
-                       model.keep_prob:1.}
-            # getting training labels
-            multinds = np.unravel_index(
-                tr_inds[i], all_padded_imgs[i][-1].shape)
-            labels = all_padded_imgs[i][-1][multinds]
-            tr_grads += [NN.LLFC_grads(model,sess,
-                                       feed_dict,labels)]
-            tr_labels += [labels]
-
-        tr_grads = np.concatenate(tr_grads, axis=1)
-        tr_labels = np.concatenate(tr_labels)
-        tr_patches = [tr_patches[i] for i in range(len(tr_patches))
-                      if len(tr_patches[i])>0]
-        tr_patches = np.concatenate(tr_patches, axis=0)
-
-        # batch-wise computing of IFs
-        print('Computing IF vectors')
-        batches = NN.gen_batch_inds(n,expr.pars['ntb'])
-        all_weak_labels = np.zeros(n)
-        for i in range(len(batches)):
-            loc_inds = patch_utils.global2local_inds(
-                batches[i], img_ind_sizes)
-            img_inds = [np.array(pool_inds[i])[loc_inds[i]]
-                for i in range(len(pool_inds))]
-
-            patches,_ = patch_utils.get_patches_multimg(
-                all_padded_imgs, img_inds,
-                expr.pars['patch_shape'], 
-                expr.train_stats)
-            patches = [patches[i] for i in range(len(patches))
-                       if len(patches[i])>0]
-            patches = np.concatenate(patches, axis=0)
-            bIFs, weak_labels = stoch_approx_IF(
-                model,sess,tr_patches,patches,max_iter)
-
-            IFs[:,batches[i]] = -bIFs
-            all_weak_labels[batches[i]] = weak_labels
-
-        # expected change in training log-likelhoods
-        print('\tComputing LOOCV scores')
-        tr_ll_change = tr_grads.T @ IFs
-
-        classw = [.25, .75]
-        scores = np.mean(tr_ll_change[tr_labels==0,:],
-                         axis=0)*classw[0] + \
-            np.mean(tr_ll_change[tr_labels==1,:],
-                    axis=0)*classw[1]
-        global_inds = np.argsort(-scores)[:k]
-        Q_inds = patch_utils.global2local_inds(
-            global_inds, img_ind_sizes)
 
     return Q_inds
 

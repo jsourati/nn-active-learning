@@ -1175,6 +1175,7 @@ class Experiment_MultiImg(Experiment):
             self.pars['optimizer_name'],
             patch_shape)
 
+
         with tf.Session() as sess:
             model.initialize_graph(sess)
             model.load_weights(
@@ -1186,18 +1187,11 @@ class Experiment_MultiImg(Experiment):
             while nqueries < max_queries:
                 print("Iter. %d: "% iters,end='\n\t')
 
-                # take queries labeled so far (if any) and use 
-                # them in IF-based AL 
-                init_training_inds = training_inds[:]
-                method_name_q = method_name 
-                if method_name=='if' and iters==0:
-                    method_name_q='entropy'
-                
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 
                     all_padded_imgs, 
-                    pool_inds,init_training_inds,
-                    method_name_q)
+                    pool_inds,training_inds,
+                    method_name)
 
                 # moving Qs from pool --> training
                 nQ = np.sum([len(qind) for qind in Q_inds])
