@@ -952,70 +952,14 @@ class Experiment_MultiImg(Experiment):
         # take care of the statistics
         if os.path.exists(os.path.join(
                 self.root_dir, 'train_stats.txt')):
-            self.read_stats()
+            self.train_stats = np.loadtxt(os.path.join(
+                self.root_dir, 'train_stats.txt'))
         else:
-            self.get_stats()
-
-        # compute initial prediction if necessary
-        init_eval_path = os.path.join(self.root_dir,
-                                      'init_eval.txt')
-        if False:#not(os.path.exists(init_eval_path)):
-            m = len(self.train_paths[0])-1
-            patch_shape = self.pars['patch_shape'][:2] + \
-                          (m*self.pars['patch_shape'][2],)
-            model = NN.create_model(
-                self.pars['model_name'],
-                self.pars['dropout_rate'], 
-                self.nclass, 
-                self.pars['learning_rate'], 
-                self.pars['grad_layers'],
-                self.pars['train_layers'],
-                self.pars['optimizer_name'],
-                patch_shape)
-
-            with tf.Session() as sess:
-                model.initialize_graph(sess)
-                model.load_weights(
-                    self.pars['init_weights_path'], sess)
-                F1 = self.test_eval(model,sess)
-                np.savetxt(init_eval_path, [F1])
-
-    def get_stats(self):
-        
-        # training
-        m = len(self.train_paths[0])-1
-        n = len(self.train_paths)
-        train_stats=np.zeros((n, 2*m))
-        for i, dat_paths in enumerate(self.train_paths):
-            mask,_ = nrrd.read(dat_paths[-1])
-            for j in range(m):
-                img,_ = nrrd.read(dat_paths[j])
-                train_stats[i,j*m] = np.mean(img[~np.isnan(mask)])
-                train_stats[i,j*m+1] = np.std(img[~np.isnan(mask)])
-        np.savetxt(os.path.join(
-            self.root_dir,'train_stats.txt'),train_stats)
-
-        # test
-        m = len(self.test_paths[0])-1
-        n = len(self.test_paths)
-        test_stats=np.zeros((n, 2*m))
-        for i, dat_paths in enumerate(self.test_paths):
-            mask,_ = nrrd.read(dat_paths[-1])
-            for j in range(m):
-                img,_ = nrrd.read(dat_paths[j])
-                test_stats[i,j*m] = np.mean(img[~np.isnan(mask)])
-                test_stats[i,j*m+1] = np.std(img[~np.isnan(mask)])
-        np.savetxt(os.path.join(
-            self.root_dir,'test_stats.txt'),test_stats)
-
-        self.train_stats = train_stats
-        self.test_stats  = test_stats
-
-    def read_stats(self):        
-        self.train_stats = np.loadtxt(os.path.join(
-            self.root_dir, 'train_stats.txt'))
-        self.test_stats = np.loadtxt(os.path.join(
-            self.root_dir, 'test_stats.txt'))
+            self.train_stats = self.get_stats(
+                self.train_paths)
+            np.savetxt(os.path.join(
+                self.root_dir,
+                'train_stats.txt'),self.train_stats)
 
     def test_eval(self, model, sess,
                   test_inds=[], test_labels=[]):
@@ -1085,9 +1029,6 @@ class Experiment_MultiImg(Experiment):
             pool_inds,_ = gen_multimg_inds(
                 self.train_paths, self.pars['grid_spacing'])
         
-        #test_inds, test_labels = gen_multimg_inds(
-        #    self.test_paths, self.pars['grid_spacing'])
-
 
         """ Training Indices """
         # initial indices, if any
@@ -1115,22 +1056,6 @@ class Experiment_MultiImg(Experiment):
                 I = Qs[Qs[:,1]==ind,0]
                 training_inds[ind] += I.tolist()
                 [pool_inds[ind].remove(i) for i in I]
-
-        evals_path = os.path.join(method_path, 
-                                  'perf_evals.txt')
-        # check if initial prediction is already 
-        # available, if not copy
-        if False:#not(os.path.exists(eval_path)):
-            shutil.copy(
-                os.path.join(self.root_dir,'init_eval.txt'),
-                os.path.join(method_path,'perf_evals.txt')
-            )
-
-            curr_fmeas = np.loadtxt(evals_path)
-            if curr_fmeas.size==1:
-                curr_fmeas = [curr_fmeas]
-                print("Current F-measures: ", end='')
-                print(*curr_fmeas, sep=', ')
         
 
         """ Load and Pad Training Images """
@@ -1182,15 +1107,35 @@ class Experiment_MultiImg(Experiment):
                 self.pars['init_weights_path'], sess)
             sess.graph.finalize()
 
-            """ Start Generating the Queries """
+            """ Start AL iterations """
             nqueries = 0
             while nqueries < max_queries:
                 print("Iter. %d: "% iters,end='\n\t')
 
+                # preparing the already labeled data
+                train_len = np.sum([len(training_inds[i]) for
+                                    i in range(len(training_inds))])
+                if method_name=='core-set' and train_len==0:
+                    T1_addrs,T2_addrs,mask_addrs,_ = patch_utils.\
+                                                     extract_Hakims_data_path()
+                    self.labeled_paths = [
+                        [T1_addrs[i], T2_addrs[i], mask_addrs[i]]
+                        for i in range(10)]
+                    labeled_inds,_ = gen_multimg_inds(
+                        self.labeled_paths,50)
+                    self.labeled_stats = get_stats(self.labeled_paths)
+                    
+                else:
+                    self.labeled_paths = self.train_paths
+                    labeled_inds = training_inds
+                    self.labeled_stats = self.train_stats
+
+                    
+                """   Querying   """
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 
                     all_padded_imgs, 
-                    pool_inds,training_inds,
+                    pool_inds,labeled_inds,
                     method_name)
 
                 # moving Qs from pool --> training
@@ -1237,6 +1182,26 @@ class Experiment_MultiImg(Experiment):
                 model.save_weights(
                     os.path.join(self.root_dir, method_name,
                                  'curr_weights_%d.h5'% iters))
+
+
+def get_stats(paths):
+    """Computing statistics (mean/STD) of a set of 
+    images given by their paths (their paths include
+    all modalities plus their mask)
+    """
+        
+    m = len(paths[0])-1
+    n = len(paths)
+    stats=np.zeros((n, 2*m))
+
+    for i, dat_paths in enumerate(paths):
+        mask,_ = nrrd.read(dat_paths[-1])
+        for j in range(m):
+            img,_ = nrrd.read(dat_paths[j])
+            stats[i,j*m] = np.mean(img[~np.isnan(mask)])
+            stats[i,j*m+1] = np.std(img[~np.isnan(mask)])
+        
+    return stats
 
 
 def gen_multimg_inds(dat_paths, grid_spacing):
