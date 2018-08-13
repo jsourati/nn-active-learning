@@ -170,7 +170,7 @@ def query_multimg(expr,
                   sess,
                   all_padded_imgs,
                   pool_inds,
-                  tr_inds,
+                  labeled_inds,
                   method_name):
     """Similar to (single image) query except
     `all_padded_imgs` contains multiple images,
@@ -348,6 +348,102 @@ def query_multimg(expr,
             Q_inds, img_ind_sizes)
         Q_inds = [np.array(sel_inds[i])[local_inds[i]]
                   for i in range(len(sel_inds))]
+
+    if method_name=='core-set':
+        # getting the feature matrices
+        # form full feature matrix of unlabeled pool
+        # because we need to have them in all iterations
+        F_u = [[] for i in range(len(pool_inds))]
+        for i in range(len(pool_inds)):
+            stats = []
+            for j in range(m):
+                stats += [[expr.train_stats[i,2*j],
+                           expr.train_stats[i,2*j+1]]]
+
+            F_u[i] = PW_NN.batch_eval(
+                model,sess,
+                all_padded_imgs[i][:-1],
+                pool_inds[i],
+                expr.pars['patch_shape'],
+                expr.pars['ntb'],
+                stats,
+                'feature_layer')[0]
+
+        F_u = np.concatenate(F_u, axis=1)
+        n = F_u.shape[1]
+        norms_u = np.sqrt(np.sum(F_u**2, axis=0))
+        sims = -np.inf*np.ones(n)
+
+        nT = np.sum([len(labeled_inds[i]) for i 
+                     in range(len(labeled_inds))])
+        if nT<2000:
+
+            # for labeled data, do not need to keep
+            # the features in memory, since we only
+            # need to have the max-similarities
+            for i in range(len(labeled_inds)):
+                labeled_stats = []
+                for j in range(m):
+                    labeled_stats += [
+                        [expr.labeled_stats[i,2*j],
+                         expr.labeled_stats[i,2*j+1]]]
+
+            # this extra-batching is because of
+            # memory issues;F_u and F_T are too
+            # large to keep in the memory at th
+            # same time
+            nT = len(labeled_inds[i])
+            batches = NN.gen_batch_inds(nT,1000)
+
+            for batch_inds in batches:
+                if expr.labeled_paths==expr.train_paths:
+                    F_T = PW_NN.batch_eval(
+                        model, sess,
+                        all_padded_imgs[i][:-1],
+                        np.array(labeled_inds[i])[batch_inds],
+                        expr.pars['patch_shape'],
+                        expr.pars['ntb'],
+                        labeled_stats,
+                        'feature_layer')[0]
+                else:
+                    F_T = PW_NN.batch_eval(
+                        model, sess,
+                        expr.labeled_paths[i][:-1],
+                        np.array(labeled_inds[i])[batch_inds],
+                        expr.pars['patch_shape'],
+                        expr.pars['ntb'],
+                        labeled_stats,
+                        'feature_layer')[0]
+                    
+                norms_T = np.sqrt(np.sum(F_T**2, axis=0))
+                # cosine similarities
+                dots = np.dot(F_T.T, F_u)
+                norms_outer = np.outer(norms_T, norms_u)
+                sims = np.max(np.concatenate((
+                    dots / norms_outer,
+                    np.expand_dims(sims, axis=0)), axis=0), 
+                              axis=0)
+
+                del dots, norms_T, norms_outer
+        else:
+            sims = np.loadtxt(os.path.join(
+                expr.root_dir,'core-set/UT_sims.txt'))
+
+        Q_inds = []
+        for t in range(k):
+            q_ind = np.argmin(sims)
+            Q_inds += [q_ind]
+            # computing the similarities between the 
+            # selected sample and rest of the pool
+            s_ind = np.dot(F_u[:,q_ind].T, F_u)/\
+                (norms_u*norms_u[q_ind])
+            sims = np.maximum(sims, s_ind)
+            # put inf in place of selected index as an 
+            # indicator that it should be ignored  
+            sims[q_ind] = np.inf
+
+        Q_inds = patch_utils.global2local_inds(
+            Q_inds, img_ind_sizes)
 
     if method_name=='fi':
         # uncertainty-filtering
