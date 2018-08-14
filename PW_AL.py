@@ -1115,33 +1115,28 @@ class Experiment_MultiImg(Experiment):
                 # preparing the already labeled data
                 train_len = np.sum([len(training_inds[i]) for
                                     i in range(len(training_inds))])
-
                 if method_name=='core-set' and train_len==0:
-                    method_name = 'entropy'
-                    self.real_method = 'core-set'
-                    print('Switching to %s'% method_name)
-
-                # labeled data
-                self.labeled_paths = self.train_paths
-                labeled_inds = training_inds
-                self.labeled_stats = self.train_stats
+                    T1_addrs,T2_addrs,mask_addrs,_ = patch_utils.\
+                                                     extract_Hakims_data_path()
+                    self.labeled_paths = [
+                        [T1_addrs[i], T2_addrs[i], mask_addrs[i]]
+                        for i in range(10)]
+                    labeled_inds,_ = gen_multimg_inds(
+                        self.labeled_paths,50)
+                    self.labeled_stats = get_stats(self.labeled_paths)
+                    
+                else:
+                    self.labeled_paths = self.train_paths
+                    labeled_inds = training_inds
+                    self.labeled_stats = self.train_stats
 
                     
                 """   Querying   """
-                print('Size of labeled samples: %d' %(
-                    np.sum([len(labeled_inds[i]) 
-                            for i in range(len(labeled_inds))])))
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 
                     all_padded_imgs, 
                     pool_inds,labeled_inds,
                     method_name)
-
-                if hasattr(self, 'real_method'):
-                    method_name = self.real_method
-                    print('Going back to %s'% method_name)
-                    del self.real_method
-
 
                 # moving Qs from pool --> training
                 nQ = np.sum([len(qind) for qind in Q_inds])

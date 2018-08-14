@@ -376,7 +376,7 @@ def query_multimg(expr,
 
         nT = np.sum([len(labeled_inds[i]) for i 
                      in range(len(labeled_inds))])
-        if nT<2000:
+        if True:
 
             # for labeled data, do not need to keep
             # the features in memory, since we only
@@ -425,6 +425,10 @@ def query_multimg(expr,
                               axis=0)
 
                 del dots, norms_T, norms_outer
+
+            if nT>2000:
+                np.savetxt(os.path.join(
+                    expr.root_dir,'core-set/UT_sims.txt'), sims)
         else:
             sims = np.loadtxt(os.path.join(
                 expr.root_dir,'core-set/UT_sims.txt'))
