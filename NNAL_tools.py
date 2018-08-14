@@ -2,19 +2,20 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 from cvxopt import matrix, solvers
+import cvxpy as cvx
 solvers.options['show_progress'] = False
 import pdb
 import sys
 import copy
 import h5py
-import cv2
+#import cv2
 import os
 import NN
 import pickle
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
-import prep_dat
+#import prep_dat
 import patch_utils
 
 def uncertainty_filtering(posteriors, B):
@@ -570,6 +571,41 @@ def batch_accuracy(model, X, Y, batch_size, session, col=True):
         acc += iter_acc * len(inds)
         
     return acc/n
+
+def solve_FIAL_SDP(A):
+    """Solving the original FI-based AL
+    optimization using CVXPY (SCS solver)
+    """
+
+    d = A[0].shape[0]
+    n = len(A)
+
+    # optimization variables
+    t = cvx.Variable(d)
+    q = cvx.Variable(n)
+
+    # constraints
+    constr_list = [q>=0, q<=1, cvx.sum(q)==1]
+
+    I_q =  cvx.sum([q[i]*A[i] for i in range(n)])
+    for j in range(d):
+        e_j = np.zeros((d,1))
+        e_j[j,0] = 1.
+        
+        constr_mat = cvx.bmat(
+            [[I_q, e_j], 
+             [e_j.T, cvx.reshape(t[[j]], (1,1))]])
+        constr_list += [constr_mat >> 0]
+
+    # objective
+    obj = cvx.Minimize(cvx.sum(t))
+
+    # problem
+    prob = cvx.Problem(obj, constr_list)
+
+    prob.solve(solver=cvx.SCS, verbose=False)
+
+    return q.value
     
 def SDP_query_distribution(A, lambda_, X_pool, k):
     """Solving SDP problem in FIR-based active learning
