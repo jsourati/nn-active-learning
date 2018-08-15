@@ -232,16 +232,16 @@ def query_multimg(expr,
         
         x_feed_dict = {model.keep_prob:
                        model.dropout_rate}
-        total_posts = 0
+        av_posts = 0
         for i in range(expr.pars['MC_iters']):
             # the argument `k` won't be really used
             # in this line
             posts = bin_uncertainty_filter_multimg(
                 expr, model, sess, all_padded_imgs,
                 pool_inds, k, x_feed_dict)
-            total_posts = (posts+i*total_posts)/(i+1)
+            av_posts = (posts+i*av_posts)/(i+1)
 
-        inds = np.argsort(np.abs(total_posts-.5))[:k]
+        inds = np.argsort(np.abs(av_posts-.5))[:k]
 
         Q_inds = patch_utils.global2local_inds(
             inds, img_ind_sizes)
@@ -449,6 +449,45 @@ def query_multimg(expr,
         Q_inds = patch_utils.global2local_inds(
             Q_inds, img_ind_sizes)
 
+    if method_name=='ensemble':
+        
+        n_labels = np.sum([len(labeled_inds[i]) for
+                           i in range(len(labeled_inds))])
+
+        av_posts = 0
+        x_feed_dict = {expr.model_holder.keep_prob: 1.}
+        for i in range(len(expr.pretrained_paths)):
+            if n_labels==0:
+                # if no labeled indices, go for ensemble
+                # of pre-trained models
+                expr.model_holder.perform_assign_ops(
+                    expr.pretrained_paths[i], sess)
+            else:
+                # otherwise, create the ensemble by
+                # fine-tuning the previous model multiple
+                # times
+                PW_AL.finetune_multimg(expr,
+                                       expr.model_holder, 
+                                       sess,
+                                       all_padded_imgs,
+                                       labeled_inds)
+
+            # compute posteriors with the current model
+            # of the ensemble
+            posts = bin_uncertainty_filter_multimg(
+                expr, expr.model_holder, sess, 
+                all_padded_imgs,
+                pool_inds, k, x_feed_dict)
+            av_posts = (posts+i*av_posts)/(i+1)
+
+        pdb.set_trace()
+        # sorting w.r.t uncertainty
+        inds = np.argsort(np.abs(av_posts-.5))[:k]
+
+        Q_inds = patch_utils.global2local_inds(
+            inds, img_ind_sizes)
+
+
     if method_name=='fi':
         # uncertainty-filtering
         sel_inds,sel_posts = bin_uncertainty_filter_multimg(
@@ -479,32 +518,34 @@ def query_multimg(expr,
                                 model,
                                 sess,
                                 patches[i],
-                                sel_posts[i])
+                                sel_posts[i],
+                                1e-3)
 
-            F[i] = PW_NN.batch_eval(
-                model,sess,
-                all_padded_imgs[i][:-1],
-                img_inds[i],
-                expr.pars['patch_shape'],
-                expr.pars['ntb'],
-                stats,
-                'feature_layer')[0]
+            #F[i] = PW_NN.batch_eval(
+            #    model,sess,
+            #    all_padded_imgs[i][:-1],
+            #    img_inds[i],
+            #    expr.pars['patch_shape'],
+            #    expr.pars['ntb'],
+            #    stats,
+            #    'feature_layer')[0]
 
-        F = [F[i] for i in range(len(F)) if len(F[i])>0]
-        F = np.concatenate(F, axis=1)
-        ref_F = refine_feature_matrix(F, B)
+        #F = [F[i] for i in range(len(F)) if len(F[i])>0]
+        #F = np.concatenate(F, axis=1)
+        #ref_F = refine_feature_matrix(F, B)
         # make the feature components zero-mean
-        ref_F -= np.repeat(np.expand_dims(
-            np.mean(ref_F, axis=1),
-            axis=1), F.shape[1], axis=1)
+        #ref_F -= np.repeat(np.expand_dims(
+        #    np.mean(ref_F, axis=1),
+        #    axis=1), F.shape[1], axis=1)
 
         # SDP
         # ----
         lambda_ = expr.pars['lambda_']
-        soln = NNAL_tools.SDP_query_distribution(
-            A, lambda_, ref_F, k)
-        print('status: %s'% (soln['status']), end='\n\t')
-        q_opt = np.array(soln['x'][:F.shape[1]])
+        #soln = NNAL_tools.SDP_query_distribution(
+        #    A, lambda_, ref_F, k)
+        #print('status: %s'% (soln['status']), end='\n\t')
+        #q_opt = np.array(soln['x'][:F.shape[1]])
+        q_opt = NNAL_tools.solve_FIAL_SDP(A)
 
         # sampling from the optimal solution
         draws = NNAL_tools.sample_query_dstr(
