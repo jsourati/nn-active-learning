@@ -6,7 +6,7 @@ import copy
 import h5py
 import pdb
 import sys
-import cv2
+#import cv2
 import os
 
 import NNAL_tools
@@ -15,7 +15,7 @@ import AL
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
-import prep_dat
+#import prep_dat
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
 sys.path.insert(0, read_file_path)
@@ -467,17 +467,54 @@ class CNN(object):
         finalizing the graph.
         """
 
-        f = h5py.File(file_path)
-
-        # preparing feed_dict
+        
         feed_dict={}
-        for layer_name, pars in self.var_dict.items():
-            # weight
-            W = np.array(f[layer_name]['Weight'])
-            b = np.array(f[layer_name]['Bias'])
-            feed_dict.update({
-                self.assign_placeholders[layer_name][0]:W,
-                self.assign_placeholders[layer_name][1]:b})
+
+        if file_path=='init':
+
+            # preparing feed_dict
+            for layer_name, pars in self.var_dict.items():
+                # initial values for weights
+                W_shape = pars[0].shape
+                if len(W_shape)>2:
+                    # conv. layer 
+                    # (kernel w x kernel h x in_channels 
+                    n = np.prod([W_shape[i].value for i
+                                 in range(3)])
+                    std = np.sqrt(2/n)
+                    W_init = std*np.random.randn(W_shape[0].value,
+                                                 W_shape[1].value,
+                                                 W_shape[2].value,
+                                                 W_shape[3].value)
+                else:
+                    # fc layer
+                    n = W_shape[1].value
+                    std = np.sqrt(2/n)
+
+                    W_init = std*np.random.randn(W_shape[0].value,
+                                                 W_shape[1].value)
+                
+
+                b_shape = pars[1].shape
+                b_init = np.zeros([b_shape[i].value for i
+                                   in range(len(b_shape))])
+                
+                feed_dict.update({
+                    self.assign_placeholders[layer_name][0]:W_init,
+                    self.assign_placeholders[layer_name][1]:b_init})
+
+        else:
+
+            f = h5py.File(file_path)
+
+            # preparing feed_dict
+            for layer_name, pars in self.var_dict.items():
+                # weight
+                W = np.array(f[layer_name]['Weight'])
+                b = np.array(f[layer_name]['Bias'])
+                feed_dict.update({
+                    self.assign_placeholders[layer_name][0]:W,
+                    self.assign_placeholders[layer_name][1]:b})
 
         sess.run(self.assign_ops, feed_dict=feed_dict)
 
