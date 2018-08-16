@@ -21,6 +21,10 @@ import PW_NN
 import NNAL
 import NN
 
+# avioding TF warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+
 class Experiment(object):
     """class of an active learning experiments with 
     voxel-wise querying
@@ -1099,13 +1103,27 @@ class Experiment_MultiImg(Experiment):
             self.pars['train_layers'],
             self.pars['optimizer_name'],
             patch_shape)
+        model.add_assign_ops()
+
+        if method_name=='ensemble':
+            self.model_holder = NN.create_model(
+                        self.pars['model_name'],
+                        self.pars['dropout_rate'], 
+                        self.nclass, 
+                        self.pars['learning_rate'], 
+                        self.pars['grad_layers'],
+                        self.pars['train_layers'],
+                        self.pars['optimizer_name'],
+                        patch_shape)
+            self.model_holder.add_assign_ops()
 
 
         with tf.Session() as sess:
-            model.initialize_graph(sess)
-            model.load_weights(
-                self.pars['init_weights_path'], sess)
+            # doing a first global initialization 
+            sess.run(tf.global_variables_initializer())
             sess.graph.finalize()
+            model.perform_assign_ops(
+                self.pars['init_weights_path'], sess)
 
             """ Start AL iterations """
             nqueries = 0
@@ -1113,9 +1131,9 @@ class Experiment_MultiImg(Experiment):
                 print("Iter. %d: "% iters,end='\n\t')
 
                 # preparing the already labeled data
-                train_len = np.sum([len(training_inds[i]) for
-                                    i in range(len(training_inds))])
-                if method_name=='core-set' and train_len==0:
+                n_labels = np.sum([len(training_inds[i]) for
+                                   i in range(len(training_inds))])
+                if method_name=='core-set' and n_labels==0:
                     T1_addrs,T2_addrs,mask_addrs,_ = patch_utils.\
                                                      extract_Hakims_data_path()
                     self.labeled_paths = [
@@ -1130,7 +1148,29 @@ class Experiment_MultiImg(Experiment):
                     labeled_inds = training_inds
                     self.labeled_stats = self.train_stats
 
-                    
+                if method_name=='ensemble' and n_labels==0:
+                    # paths to ensemble of pre-trained models
+                    base_path = '/fileserver/external/rawabd/'+\
+                                'Jamshid/PWNNAL_results/'+\
+                                'bimodal_10/multiple_pretraining/'
+                    self.pretrained_paths = [
+                        self.pars['init_weights_path']] + \
+                        [os.path.join(base_path,'%s/model_pars.h5'%i)
+                         for i in range(1,7)]
+
+                elif method_name=='ensemble' and n_labels>0:
+                    # load the model_holder by the weights
+                    # of the previous model 
+                    # current iter: t
+                    # current pre-update model: M(t-1)
+                    # previous iter's model:    M(t-2)
+                    weights_path = os.path.join(
+                        self.root_dir, method_name,
+                        'curr_weights_%d.h5'% (iters))
+                    self.model_holder.perform_assign_ops(
+                        weights_path, sess)
+
+                
                 """   Querying   """
                 Q_inds = PW_NNAL.query_multimg(
                     self, model, sess, 

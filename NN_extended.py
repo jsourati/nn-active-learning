@@ -501,15 +501,10 @@ class CNN(object):
         # initializing of variables of only this model
         model_vars = list(np.concatenate(
             [self.var_dict[layer_name] for layer_name
-             in list(self.var_dict.keys())]))
+             in self.var_dict]))
 
         session.run(tf.variables_initializer(model_vars))
-        
-        if path:
-            if self.name=="VGG19":
-                NNAL_tools.load_weights_VGG19(
-                    self, path, session)
-            
+                    
 
     def save_weights(self, file_path, save_moments=False):
         """Saving only the parameter values of the 

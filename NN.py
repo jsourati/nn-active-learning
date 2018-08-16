@@ -368,12 +368,12 @@ class CNN(object):
                 Path to the pre-trained weights, if the
                 the given model has one
         """
-        session.run(tf.global_variables_initializer())
-        
-        if path:
-            if self.name=="VGG19":
-                NNAL_tools.load_weights_VGG19(
-                    self, path, session)
+
+        model_vars = list(np.concatenate(
+            [self.var_dict[layer_name] for layer_name
+             in self.var_dict]))
+
+        session.run(tf.variables_initializer(model_vars))
             
 
     def save_weights(self, file_path):
