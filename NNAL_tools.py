@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
@@ -582,10 +583,10 @@ def solve_FIAL_SDP(A):
 
     # optimization variables
     t = cvx.Variable(d)
-    q = cvx.Variable(n)
+    q = cvx.Variable(n, nonneg=True)
 
     # constraints
-    constr_list = [q>=0, q<=1, cvx.sum(q)==1]
+    constr_list = [cvx.sum(q)==1]
 
     I_q =  cvx.sum([q[i]*A[i] for i in range(n)])
     for j in range(d):
@@ -603,7 +604,8 @@ def solve_FIAL_SDP(A):
     # problem
     prob = cvx.Problem(obj, constr_list)
 
-    prob.solve(solver=cvx.SCS, verbose=False)
+    prob.solve(solver=cvx.MOSEK)
+    print('status: %s'% (prob.status), end='\n\t')
 
     return q.value
     
