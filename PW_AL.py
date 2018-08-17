@@ -941,26 +941,20 @@ class Experiment_MultiImg(Experiment):
         else:
             with open(tr_file, 'r') as f:
                 self.train_paths = yaml.load(f)
-                
-        test_file = os.path.join(self.root_dir, 
-                               'test_paths.txt')
-        if not(os.path.exists(test_file)):
-            with open(test_file, 'w') as f:
-                yaml.dump(test_paths, f)
-            self.test_paths = test_paths
-        else:
-            with open(test_file, 'r') as f:
-                self.test_paths = yaml.load(f)
-
 
         # take care of the statistics
         if os.path.exists(os.path.join(
                 self.root_dir, 'train_stats.txt')):
             self.train_stats = np.loadtxt(os.path.join(
                 self.root_dir, 'train_stats.txt'))
+            # if only one subject, NumPy squeezes the
+            # array when saving it (hence dropping the
+            # dimension) --> bring back that dim.
+            if self.train_stats.ndim==1:
+                self.train_stats = np.expand_dims(
+                    self.train_stats, axis=0)
         else:
-            self.train_stats = self.get_stats(
-                self.train_paths)
+            self.train_stats = get_stats(self.train_paths)
             np.savetxt(os.path.join(
                 self.root_dir,
                 'train_stats.txt'),self.train_stats)
@@ -1032,6 +1026,14 @@ class Experiment_MultiImg(Experiment):
         else:
             pool_inds,_ = gen_multimg_inds(
                 self.train_paths, self.pars['grid_spacing'])
+            # for semi-automatic segmentation discard odd slices
+            # (here, assuming that there is a single subject)
+            if self.pars['seg_type']=='semi-automatic':
+                img,_ = nrrd.read(self.train_paths[0][0])
+                multinds = np.unravel_index(pool_inds[0], img.shape)
+                even_slices = np.where(multinds[2]%2==0)[0]
+                pool_inds = np.array(pool_inds[0])[even_slices]
+                pool_inds = [list(pool_inds)]
         
 
         """ Training Indices """
@@ -1130,6 +1132,7 @@ class Experiment_MultiImg(Experiment):
             while nqueries < max_queries:
                 print("Iter. %d: "% iters,end='\n\t')
 
+                """ Preparing AL-specific Variables """
                 # preparing the already labeled data
                 n_labels = np.sum([len(training_inds[i]) for
                                    i in range(len(training_inds))])
@@ -1211,12 +1214,6 @@ class Experiment_MultiImg(Experiment):
                                  model, sess,
                                  all_padded_imgs,
                                  training_inds)
-
-                """ Evaluating on Test Images """
-                #F1 = self.test_eval(model,sess,
-                #                    test_inds,test_labels)
-                #with open(perf_eval_path, 'a') as f:
-                #    f.write('%f\n'% F1)
 
                 # save the current weights
                 model.save_weights(
