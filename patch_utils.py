@@ -491,10 +491,13 @@ def extract_newborn_data_path():
     return T1_addrs, T2_addrs, mask_addrs, sub_codes
 
 
-def extract_ACElesion_data_path(scans=[]):
+def extract_lesion_data_path(group='ACE',scans=[]):
 
     # common directory
-    root_dir = '/fileserver/segmentation/Xavi/ICC-Datasets/ACE/'
+    if group=='ACE':
+        root_dir = '/fileserver/segmentation/Xavi/ICC-Datasets/ACE/'
+    elif group=='TSCR':
+        root_dir = '/fileserver/segmentation/Xavi/ICC-Datasets/TSCR01/'
 
     # common sub-directories
     # there are four scans, specify which
