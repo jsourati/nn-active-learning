@@ -3,6 +3,7 @@ import tensorflow as tf
 import numpy as np
 import warnings
 #import nibabel
+import time
 import nrrd
 import pdb
 import os
@@ -480,7 +481,6 @@ def query_multimg(expr,
                 pool_inds, k, x_feed_dict)
             av_posts = (posts+i*av_posts)/(i+1)
 
-        pdb.set_trace()
         # sorting w.r.t uncertainty
         inds = np.argsort(np.abs(av_posts-.5))[:k]
 
@@ -537,15 +537,26 @@ def query_multimg(expr,
         #ref_F -= np.repeat(np.expand_dims(
         #    np.mean(ref_F, axis=1),
         #    axis=1), F.shape[1], axis=1)
+        ref_F = []
 
         # SDP
         # ----
         lambda_ = expr.pars['lambda_']
-        #soln = NNAL_tools.SDP_query_distribution(
-        #    A, lambda_, ref_F, k)
-        #print('status: %s'% (soln['status']), end='\n\t')
-        #q_opt = np.array(soln['x'][:F.shape[1]])
-        q_opt = NNAL_tools.solve_FIAL_SDP(A)
+
+        if expr.pars['SDP_solver']=='CVXOPT':
+            soln = NNAL_tools.SDP_query_distribution(
+                A, lambda_, ref_F, k)
+            print('status: %s'% (soln['status']), end='\n\t')
+            q_opt = np.array(soln['x'][:B])
+            obj_val = soln['primal objective']
+            
+
+        elif expr.pars['SDP_solver']=='MOSEK':
+            print('Using MOSEK')
+            soln = NNAL_tools.solve_FIAL_SDP(A)
+            q_opt = soln[0]
+            obj_val = soln[1]
+            
 
         # sampling from the optimal solution
         draws = NNAL_tools.sample_query_dstr(
