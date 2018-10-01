@@ -276,7 +276,7 @@ def query_multimg(expr,
                        av_neg_posts*np.log(av_neg_posts)
 
         scores = ent_av_posts - av_ents
-        inds = np.argsort(scores)[:k]
+        inds = np.argsort(-scores)[:k]
 
         Q_inds = patch_utils.global2local_inds(
             inds, img_ind_sizes)
@@ -467,6 +467,8 @@ def query_multimg(expr,
                 # otherwise, create the ensemble by
                 # fine-tuning the previous model multiple
                 # times
+                expr.model_holder.perform_assign_ops(
+                    expr.prev_weights_path, sess)
                 PW_AL.finetune_multimg(expr,
                                        expr.model_holder, 
                                        sess,
@@ -487,6 +489,60 @@ def query_multimg(expr,
         Q_inds = patch_utils.global2local_inds(
             inds, img_ind_sizes)
 
+    if method_name=='QBC-JS':
+        
+        n_labels = np.sum([len(labeled_inds[i]) for
+                           i in range(len(labeled_inds))])
+
+        av_posts = 0
+        av_ents = 0
+        x_feed_dict = {expr.model_holder.keep_prob: 1.}
+        for i in range(len(expr.pretrained_paths)):
+            if n_labels==0:
+                # if no labeled indices, go for ensemble
+                # of pre-trained models
+                expr.model_holder.perform_assign_ops(
+                    expr.pretrained_paths[i], sess)
+            else:
+                # otherwise, create the ensemble by
+                # fine-tuning the previous model multiple
+                # times
+                expr.model_holder.perform_assign_ops(
+                    expr.prev_weights_path, sess)
+                PW_AL.finetune_multimg(expr,
+                                       expr.model_holder, 
+                                       sess,
+                                       all_padded_imgs,
+                                       labeled_inds)
+
+            # compute posteriors with the current model
+            # of the ensemble
+            posts = bin_uncertainty_filter_multimg(
+                expr, expr.model_holder, sess, 
+                all_padded_imgs,
+                pool_inds, k, x_feed_dict)
+            av_posts = (posts+i*av_posts)/(i+1)
+
+            neg_posts = 1-posts
+            posts[posts==0] += 1e-6
+            neg_posts[neg_posts==0] += 1e-6
+            ents = -posts*np.log(posts) -\
+                  neg_posts*np.log(neg_posts)
+            # average entropies
+            av_ents = (ents+i*av_ents)/(i+1)
+
+        # entropy of average posteriors
+        av_neg_posts = 1-av_posts
+        av_posts[av_posts==0] += 1e-6
+        av_neg_posts[av_neg_posts==0] += 1e-6
+        ent_av_posts = -av_posts*np.log(av_posts)-\
+                       av_neg_posts*np.log(av_neg_posts)
+
+        scores = ent_av_posts - av_ents
+        inds = np.argsort(-scores)[:k]
+
+        Q_inds = patch_utils.global2local_inds(
+            inds, img_ind_sizes)
 
     if method_name=='fi':
         # uncertainty-filtering
@@ -546,18 +602,19 @@ def query_multimg(expr,
         if expr.pars['SDP_solver']=='CVXOPT':
             soln = NNAL_tools.SDP_query_distribution(
                 A, lambda_, ref_F, k)
-            print('status: %s'% (soln['status']), end='\n\t')
+            #print('status: %s'% (soln['status']), end='\n\t')
             q_opt = np.array(soln['x'][:B])
-            obj_val = soln['primal objective']
+            #obj_val = soln['primal objective']
             
 
         elif expr.pars['SDP_solver']=='MOSEK':
-            print('Using MOSEK')
+            #print('Using MOSEK')
             soln = NNAL_tools.solve_FIAL_SDP(A)
             q_opt = soln[0]
             obj_val = soln[1]
             
 
+        pdb.set_trace()
         # sampling from the optimal solution
         draws = NNAL_tools.sample_query_dstr(
             q_opt, k, replacement=True)
