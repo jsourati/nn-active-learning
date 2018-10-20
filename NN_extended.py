@@ -7,7 +7,7 @@ import copy
 import h5py
 import pdb
 import sys
-import cv2
+#import cv2
 import os
 
 import NNAL_tools
@@ -16,7 +16,7 @@ import AL
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/"
 sys.path.insert(0, read_file_path)
-import prep_dat
+#import prep_dat
 
 read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
 sys.path.insert(0, read_file_path)
@@ -136,7 +136,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.probes = []
+        self.probes = [[], []]
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
@@ -156,25 +156,25 @@ class CNN(object):
                                       sources_output)
 
                 if i in probes[0]:
-                    self.probes += [self.output]
+                    self.probes[0] += [self.output]
 
                 layer = layer_dict[layer_name]
                 if len(layer)==2:
-                    layer += ['M']
+                    layer += ['MA']
                 # layer[0]: layer type
                 # layer[1]: layer specs
                 # layer[2]: order of operations, default: 'MA'
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
-                
-                if i in probes[1]:
-                    self.probes += [self.output]
 
                 # dropping out the output layers if the layer
                 # is in the list of dropped-out layers
                 if i in self.dropout_layers:
                     self.output = tf.nn.dropout(
                         self.output, self.keep_prob)
+
+                if i in probes[1]:
+                    self.probes[1] += [self.output]
                 
                 if i in sources_idx:
                     sources_output += [self.output]
