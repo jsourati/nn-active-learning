@@ -789,7 +789,16 @@ class CNN(object):
                     tf.log(self.posteriors[j, 0]),
                     gpars, name='score_class_%d'% j)
              }
-            )
+             )
+    def count_parameters(self):
+
+        cnt = 0
+        for _,pars in self.var_dict.items():
+            for par in pars:
+                var_shape = par.shape
+                cnt += np.prod([var_shape[i].value for
+                                i in range(len(var_shape))])
+        return cnt
 
 def combine_layer_outputs(model,
                           layer_index,
@@ -1441,6 +1450,44 @@ def gen_batch_inds(data_size, batch_size):
     if rem>0:
         batches += [rand_perm[-rem:]]
         
-    return batches
+    return batches 
+
+def diagonal_Fisher(model, sess, batch_dat):
+    """ Computing diagonal Fisher values for a batch of data
+
+    The output is in a format similar to `model.var_dict`,
+    which is a dictionary with layer names as the keys
+
+    NOTE: for now, there is no batching of the input data,
+    hence large batches might give memory errors
+    """
+    if  not(hasattr(model,'loss_grads')):
+        add_loss_grad(model)
     
+    # initializing the output dictionary with all-zero arrays
+    Fi = {}
+    for layer in model.loss_grads:
+        layer_Fi = {}
+        for var_name in model.loss_grads[layer]:
+            layer_Fi.update({var_name: np.zeros(
+                model.loss_grads[layer][var_name][0].get_shape())})
+        Fi.update({layer: layer_Fi})
+
+    # computing diagonal Fisher for each input sample one-by-one
+    for i in range(batch_dat[0].shape[0]):
+        feed_dict={model.x: batch_dat[0][[i],:,:,:], 
+                   model.y_:batch_dat[1][:,[i]], 
+                   model.keep_prob:1.}
+        Gv = sess.run(model.loss_grads, feed_dict=feed_dict)
+
+        # updating layers of Fi dictionary with gradients of the
+        # the current input sample
+        for layer in Fi:
+            for var_name in Fi[layer]:
+                Fi[layer][var_name] += Gv[layer][var_name][0]**2
+
+    return Fi
+
     
+
+
