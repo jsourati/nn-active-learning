@@ -738,7 +738,6 @@ class CNN(object):
                       learning_rate, 
                       loss_name='CE',
                       optimizer_name='SGD',
-                      train_layers=[],
                       **kwargs):
         """Form the loss function and optimizer of the CNN graph
         
@@ -762,7 +761,6 @@ class CNN(object):
         else:
             get_loss_2d_output(self, loss_name)
 
-        self.train_layers = train_layers
         get_optimizer(self, optimizer_name, loss_name, **kwargs)
         
     def get_gradients(self, grad_layers=[]):
@@ -791,7 +789,6 @@ class CNN(object):
              }
              )
     def count_parameters(self):
-
         cnt = 0
         for _,pars in self.var_dict.items():
             for par in pars:
@@ -799,6 +796,63 @@ class CNN(object):
                 cnt += np.prod([var_shape[i].value for
                                 i in range(len(var_shape))])
         return cnt
+
+    def get_par_placeholders(self):
+        """Getting a set of placeholders with the same size
+        and structure as the model parameters
+        """
+        if hasattr(self, 'par_placeholders'):
+            print('The model already has parameter placeholders..')
+            return
+
+        self.par_placeholders = {}
+        for layer_name, pars in self.var_dict.items():
+            placeholders = []
+            for par in pars:
+                placeholders += [tf.placeholder(par.dtype,
+                                                par.shape)]
+
+            self.par_placeholders.update({
+                layer_name: placeholders})
+
+    def get_masked_train_step(self):
+        
+        if hasattr(self, 'masked_train_step'):
+            print('The model already has a masked training step')
+            return
+
+        grads_vars = self.optimizer.compute_gradients(
+            self.loss, self.var_dict)
+
+        # use these grads to create the masked version
+        # --------------------------------------------
+        # NOTE: the output of compute_gradients is a list of
+        # tuples, where each tuple has two elements, the first
+        # is the gradient, and the second is the corresponding 
+        # parameter. However, the
+        # order of these tuples does not necessarily match the 
+        # order of the keys in model.var_dict. Hence, in order to
+        # mask the gradients using model.placeholders (whih has 
+        # the same structure as model.var_dict), for each 
+        # parameter, first we have to locate it inside grads_vars
+        # by matching their names
+        grads_vars_names = np.array([grads_vars[i][1].name for i
+                                     in range(len(grads_vars))])
+        self.masked_grads_vars = []
+        for layer_name, pars in self.var_dict.items():
+            for i, par in enumerate(pars):
+                par_loc = np.where(par.name==grads_vars_names)[0][0]
+                masked_grad = tf.multiply(
+                    grads_vars[par_loc][0],
+                    self.par_placeholders[layer_name][i],
+                    name='masked_grad/%s'%(par.name.split(':')[0]))
+                self.masked_grads_vars += [
+                    (masked_grad, grads_vars[par_loc][1])]
+
+        del grads_vars
+        self.masked_train_step = self.optimizer.apply_gradients(
+            self.masked_grads_vars)
+        
 
 def combine_layer_outputs(model,
                           layer_index,
@@ -892,18 +946,19 @@ def get_loss_2d_output(model, loss_name='CE'):
 
 
 def get_optimizer(model, 
-                  optimizer_name='SGD',
-                  loss_name='CE',
+                  optimizer_name,
+                  loss_name,
                   **kwargs):
     """Creating an optimizer (if needed) together with
     training step for a given loss
     """
 
+
     # optimizer
     if not(hasattr(model, 'optmizer')):
         if optimizer_name=='SGD':
             model.optimizer = tf.train.GradientDescentOptimizer(
-                model.learning_rate)
+                model.learning_rate, name=optimizer_name)
         elif optimizer_name=='Adam':
             kwargs.setdefault('beta1', 0.9)
             kwargs.setdefault('beta2', 0.999)
@@ -911,27 +966,35 @@ def get_optimizer(model,
             model.optimizer = tf.train.AdamOptimizer(
                 model.learning_rate, 
                 model.beta1, 
-                model.beta2)
+                model.beta2,
+                name=optimizer_name)
 
     # training step
-    if len(model.train_layers)==0:
+    if 'train_layers' in kwargs:
+        model.train_layers = kwargs['train_layers']
+        if model.train_layers=='dynamic':
+            pass
+        else:
+            # if some layers are specified, only
+            # modify these layers in the training
+            var_list = []
+            for layer in model.train_layers:
+                var_list += model.var_dict[layer]
+                loss_train_step = model.optimizer.minimize(
+                    model.loss, var_list=var_list, 
+                    name=loss_name+'_train_step')
+ 
+    else:
         loss_train_step = model.optimizer.minimize(
             model.loss, name=loss_name+'_train_step')
-    else:
-        # if some layers are specified, only
-        # modify these layers in the training
-        var_list = []
-        for layer in model.train_layers:
-            var_list += model.var_dict[layer]
-        loss_train_step = model.optimizer.minimize(
-            model.loss, var_list=var_list, 
-            name=loss_name+'_train_step')
 
+                
     if loss_name=='CE':
         model.train_step = loss_train_step
     else:
         setattr(model, loss_name+'_train_step', 
                 loss_train_step)
+
 
 def get_LwF(model):
     """Taking for which a loss has been already defined,
