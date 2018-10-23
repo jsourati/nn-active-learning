@@ -813,45 +813,6 @@ class CNN(object):
                 tf.placeholder(self.grads_vars[i][1].dtype,
                                self.grads_vars[i][1].shape)]
 
-    def get_masked_train_step(self):
-        
-        if hasattr(self, 'masked_train_step'):
-            print('The model already has a masked training step')
-            return
-
-        grads_vars = self.optimizer.compute_gradients(
-            self.loss, self.var_dict)
-
-        # use these grads to create the masked version
-        # --------------------------------------------
-        # NOTE: the output of compute_gradients is a list of
-        # tuples, where each tuple has two elements, the first
-        # is the gradient, and the second is the corresponding 
-        # parameter. However, the
-        # order of these tuples does not necessarily match the 
-        # order of the keys in model.var_dict. Hence, in order to
-        # mask the gradients using model.placeholders (whih has 
-        # the same structure as model.var_dict), for each 
-        # parameter, first we have to locate it inside grads_vars
-        # by matching their names
-        grads_vars_names = np.array([grads_vars[i][1].name for i
-                                     in range(len(grads_vars))])
-        self.masked_grads_vars = []
-        for layer_name, pars in self.var_dict.items():
-            for i, par in enumerate(pars):
-                par_loc = np.where(par.name==grads_vars_names)[0][0]
-                masked_grad = tf.multiply(
-                    grads_vars[par_loc][0],
-                    self.par_placeholders[layer_name][i],
-                    name='masked_grad/%s'%(par.name.split(':')[0]))
-                self.masked_grads_vars += [
-                    (masked_grad, grads_vars[par_loc][1])]
-
-        del grads_vars
-        self.masked_train_step = self.optimizer.apply_gradients(
-            self.masked_grads_vars)
-        
-
 def combine_layer_outputs(model,
                           layer_index,
                           skips,
@@ -1005,14 +966,60 @@ def get_optimizer(model,
     model.train_step = model.optimizer.apply_gradients(
         model.grads_vars)
 
-def keep_k_largest_from_dict(vals_dict, k):
-    """Generating a binary maskk with the same structure
-    as the input (which is a dictionary) such that
-    the largest k values of the dictionary get 1 value
+def keep_k_largest_from_LoV(LoV, k):
+    """Generating a binary mask with the same structure
+    as the input (which is a list of variables) such that
+    the largest k values of the variables get 1 value
     and the rest 0
     """
 
-    pass
+    # binary map of location of k largest values
+    b_kloc = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
+
+    # doing iterative arg-sorting by going through all the
+    # variables and keeping largest k values and their
+    # locations
+    locs = np.zeros((2,k))
+    locs[:,0] = len(LoV)-1
+    locs[:,1] = np.argsort(-np.ravel(LoV[-1]))[:k]
+    MAXs = LoV[-1][np.unravel_index(locs[:,1],LoV[-1].shape)]
+
+    for i in range(len(LoV)-1,-1,-1):
+        if np.min(MAXs) >= np.max(LoV[i]):
+            continue
+
+        # if there is an element in this variables which is
+        # higher than the minimum of the k-max values, 
+        # include the ones that are large enough
+        ravel_V = np.ravel(LoV[i])
+        appended_vals = ravel_V.tolist() + MAXs.tolist()
+        appended_MAXs = -np.sort(-appended_vals)[:k]
+        # see which ones are new in max-values of appended
+        # variables (they are to be added)
+        new_vals_indics = np.where(
+            [not(appended_MAXs[i] in MAXs) for i 
+             in range(len(appended_MAXs))])[0]
+        # see which ones are old, i.e. already there
+        # (they are to be kept)
+        kept_indics = set(np.arange(k))-set(new_vals_indics)
+        kept_locs = locs[kept_indics,:]
+        # replacing the locations with new indices
+        new_locs = np.zeros((len(new_vals_locs), 2))
+        new_locs[:,0] = i
+        for j in range(len(new_vals_indics)):
+            new_locs[j,1] = np.where(
+                ravel_V==appended_MAXs[new_vals_indics[j]])[0][0]
+            # replacing the selected element with NaN to avoid
+            # selecting the same element in case of repetition
+            ravel_V[new_locs[j,1]] = np.nan
+
+        # finally, re-organize the location variable
+        for lloc,j in enumerate(new_vals_indics):
+            locs[j,:] = new_locs[lloc,:]
+        for lloc,j in enumerate(kept_indics):
+            locs[j,:] = kept_locs[lloc,:]
+
+    return locs, MAXs
 
 def get_LwF(model):
     """Taking for which a loss has been already defined,
@@ -1542,32 +1549,24 @@ def diagonal_Fisher(model, sess, batch_dat):
     NOTE: for now, there is no batching of the input data,
     hence large batches might give memory errors
     """
-    if  not(hasattr(model,'loss_grads')):
-        add_loss_grad(model)
     
     # initializing the output dictionary with all-zero arrays
-    Fi = {}
-    for layer in model.loss_grads:
-        layer_Fi = {}
-        for var_name in model.loss_grads[layer]:
-            layer_Fi.update({var_name: np.zeros(
-                model.loss_grads[layer][var_name][0].get_shape())})
-        Fi.update({layer: layer_Fi})
+    grads = [model.grads_vars[i][0] for i in range(len(model.grads_vars))]
+    diag_F = [np.zeros(grads[i].shape) for i in range(len(grads))]
 
     # computing diagonal Fisher for each input sample one-by-one
     for i in range(batch_dat[0].shape[0]):
         feed_dict={model.x: batch_dat[0][[i],:,:,:], 
                    model.y_:batch_dat[1][:,[i]], 
                    model.keep_prob:1.}
-        Gv = sess.run(model.loss_grads, feed_dict=feed_dict)
+        Gv = sess.run(grads, feed_dict=feed_dict)
 
         # updating layers of Fi dictionary with gradients of the
         # the current input sample
-        for layer in Fi:
-            for var_name in Fi[layer]:
-                Fi[layer][var_name] += Gv[layer][var_name][0]**2
+        for j in range(len(Gv)):
+            diag_F[j] = (i*diag_F[j] + Gv[j]**2) / (i+1)
 
-    return Fi
+    return diag_F
 
     
 
