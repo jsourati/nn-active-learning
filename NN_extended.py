@@ -738,7 +738,8 @@ class CNN(object):
                       learning_rate, 
                       loss_name='CE',
                       optimizer_name='SGD',
-                      **kwargs):
+                      train_layers=[],
+                      PFT_bflag=False):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -761,7 +762,8 @@ class CNN(object):
         else:
             get_loss_2d_output(self, loss_name)
 
-        get_optimizer(self, optimizer_name, loss_name, **kwargs)
+        get_optimizer(self, optimizer_name, loss_name, 
+                      train_layers, PFT_bflag)
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -799,21 +801,17 @@ class CNN(object):
 
     def get_par_placeholders(self):
         """Getting a set of placeholders with the same size
-        and structure as the model parameters
+        and structure as `model.grads_vars`
         """
         if hasattr(self, 'par_placeholders'):
             print('The model already has parameter placeholders..')
             return
 
-        self.par_placeholders = {}
-        for layer_name, pars in self.var_dict.items():
-            placeholders = []
-            for par in pars:
-                placeholders += [tf.placeholder(par.dtype,
-                                                par.shape)]
-
-            self.par_placeholders.update({
-                layer_name: placeholders})
+        self.par_placeholders = []
+        for i in range(len(self.grads_vars)):
+            self.par_placeholders += [
+                tf.placeholder(self.grads_vars[i][1].dtype,
+                               self.grads_vars[i][1].shape)]
 
     def get_masked_train_step(self):
         
@@ -908,15 +906,19 @@ def add_loss_grad(model, pars=[]):
     """
 
     model.loss_grads = {}
-    for layer in model.var_dict:
-        layer_grads_dict = {}
+    for layer_name, pars in model.var_dict.items():
+        grads = []
+        for par in pars:
+            # setting the op's name
+            pdb.set_trace()
+            par_name_wo_colon = par.name.split(':')[:-1][0].split('/')
+            par_grad_name = par_name_wo_colon[:1]+['loss_grad']+\
+                            par_name_wo_colon[1:]
+            par_grad_name = '/'.join(par_grad_name)
+            grads += [tf.gradients(model.loss, par, 
+                                   name=par_grad_name)]
 
-        for var in model.var_dict[layer]:
-            var_name = var.name.split('/')[-1][:-2]
-            grad = tf.gradients(model.loss, var)
-            layer_grads_dict.update({var_name: grad})
-
-        model.loss_grads.update({layer:layer_grads_dict})
+        model.loss_grads.update({layer_name:grads})
 
 def get_loss_scalar_output(model, loss_name='CE'):
 
@@ -948,13 +950,13 @@ def get_loss_2d_output(model, loss_name='CE'):
 def get_optimizer(model, 
                   optimizer_name,
                   loss_name,
-                  **kwargs):
+                  train_layers,
+                  PFT_bflag):
     """Creating an optimizer (if needed) together with
     training step for a given loss
     """
 
-
-    # optimizer
+    # building the optimizer
     if not(hasattr(model, 'optmizer')):
         if optimizer_name=='SGD':
             model.optimizer = tf.train.GradientDescentOptimizer(
@@ -969,32 +971,48 @@ def get_optimizer(model,
                 model.beta2,
                 name=optimizer_name)
 
-    # training step
-    if 'train_layers' in kwargs:
-        model.train_layers = kwargs['train_layers']
-        if model.train_layers=='dynamic':
-            pass
-        else:
-            # if some layers are specified, only
-            # modify these layers in the training
-            var_list = []
-            for layer in model.train_layers:
-                var_list += model.var_dict[layer]
-                loss_train_step = model.optimizer.minimize(
-                    model.loss, var_list=var_list, 
-                    name=loss_name+'_train_step')
- 
-    else:
-        loss_train_step = model.optimizer.minimize(
-            model.loss, name=loss_name+'_train_step')
+    # gradients-and-variables to be applied with
+    # optimizer.apply_gradients
+    model.grads_vars = model.optimizer.compute_gradients(
+        model.loss, model.var_dict)
 
-                
-    if loss_name=='CE':
-        model.train_step = loss_train_step
-    else:
-        setattr(model, loss_name+'_train_step', 
-                loss_train_step)
+    """check if only certain layers are to be modified
+    in training/fine-tuning"""
+    if len(train_layers)>0:
+        d = len(model.grads_vars)
+        model.train_layers = train_layers
+        # locating those parameters that belong to the
+        # specified train_layers
+        train_pars = np.zeros(d, dtype=bool)
+        for layer_name in model.train_layers:
+            train_pars += np.array([layer_name==model.grads_vars[
+                i][1].name.split('/')[1] for i in range(d)])
+        model.grads_vars = [model.grads_vars[i] for i in 
+                            np.where(train_pars)[0]] 
 
+    """ doing partial fine-tuning (PFT) if needed"""
+    if PFT_bflag:
+        if not(hasattr(model,'par_placeholders')):
+            model.get_par_placeholders()
+        
+        for i in range(len(model.grads_vars)):
+            model.grads_vars[i] = (tf.multiply(
+                model.grads_vars[i][0],model.par_placeholders[i]),
+                                   model.grads_vars[i][1])
+    
+    # finally, creating the train-step by applying the 
+    # resulted gradients-and-variables
+    model.train_step = model.optimizer.apply_gradients(
+        model.grads_vars)
+
+def keep_k_largest_from_dict(vals_dict, k):
+    """Generating a binary maskk with the same structure
+    as the input (which is a dictionary) such that
+    the largest k values of the dictionary get 1 value
+    and the rest 0
+    """
+
+    pass
 
 def get_LwF(model):
     """Taking for which a loss has been already defined,
