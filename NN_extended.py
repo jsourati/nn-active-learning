@@ -10,6 +10,7 @@ import sys
 #import cv2
 import os
 
+import patch_utils
 import NNAL_tools
 import PW_NN
 import AL
@@ -95,7 +96,7 @@ class CNN(object):
             **skips** : list
                 List of skip connections; each element is a list of 
                 three elements: [layer_index, list_of_destinations, skip_type]
-                which indices that output of the layer layer_index should be
+                which indicates that outputs of the layer_index should be
                 connected to the input of all layers with indices in 
                 list_of_destinations; skip_type specifies the type of
                 connection: summing up if `skip_type=='sum'` and concatenating
@@ -972,54 +973,43 @@ def keep_k_largest_from_LoV(LoV, k):
     the largest k values of the variables get 1 value
     and the rest 0
     """
+    
+    # length of all variables
+    Ls = [np.prod(LoV[i].shape) for i in range(len(LoV))]
 
-    # binary map of location of k largest values
-    b_kloc = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
+    # appending everything together (and putting
+    # a minus behind them) and arg-sorting
+    app_LoV = []
+    for i in range(len(LoV)):
+        app_LoV += np.ravel(-LoV[i]).tolist()
+    sort_inds = np.argsort(app_LoV)[:k]
+    
+    local_inds = patch_utils.global2local_inds(
+        sort_inds,Ls)
+    non_empty_locs = np.array([len(local_inds[i]) for 
+                               i in range(len(local_inds))])
+    non_empty_locs = np.where(non_empty_locs>0)[0]
 
-    # doing iterative arg-sorting by going through all the
-    # variables and keeping largest k values and their
-    # locations
-    locs = np.zeros((2,k))
-    locs[:,0] = len(LoV)-1
-    locs[:,1] = np.argsort(-np.ravel(LoV[-1]))[:k]
-    MAXs = LoV[-1][np.unravel_index(locs[:,1],LoV[-1].shape)]
+    # generating the mask
+    bmask = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
+    for i in non_empty_locs:
+        multinds = np.unravel_index(local_inds[i],LoV[i].shape)
+        bmask[i][multinds] = 1
 
-    for i in range(len(LoV)-1,-1,-1):
-        if np.min(MAXs) >= np.max(LoV[i]):
-            continue
+    return bmask, non_empty_locs
 
-        # if there is an element in this variables which is
-        # higher than the minimum of the k-max values, 
-        # include the ones that are large enough
-        ravel_V = np.ravel(LoV[i])
-        appended_vals = ravel_V.tolist() + MAXs.tolist()
-        appended_MAXs = -np.sort(-appended_vals)[:k]
-        # see which ones are new in max-values of appended
-        # variables (they are to be added)
-        new_vals_indics = np.where(
-            [not(appended_MAXs[i] in MAXs) for i 
-             in range(len(appended_MAXs))])[0]
-        # see which ones are old, i.e. already there
-        # (they are to be kept)
-        kept_indics = set(np.arange(k))-set(new_vals_indics)
-        kept_locs = locs[kept_indics,:]
-        # replacing the locations with new indices
-        new_locs = np.zeros((len(new_vals_locs), 2))
-        new_locs[:,0] = i
-        for j in range(len(new_vals_indics)):
-            new_locs[j,1] = np.where(
-                ravel_V==appended_MAXs[new_vals_indics[j]])[0][0]
-            # replacing the selected element with NaN to avoid
-            # selecting the same element in case of repetition
-            ravel_V[new_locs[j,1]] = np.nan
+def threshold_LoV(LoV, thr):
+    """Generating a binary mask with the same size as the
+    LoV (List of Variables) such that the variables whose
+    values are larger than the threshold get one, and zero 
+    otherwise
+    """
 
-        # finally, re-organize the location variable
-        for lloc,j in enumerate(new_vals_indics):
-            locs[j,:] = new_locs[lloc,:]
-        for lloc,j in enumerate(kept_indics):
-            locs[j,:] = kept_locs[lloc,:]
+    bmask = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
+    for i in range(len(LoV)):
+        bmask[i][LoV[i]>=thr] = 1
 
-    return locs, MAXs
+    return bmask
 
 def get_LwF(model):
     """Taking for which a loss has been already defined,
@@ -1554,11 +1544,21 @@ def diagonal_Fisher(model, sess, batch_dat):
     grads = [model.grads_vars[i][0] for i in range(len(model.grads_vars))]
     diag_F = [np.zeros(grads[i].shape) for i in range(len(grads))]
 
+    # when computing gradients here, be careful about the 
+    # binary masks that have to be provided in case of PFT.
+    if hasattr(model, 'par_placeholders'):
+        X_feed_dict = {model.par_placeholders[i]:
+                       np.ones(model.par_placeholders[i].shape)
+                       for i in range(len(model.par_placeholders))}
+    else:
+        X_feed_dict = {}
+
     # computing diagonal Fisher for each input sample one-by-one
     for i in range(batch_dat[0].shape[0]):
         feed_dict={model.x: batch_dat[0][[i],:,:,:], 
                    model.y_:batch_dat[1][:,[i]], 
                    model.keep_prob:1.}
+        feed_dict.update(X_feed_dict)
         Gv = sess.run(grads, feed_dict=feed_dict)
 
         # updating layers of Fi dictionary with gradients of the
