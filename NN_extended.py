@@ -36,7 +36,8 @@ class CNN(object):
                  skips=[],
                  feature_layer=None,
                  dropout=None,
-                 probes=[[],[]]):
+                 probes=[[],[]],
+                 **kwargs):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
         key is a 2-element list inlcuding  depth of this layer and its type,
@@ -119,6 +120,7 @@ class CNN(object):
         
         self.x = x
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
+        self.__dict__.update(kwargs)      # optional parameters
 
         self.layer_type = []
         self.name = name
@@ -144,7 +146,8 @@ class CNN(object):
         self.layer_names = list(layer_dict.keys())
 
         self.output = x
-        with tf.name_scope(name):
+        with tf.variable_scope(name):
+            self.is_training = tf.placeholder(tf.bool, name='is_training')
             for i, layer_name in enumerate(layer_dict):
                 
                 # before adding a layer check if this layer
@@ -168,7 +171,7 @@ class CNN(object):
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
 
-                # dropping out the output layers if the layer
+                # dropping out the output if the layer
                 # is in the list of dropped-out layers
                 if i in self.dropout_layers:
                     self.output = tf.nn.dropout(
@@ -250,7 +253,7 @@ class CNN(object):
                 any activation at the output
         """
         
-        with tf.name_scope(layer_name):
+        with tf.variable_scope(layer_name):
             for op in layer_op_order:
 
                 if op=='M':
@@ -375,47 +378,64 @@ class CNN(object):
                layer_name,
                layer_specs):
         """Adding batch normalization layer
+
+        Here, we used tf.contrib.layers.batch_norm which takes
+        care of updating population mean and variance during the
+        training phase by means of exponential moving averaging.
+        Hence, we need an extra boolean placeholder for the model 
+        that specifies when we are in the training phase and
+        when we are in test.
+
         """
 
-        # defining required variables (scale, offset)
+        # get the current scope
+        scope = tf.get_variable_scope()
+        # NOTE: We need to have a variable scope to create this
+        # layer because we use the tf.contrib.layers.batch_norm
+        # with `reuse=True`, which needs to be provided the
+        # variable scope too
+
+        # shape of the variables
         output_shape = self.output.shape
         if len(output_shape)==2:
             ax = [1]
             shape = [output_shape[0].value]
         else:
             ax = [0]
-            shape = [output_shape[i].value for i 
-                     in range(1,len(output_shape))]
-        # new_vars = [ gamma ,  beta  ]
-        #            [(scale), (offset)
-        new_vars = [tf.Variable(tf.constant(1., shape=shape), 
-                                name='Scale'),
-                    tf.Variable(tf.constant(0., shape=shape), 
-                                name='Offset')]
+            #shape = [output_shape[i].value for i 
+            #         in range(1,len(output_shape))]
+            shape = [output_shape[-1].value]
 
+
+        # creating the variables
+        new_vars = [
+            tf.get_variable('moving_mean', dtype=tf.float32,
+                            initializer=tf.zeros(shape)),
+            tf.get_variable('moving_variance', dtype=tf.float32,
+                            initializer=tf.ones(shape)),
+            tf.get_variable('gamma', dtype=tf.float32,
+                            initializer=tf.ones(shape)),
+            tf.get_variable('beta', dtype=tf.float32,
+                            initializer=tf.zeros(shape))]
         if layer_name in self.var_dict:
             self.var_dict[layer_name] += new_vars
         else:
             self.var_dict.update({layer_name: new_vars})
-
-        mu_B, Sigma_B = tf.nn.moments(self.output, axes=ax,
-                                      keep_dims=False)
-
-        if len(output_shape)==2:
-
-            self.output = tf.transpose(tf.nn.batch_normalization(
-                tf.transpose(self.output), mu_B, Sigma_B, 
-                self.var_dict[layer_name][-1],
-                self.var_dict[layer_name][-2],
-                1e-6))
-
-        else:
-
-            self.output = tf.nn.batch_normalization(
-                self.output, mu_B, Sigma_B, 
-                self.var_dict[layer_name][-1],
-                self.var_dict[layer_name][-2],
-                1e-6)
+            
+        if not(hasattr(self, 'BN_decay')):
+            self.BN_decay = 0.999
+        if not(hasattr(self, 'BN_epsilon')):
+            self.BN_epsilon = 1e-4
+        
+        self.output = tf.contrib.layers.batch_norm(
+            self.output,
+            decay=self.BN_decay,
+            center=True,
+            scale=True,
+            epsilon=self.BN_epsilon,
+            is_training=self.is_training,
+            reuse=True,
+            scope=scope)
 
     def add_conv_transpose(self, 
                            layer_name,
@@ -963,9 +983,14 @@ def get_optimizer(model,
                                    model.grads_vars[i][1])
     
     # finally, creating the train-step by applying the 
-    # resulted gradients-and-variables
-    model.train_step = model.optimizer.apply_gradients(
-        model.grads_vars)
+    # resulted gradients-and-variables, and considering
+    # the dependency of the apply_gradient operation
+    # to the moving average updates of BN (if any), which
+    # are in tf.GraphKeys.UPDATE_OPS
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(update_ops):
+        model.train_step = model.optimizer.apply_gradients(
+            model.grads_vars)
 
 def keep_k_largest_from_LoV(LoV, k):
     """Generating a binary mask with the same structure
