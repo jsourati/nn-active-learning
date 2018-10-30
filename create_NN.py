@@ -203,7 +203,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     k = 16
 
     # first layer
-    pw_dict = {'first': ['conv', [48, [3,3]], 'BMA']}
+    pw_dict = {'first': ['conv', [48, [3,3]], 'MA']}
 
     
     ''' DB+TD  '''
@@ -216,7 +216,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
         pw_dict.update(DB)
         # transition down
         nfmap = 48+np.sum(Ls[:i+1])*k
-        TD = {'T_%d'%i: ['conv', [nfmap, [3,3]], 'BMA'],
+        TD = {'T_%d'%i: ['conv', [nfmap, [1,1]], 'BMA'],
               'pool_%d'%i: ['pool', [2,2]]}
         pw_dict.update(TD)
 
@@ -227,15 +227,15 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     pw_dict.update(BT)
 
     ''' TU+DB '''
-    Ls = np.flip(Ls)
-    for i in range(len(Ls)):
+    Ls = np.flip(Ls+[15])
+    for i in range(1,len(Ls)):
         # transition up
-        nfmap = Ls[i]*k
-        TU = {'TU_%d'%i: ['conv_transpose', 
+        nfmap = Ls[i-1]*k
+        TU = {'TU_%d'%(i-1): ['conv_transpose', 
                           [nfmap, [3,3], [2,2]], 'M']}
         pw_dict.update(TU)
         # dense block
-        DB = {'DB%d_%d'%(5+i,j): ['conv', [k, [3,3]], 'BAM']
+        DB = {'DB%d_%d'%(5+i-1,j): ['conv', [k, [3,3]], 'BAM']
               for j in range(Ls[i])}
         pw_dict.update(DB)
 
@@ -244,14 +244,12 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
 
 
     ''' Establishing the Skip Connections '''
+    layer_names = np.array(list(pw_dict.keys()))
     stype = 'con'    # concatenation
     skips = []
 
-    # intra-DB skip connections
-    # downward and upward paths
-    nDB = 9
-    layer_names = np.array(list(pw_dict.keys()))
-    for i in range(nDB):
+    # intra-DB skip connections of downward path
+    for i in range(5):
         # starting index
         start_ind = np.where('DB%d_0'%i==layer_names)[0][0]
         # number of layers
@@ -265,7 +263,14 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     # bottleneck DB
     start_ind = np.where('BottleDB_0'==layer_names)[0][0]
     L = np.sum(['BottleDB' in name for name in layer_names])
-    for j in range(L):
+    # for bottleneck, the input of the first layer (or output
+    # of pool_4) is connected to all intermediate layers
+    # but the last output (input of TU_0)
+    skips += [[start_ind-1, 
+               list(np.arange(start_ind+1,
+                              start_ind+L)), stype]]
+    # but the rest will be connected to the last one too
+    for j in range(1,L):
         skips += [[start_ind-1+j, 
                    list(np.arange(start_ind+1+j,
                                   start_ind+L+1)),
@@ -274,39 +279,133 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     # inter-DB skip connections
     skipped_nodes = np.array([skips[i][0] for i in
                               range(len(skips))])
-    # NOTE: we know that output nodes of DBs in downward
+    # NOTE1: we know that output nodes of DBs in downward
     # path are not already skipped somewhere else, hence
     # we don't need to check with an if
-    # output of DB4 --> output of TU_0 (input of DB5_0)
+    #
+    # NOTE2: more importantly, for source nodes, we only 
+    # save their outuputs before combining them with other
+    # sources. For example, in the first connection below
+    # the output of DB4_11 (end node of DB4) has to be
+    # connected to the input of DB5. However, the output
+    # node of DB4 (which is the same as input node of
+    # T_4) is also combined with many other previous
+    # nodes. Hence, what we actually have to do here is
+    # to combine output node of DB4_11 together with 
+    # outputs of all other previous nodes that have
+    # already combined with input of T_4. In other words,
+    # input of DB5_0 should be the destination of (output
+    # of) DB4_11 and all connections of T_4
+    # 
+    # output of DB4_11 + connections to T_4 
+    # --> 
+    # output of TU_0 (input of DB5_0)
     DB4_end_node = np.where(layer_names=='DB4_11')[0][0]
     DB5_start_node = np.where(layer_names=='DB5_0')[0][0]
-    skips += [[DB4_end_node, [DB5_start_node], stype]]
+    T4_node = np.where(layer_names=='T_4')[0][0]
+    # go through all nodes, and if T_4 was in their
+    # destination, put DB5_0 as a destination too
+    for i in range(len(skips)):
+        if T4_node in skips[i][1]:
+            skips[i][1] += [DB5_start_node]
+    skips += [[DB4_end_node,[DB5_start_node], stype]]
 
-    # output of DB3 --> output of TU_1 (input of DB6_0)
+    # output of DB3 + connections to T_3
+    # --> 
+    # output of TU_1 (input of DB6_0)
     DB3_end_node = np.where(layer_names=='DB3_9')[0][0]
     DB6_start_node = np.where(layer_names=='DB6_0')[0][0]
+    T3_node = np.where(layer_names=='T_3')[0][0]
+    for i in range(len(skips)):
+        if T3_node in skips[i][1]:
+            skips[i][1] += [DB6_start_node]
     skips += [[DB3_end_node, [DB6_start_node], stype]]
 
-    # output of DB2 --> output of TU_2 (input of DB7_0)
+    # output of DB2 + connections to T_2 
+    # --> 
+    # output of TU_2 (input of DB7_0)
     DB2_end_node = np.where(layer_names=='DB2_6')[0][0]
     DB7_start_node = np.where(layer_names=='DB7_0')[0][0]
+    T2_node =  np.where(layer_names=='T_2')[0][0]
+    for i in range(len(skips)):
+        if T2_node in skips[i][1]:
+            skips[i][1] += [DB7_start_node]
     skips += [[DB2_end_node, [DB7_start_node], stype]]
 
-    # output of DB1 --> output of TU_3 (input of DB8_0)
+    # output of DB1 + connections to T_1 
+    # -->
+    # output of TU_3 (input of DB8_0)
     DB1_end_node = np.where(layer_names=='DB1_4')[0][0]
     DB8_start_node = np.where(layer_names=='DB8_0')[0][0]
+    T1_node = np.where(layer_names=='T_1')[0][0]
+    for i in range(len(skips)):
+        if T1_node in skips[i][1]:
+            skips[i][1] += [DB8_start_node]
     skips += [[DB1_end_node, [DB8_start_node], stype]]
 
-    # output of DB0 --> output of TU_4 (input of DB9_0)
+    # output of DB0 + connections to T_0
+    # --> 
+    # output of TU_4 (input of DB9_0)
     DB0_end_node = np.where(layer_names=='DB0_3')[0][0]
     DB9_start_node = np.where(layer_names=='DB9_0')[0][0]
+    T0_node = np.where(layer_names=='T_0')[0][0]
+    for i in range(len(skips)):
+        if T0_node in skips[i][1]:
+            skips[i][1] += [DB9_start_node]
     skips += [[DB0_end_node, [DB9_start_node], stype]]
+
+    # After estalishing the skip connections between the 
+    # downward and upward paths, for the intra-DB skips of
+    # the upward path. It is different than the intra-DB skips
+    # of downward path, because here for connecting the 
+    # layers inside a DB, the first layer itself has 
+    # combination of outputs of many other layers from
+    # the downward path that should be taken into account.
+    # For instance, skips of DB5, we should also consider layers
+    # of DB4, which hare connected to the input of DB5_0
+    for i in range(5,9):
+        # starting index
+        start_ind = np.where('DB%d_0'%i==layer_names)[0][0]
+        # first do the connections to the last layer
+        # because this one does not receive the first layer
+        # number of layers
+        L = np.sum(['DB%d'%i in name for 
+                    name in layer_names])
+        skips += [[start_ind-1, 
+                   list(np.arange(start_ind+1,
+                                  start_ind+L)), stype]]
+        for j in range(1,L):
+            skips += [[start_ind-1+j,
+                       list(np.arange(start_ind+1+j,
+                                      start_ind+L+1)),
+                       stype]]
+        # also add the intermediate layers as destination
+        # of the skipped connections (i.e. those layers
+        # that already had the start_ind as their destination)
+        for j in range(len(skips)):
+            if start_ind in skips[j][1]:
+                skips[j][1] += list(np.arange(start_ind+1,
+                                              start_ind+L))
+
+    # for DB9 (last DB) do the same thing, except its input
+    # should also be connected to the last layer
+    start_ind = np.where('DB9_0'==layer_names)[0][0]
+    L = np.sum(['DB%d'%i in name for name in layer_names])
+    for j in range(L):
+        skips += [[start_ind-1+j,
+                   list(np.arange(start_ind+1+j,
+                                  start_ind+L+1)),stype]]
+    for j in range(len(skips)):
+        if start_ind in skips[j][1]:
+            skips[j][1] += list(np.arange(start_ind+1,
+                                          start_ind+L+1))
 
     # sorting the skips in terms of the sources
     sort_inds = np.argsort([skips[i][0] for i in range(len(skips))])
     sorted_skips = []
     for ind in sort_inds:
         sorted_skips += [skips[ind]]
+
 
         ''' Specifying Drop-out Layers '''
     # including all the layers, except max-pooling and
