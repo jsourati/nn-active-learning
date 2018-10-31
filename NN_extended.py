@@ -144,12 +144,15 @@ class CNN(object):
         sources_output = []
 
         self.layer_names = list(layer_dict.keys())
+        
+        self.input_shapes = []
+        self.output_shapes = []
 
         self.output = x
         with tf.variable_scope(name):
             self.is_training = tf.placeholder(tf.bool, name='is_training')
             for i, layer_name in enumerate(layer_dict):
-                
+
                 # before adding a layer check if this layer
                 # is a destination layer, i.e. it has to
                 # consider the output of a previous layer
@@ -165,11 +168,17 @@ class CNN(object):
                 layer = layer_dict[layer_name]
                 if len(layer)==2:
                     layer += ['MA']
+
+                self.input_shapes += [[self.output.shape[i].value for i
+                                       in range(len(self.output.shape))]]
                 # layer[0]: layer type
                 # layer[1]: layer specs
                 # layer[2]: order of operations, default: 'MA'
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
+
+                self.output_shapes += [[self.output.shape[i].value for i
+                                        in range(len(self.output.shape))]]
 
                 # dropping out the output if the layer
                 # is in the list of dropped-out layers
@@ -223,6 +232,8 @@ class CNN(object):
                 c = self.output.shape[3].value
                 self.y_ = tf.placeholder(tf.float32,
                                          [None,h,w,c])
+                # posterior
+                self.posteriors = tf.nn.softmax(self.output)
             
     def add_layer(self, 
                   layer_name,
@@ -842,6 +853,11 @@ def combine_layer_outputs(model,
     considering the skip connections that may
     indicate the layer needs inputs from the
     previous layers 
+
+    NOTE: for now, this function only works for 
+    combining 2D feature maps (not supporting
+    1D feature vectors--this is mostly for 
+    handling resizing issues)
     """
 
     sources_for_sink = []
@@ -852,6 +868,31 @@ def combine_layer_outputs(model,
     if len(sources_for_sink)==0:
         return
     else:
+        # get the shape of source variables
+        shapes = [tuple([shape.value for shape in par.shape[1:3]])
+                  for par in np.array(sources_output)[sources_for_sink]]
+        assert len(set(shapes))==1, pdb.set_trace() 
+        #'The skipped variables '+\
+        #    'should all have the same size.'
+        h = shapes[0][0]
+        w = shapes[0][1]
+        
+        # now compar size of the output with the skipped
+        # variables, and resize if needed
+        ho = model.output.shape[1].value
+        wo = model.output.shape[2].value
+        if (h != ho) or (w != wo):
+            print('The output is resizing from (%d,%d)'%
+                  (ho,wo)+' to (%d,%d)'%(h,w))
+            is_added = model.output==sources_output[-1]
+            model.output = tf.image.resize_image_with_crop_or_pad(
+                model.output, h, w)
+            # if model.output has already been added
+            # to sources_output (and if so, this can be done only
+            # by the previous layer) change that too
+            if is_added:
+                sources_output[-1] = model.output
+
         for j in sources_for_sink:
             if skips[j][2]=='sum':
                 model.output = tf.add(model.output,
