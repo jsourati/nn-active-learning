@@ -34,6 +34,7 @@ class CNN(object):
                  layer_dict, 
                  name,
                  skips=[],
+                 regularizer=None,
                  feature_layer=None,
                  dropout=None,
                  probes=[[],[]],
@@ -121,10 +122,15 @@ class CNN(object):
         self.x = x
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
         self.__dict__.update(kwargs)      # optional parameters
-
+        self.regularizer = regularizer
         self.layer_type = []
         self.name = name
         self.skips = skips
+        if (self.regularizer is not None) and \
+           ('weight_decay' not in kwargs):
+            print('Weight decay is set to default value of 0.5')
+            self.weight_decay = 0.5
+        
         
         self.keep_prob = tf.placeholder(
             tf.float32, name='keep_prob')
@@ -227,8 +233,8 @@ class CNN(object):
                                          [c, None],
                                          name='labels')
             else:
-                w = self.output.shape[1].value
-                h = self.output.shape[2].value
+                h = self.output.shape[1].value
+                w = self.output.shape[2].value
                 c = self.output.shape[3].value
                 self.y_ = tf.placeholder(tf.float32,
                                          [None,h,w,c])
@@ -330,14 +336,14 @@ class CNN(object):
             padding='SAME'
 
         prev_depth = self.output.get_shape()[-1].value
-        new_vars = [weight_variable([kernel_dim[0], 
+        new_vars = [weight_variable('Weight',
+                                    [kernel_dim[0], 
                                      kernel_dim[1], 
                                      prev_depth, 
                                      kernel_num], 
-                                    name='Weight'),
-                    bias_variable([kernel_num],
-                                  name='Bias')
-        ]
+                                    self.regularizer),
+                    bias_variable('Bias', [kernel_num])
+                ]
 
         # there may have already been some variables
         # created for this layer (through BN)
@@ -361,11 +367,11 @@ class CNN(object):
         specification to the graph
         """
         prev_depth = self.output.get_shape()[0].value
-        new_vars = [weight_variable([layer_specs[0], prev_depth], 
-                                    name='Weight'),
-                    bias_variable([layer_specs[0], 1],
-                                  name='Bias')
-        ]
+        new_vars = [weight_variable('Weight',
+                                    [layer_specs[0], prev_depth],
+                                    self.regularizer),
+                    bias_variable('Bias', [layer_specs[0], 1])
+                ]
 
         if layer_name in self.var_dict:
             self.var_dict[layer_name] += new_vars
@@ -421,9 +427,11 @@ class CNN(object):
         # creating the variables
         new_vars = [
             tf.get_variable('moving_mean', dtype=tf.float32,
-                            initializer=tf.zeros(shape)),
+                            initializer=tf.zeros(shape),
+                            trainable=False),
             tf.get_variable('moving_variance', dtype=tf.float32,
-                            initializer=tf.ones(shape)),
+                            initializer=tf.ones(shape),
+                            trainable=False),
             tf.get_variable('gamma', dtype=tf.float32,
                             initializer=tf.ones(shape)),
             tf.get_variable('beta', dtype=tf.float32,
@@ -466,13 +474,14 @@ class CNN(object):
 
         # adding new variables
         prev_depth = self.output.get_shape()[-1].value
-        new_vars = [weight_variable([kernel_dim[0],
+        new_vars = [weight_variable('Weight',
+                                    [kernel_dim[0],
                                      kernel_dim[1],
                                      kernel_num, 
-                                     prev_depth], 
-                                    name=layer_name+'_weight'),
-                    bias_variable([kernel_num],
-                                  name=layer_name+'_bias')]
+                                     prev_depth],
+                                    self.regularizer),
+                    bias_variable('Bias', [kernel_num])
+                ]
         # there may have already been some variables
         # created for this layer (through BN)
         if layer_name in self.var_dict:
@@ -794,6 +803,13 @@ class CNN(object):
         else:
             get_loss_2d_output(self, loss_name)
 
+        # adding regularization, if any
+        if self.regularizer is not None:
+            reg_term = tf.reduce_mean(
+                tf.get_collection(
+                    tf.GraphKeys.REGULARIZATION_LOSSES))
+            self.loss += self.weight_decay*reg_term
+
         get_optimizer(self, optimizer_name, loss_name, 
                       train_layers, PFT_bflag)
         
@@ -968,7 +984,6 @@ def get_loss_2d_output(model, loss_name='CE'):
                     labels=model.y_, logits=model.output, 
                     dim=-1),
                 name='Loss')
-
 
 def get_optimizer(model, 
                   optimizer_name,
@@ -1487,7 +1502,7 @@ def CNN_variables(kernel_dims, layer_list):
     return W_dict, b_dict
 
 
-def weight_variable(shape, name=None):
+def weight_variable(name, shape, reg):
     """Creating a kernel tensor 
     with specified shape
     
@@ -1521,13 +1536,14 @@ def weight_variable(shape, name=None):
     initial = tf.random_normal(
         shape, mean=0., stddev=std)
     
-    return tf.Variable(initial, name=name)
+    return tf.get_variable(name, initializer=initial,
+                           regularizer=reg)
 
-def bias_variable(shape, name=None):
+def bias_variable(name, shape):
     """Creating a bias term with specified shape
     """
     initial = tf.constant(0., shape=shape)
-    return tf.Variable(initial, name=name)
+    return tf.get_variable(name, initializer=initial)
 
     
 def max_pool(x, w_size, stride):
