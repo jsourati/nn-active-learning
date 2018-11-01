@@ -422,8 +422,10 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     
     ''' Creating the Model '''
     x = tf.placeholder(tf.float32, [None,]+input_shape)
+    reg = tf.nn.l2_loss
     model = NN_extended.CNN(x, pw_dict, model_name, 
-                            sorted_skips,None,
-                            [dp_layers, dp_rate]) 
+                            sorted_skips,reg,None,
+                            [dp_layers, dp_rate],
+                            weight_decay=1e-4) 
 
     return model

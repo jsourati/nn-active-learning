@@ -426,16 +426,16 @@ class CNN(object):
 
         # creating the variables
         new_vars = [
+            tf.get_variable('gamma', dtype=tf.float32,
+                            initializer=tf.ones(shape)),
+            tf.get_variable('beta', dtype=tf.float32,
+                            initializer=tf.zeros(shape)),
             tf.get_variable('moving_mean', dtype=tf.float32,
                             initializer=tf.zeros(shape),
                             trainable=False),
             tf.get_variable('moving_variance', dtype=tf.float32,
                             initializer=tf.ones(shape),
-                            trainable=False),
-            tf.get_variable('gamma', dtype=tf.float32,
-                            initializer=tf.ones(shape)),
-            tf.get_variable('beta', dtype=tf.float32,
-                            initializer=tf.zeros(shape))]
+                            trainable=False)]
         if layer_name in self.var_dict:
             self.var_dict[layer_name] += new_vars
         else:
@@ -544,7 +544,9 @@ class CNN(object):
             [self.var_dict[layer_name] for layer_name
              in self.var_dict]))
 
-        session.run(tf.variables_initializer(model_vars))
+        # model parameters and optimizer's variables
+        session.run(tf.variables_initializer(
+            model_vars+self.optimizer.variables()))
                     
 
     def save_weights(self, file_path, save_moments=False):
@@ -779,8 +781,7 @@ class CNN(object):
                       learning_rate, 
                       loss_name='CE',
                       optimizer_name='SGD',
-                      train_layers=[],
-                      PFT_bflag=False):
+                      **kwargs):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -810,8 +811,16 @@ class CNN(object):
                     tf.GraphKeys.REGULARIZATION_LOSSES))
             self.loss += self.weight_decay*reg_term
 
-        get_optimizer(self, optimizer_name, loss_name, 
-                      train_layers, PFT_bflag)
+        if optimizer_name=='Adam':
+            kwargs.setdefault('beta1', 0.9)
+            kwargs.setdefault('beta2', 0.999)
+        elif optimizer_name=='RMSProp':
+            kwargs.setdefault('decay', 0.9)
+            kwargs.setdefault('momentum', 0.)
+            kwargs.setdefault('epsilon', 1e-10)
+        self.__dict__.update(kwargs)
+
+        get_optimizer(self, optimizer_name, loss_name)
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -987,9 +996,7 @@ def get_loss_2d_output(model, loss_name='CE'):
 
 def get_optimizer(model, 
                   optimizer_name,
-                  loss_name,
-                  train_layers,
-                  PFT_bflag):
+                  loss_name):
     """Creating an optimizer (if needed) together with
     training step for a given loss
     """
@@ -1000,14 +1007,17 @@ def get_optimizer(model,
             model.optimizer = tf.train.GradientDescentOptimizer(
                 model.learning_rate, name=optimizer_name)
         elif optimizer_name=='Adam':
-            kwargs.setdefault('beta1', 0.9)
-            kwargs.setdefault('beta2', 0.999)
-            model.__dict__.update(kwargs)
             model.optimizer = tf.train.AdamOptimizer(
                 model.learning_rate, 
                 model.beta1, 
                 model.beta2,
                 name=optimizer_name)
+        elif optimizer_name=='RMSProp':
+            model.optimizer = tf.train.RMSPropOptimizer(
+            model.learning_rate,
+            model.decay,
+            model.momentum,
+            model.epsilon)
 
     # gradients-and-variables to be applied with
     # optimizer.apply_gradients
@@ -1016,9 +1026,8 @@ def get_optimizer(model,
 
     """check if only certain layers are to be modified
     in training/fine-tuning"""
-    if len(train_layers)>0:
+    if hasattr(model, 'train_layers'):
         d = len(model.grads_vars)
-        model.train_layers = train_layers
         # locating those parameters that belong to the
         # specified train_layers
         train_pars = np.zeros(d, dtype=bool)
@@ -1029,7 +1038,7 @@ def get_optimizer(model,
                             np.where(train_pars)[0]] 
 
     """ doing partial fine-tuning (PFT) if needed"""
-    if PFT_bflag:
+    if hasattr(model, 'PFT_bflag'):
         if not(hasattr(model,'par_placeholders')):
             model.get_par_placeholders()
         
