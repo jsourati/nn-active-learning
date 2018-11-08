@@ -194,7 +194,8 @@ def DenseNet_2block(growth_rate,
 
     return model
 
-def FCDenseNet_103Layers(input_shape, c, model_name):
+def FCDenseNet_103Layers(input_shape, c, model_name, 
+                         probes=[{},{}], **kwargs):
     """Also known as, Tiramisu network with 
     103 layers
     """
@@ -407,7 +408,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
         sorted_skips += [skips[ind]]
 
 
-        ''' Specifying Drop-out Layers '''
+    ''' Specifying Drop-out Layers '''
     # including all the layers, except max-pooling and
     # upscaling layers
     dp_layers = np.arange(len(pw_dict)).tolist()
@@ -426,6 +427,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name):
     model = NN_extended.CNN(x, pw_dict, model_name, 
                             sorted_skips,reg,None,
                             [dp_layers, dp_rate],
-                            weight_decay=1e-4) 
+                            probes,
+                            **kwargs)
 
     return model

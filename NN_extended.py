@@ -145,7 +145,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.probes = [[], []]
+        self.probes = [{}, {}]
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
@@ -168,8 +168,8 @@ class CNN(object):
                                       skips, 
                                       sources_output)
 
-                if i in probes[0]:
-                    self.probes[0] += [self.output]
+                if layer_name in probes[0]:
+                    self.probes[0].update({layer_name: self.output})
 
                 layer = layer_dict[layer_name]
                 if len(layer)==2:
@@ -192,8 +192,8 @@ class CNN(object):
                     self.output = tf.nn.dropout(
                         self.output, self.keep_prob)
 
-                if i in probes[1]:
-                    self.probes[1] += [self.output]
+                if layer_name in probes[1]:
+                    self.probes[1].update({layer_name: self.output})
                 
                 if i in sources_idx:
                     sources_output += [self.output]
@@ -236,10 +236,13 @@ class CNN(object):
                 h = self.output.shape[1].value
                 w = self.output.shape[2].value
                 c = self.output.shape[3].value
-                self.y_ = tf.placeholder(tf.float32,
-                                         [None,h,w,c])
-                # posterior
-                self.posteriors = tf.nn.softmax(self.output)
+                if hasattr(self, 'MC_T'):
+                    c = int(c/2)
+                    self.posteriors = tf.nn.softmax(
+                        self.output[:,:,:,:c])
+                else:
+                    self.posteriors = tf.nn.softmax(self.output)
+                self.y_ = tf.placeholder(tf.float32,[None,h,w,c])
             
     def add_layer(self, 
                   layer_name,
@@ -444,7 +447,7 @@ class CNN(object):
         if not(hasattr(self, 'BN_decay')):
             self.BN_decay = 0.999
         if not(hasattr(self, 'BN_epsilon')):
-            self.BN_epsilon = 1e-4
+            self.BN_epsilon = 1e-3
         
         self.output = tf.contrib.layers.batch_norm(
             self.output,
@@ -453,8 +456,9 @@ class CNN(object):
             scale=True,
             epsilon=self.BN_epsilon,
             is_training=self.is_training,
-            reuse=True,
-            scope=scope)
+            reuse=tf.AUTO_REUSE,
+            scope=scope,
+            zero_debias_moving_mean=True)
 
     def add_conv_transpose(self, 
                            layer_name,
@@ -777,8 +781,7 @@ class CNN(object):
         sess.run(ops_list, feed_dict=feed_dict)
 
 
-    def get_optimizer(self, 
-                      learning_rate, 
+    def get_optimizer(self,
                       loss_name='CE',
                       optimizer_name='SGD',
                       **kwargs):
@@ -797,12 +800,13 @@ class CNN(object):
                 be a subset of `self.var_dict.keys()`.
         """
 
-        self.learning_rate = learning_rate
+        self.learning_rate = tf.placeholder(tf.float32,
+                                            name='learning_rate')
 
         if len(self.output.shape)==2:
-            get_loss_scalar_output(self, loss_name)
+            get_loss(self, loss_name)
         else:
-            get_loss_2d_output(self, loss_name)
+            get_FCN_loss(self, loss_name)
 
         # adding regularization, if any
         if self.regularizer is not None:
@@ -968,7 +972,7 @@ def add_loss_grad(model, pars=[]):
 
         model.loss_grads.update({layer_name:grads})
 
-def get_loss_scalar_output(model, loss_name='CE'):
+def get_loss(model, loss_name='CE'):
 
     with tf.name_scope(model.name):
             
@@ -981,7 +985,7 @@ def get_loss_scalar_output(model, loss_name='CE'):
                     logits=tf.transpose(model.output)),
                 name='CE_Loss')
 
-def get_loss_2d_output(model, loss_name='CE'):
+def get_FCN_loss(model, loss_name='CE'):
     
     with tf.name_scope(model.name):
             
@@ -993,6 +997,37 @@ def get_loss_2d_output(model, loss_name='CE'):
                     labels=model.y_, logits=model.output, 
                     dim=-1),
                 name='Loss')
+        elif loss_name=='CE_wAUn':
+            # the first half:   f^W(x)
+            # the second half:  sigma^W(x)
+            c = model.output.shape[-1].value
+            assert not(c%2), 'In models with Aleatoric uncertainty'+\
+                ", the number of channels in the output should be even."
+            # c is definitely even
+            fW = model.output[:,:,:,:int(c/2)]
+            sigmaW = model.output[:,:,:,int(c/2):]
+
+            # eps_t (for each t, the same eps_t for the whole batch)
+            # t=1,...,T (=model.MC_T)
+            eps = tf.random_normal([model.MC_T])
+            model.MC_probs = 0.
+            for t in range(model.MC_T):
+                logits_t = tf.add(fW, tf.scalar_mul(
+                    eps[t], tf.exp(tf.divide(sigmaW,2))))
+                model.MC_probs += tf.nn.softmax(logits_t, axis=-1)
+           
+            model.MC_probs = tf.divide(model.MC_probs, model.MC_T)
+
+            # taking the log of MC-probs in the loss so that when
+            # passing to tf.nn.softmax_cross_entropy_with_logits
+            # it won't change the average PMF probabilities
+            model.loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(
+                    labels=model.y_, 
+                    logits=tf.log(model.MC_probs), 
+                    dim=-1),
+                name='Loss')
+            
 
 def get_optimizer(model, 
                   optimizer_name,
