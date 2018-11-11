@@ -456,9 +456,8 @@ class CNN(object):
             scale=True,
             epsilon=self.BN_epsilon,
             is_training=self.is_training,
-            reuse=tf.AUTO_REUSE,
-            scope=scope,
-            zero_debias_moving_mean=True)
+            reuse=True,
+            scope=scope)
 
     def add_conv_transpose(self, 
                            layer_name,
@@ -997,6 +996,7 @@ def get_FCN_loss(model, loss_name='CE'):
                     labels=model.y_, logits=model.output, 
                     dim=-1),
                 name='Loss')
+
         elif loss_name=='CE_wAUn':
             # the first half:   f^W(x)
             # the second half:  sigma^W(x)
@@ -1015,8 +1015,6 @@ def get_FCN_loss(model, loss_name='CE'):
                 logits_t = tf.add(fW, tf.scalar_mul(
                     eps[t], tf.exp(tf.divide(sigmaW,2))))
                 model.MC_probs += tf.nn.softmax(logits_t, axis=-1)
-           
-            model.MC_probs = tf.divide(model.MC_probs, model.MC_T)
 
             # taking the log of MC-probs in the loss so that when
             # passing to tf.nn.softmax_cross_entropy_with_logits
@@ -1024,7 +1022,7 @@ def get_FCN_loss(model, loss_name='CE'):
             model.loss = tf.reduce_mean(
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=model.y_, 
-                    logits=tf.log(model.MC_probs), 
+                    logits=model.MC_probs, 
                     dim=-1),
                 name='Loss')
             
@@ -1056,8 +1054,10 @@ def get_optimizer(model,
 
     # gradients-and-variables to be applied with
     # optimizer.apply_gradients
-    model.grads_vars = model.optimizer.compute_gradients(
+    grads_vars = model.optimizer.compute_gradients(
         model.loss, model.var_dict)
+    model.grads_vars = [GV for GV in grads_vars if
+                        GV[1].trainable is True]
 
     """check if only certain layers are to be modified
     in training/fine-tuning"""
