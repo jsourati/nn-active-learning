@@ -4,7 +4,9 @@ import numpy as np
 import NN_extended
 import create_NN
 import imageio
+import shutil
 import nrrd
+import h5py
 import pdb
 import os
 
@@ -26,10 +28,10 @@ def test_model(model, sess,
     h,w = [model.x.shape[1].value,
            model.x.shape[2].value]
     batches = NN_extended.gen_batch_inds(num_img, b)
-    rand_inds = np.random.permutation(n)[:num_img]
+    rand_inds = np.random.randint(0,len(img_paths), num_img)
     for batch_inds in batches:
-        batch_img_paths = [img_paths[i] for i in batch_inds]
-        batch_grnd_paths = [grnd_paths[i] for i in batch_inds]
+        batch_img_paths = [img_paths[i] for i in rand_inds[batch_inds]]
+        batch_grnd_paths = [grnd_paths[i] for i in rand_inds[batch_inds]]
         batch_X, batch_grnd = batcher(
             batch_img_paths,batch_grnd_paths,[h,w])
 
@@ -115,4 +117,38 @@ def random_crop(img,h,w,init_h=None,init_w=None):
     return cropped_img, init_h, init_w
 
 
+def extend_weights_to_aleatoric_mode(weights_path, 
+                                     out_channels,
+                                     last_layer_name='last'):
 
+    with h5py.File(weights_path,'r') as f:
+        W = f['%s/Weight'% last_layer_name].value
+    if W.shape[-1]==out_channels:
+        print('The weights already match the extended shape.')
+        return
+
+    """ creating a new file """
+    # preparing the name
+    base_dir = weights_path.split('/')[:-1]
+    name = weights_path.split('/')[-1].split('.')[0]
+    ext_name = name+'_extended.h5'
+    new_path = '/'.join(base_dir+[ext_name])
+    shutil.copy2(weights_path, new_path)
+    
+
+    f = h5py.File(new_path, 'a')
+    # weight
+    ext_W = np.zeros(W.shape[:-1]+
+                     (2*W.shape[-1],))
+    ext_W[:,:,:,:W.shape[-1]] = W
+    del f['%s/Weight'% last_layer_name]
+    f['%s/Weight'% last_layer_name] = ext_W
+
+    # bias
+    b = f['%s/Bias'% last_layer_name]
+    ext_b = np.zeros(2*len(b))
+    ext_b[:len(b)] = b
+    del f['%s/Bias'% last_layer_name]
+    f['%s/Bias'% last_layer_name] = ext_b
+
+    f.close()
