@@ -910,7 +910,7 @@ def combine_layer_outputs(model,
         ho = model.output.shape[1].value
         wo = model.output.shape[2].value
         if (h != ho) or (w != wo):
-            print('The output is resizing from (%d,%d)'%
+            print('The output is resized from (%d,%d)'%
                   (ho,wo)+' to (%d,%d)'%(h,w))
             is_added = model.output==sources_output[-1]
             model.output = tf.image.resize_image_with_crop_or_pad(
@@ -1015,6 +1015,8 @@ def get_FCN_loss(model, loss_name='CE'):
                 logits_t = tf.add(fW, tf.scalar_mul(
                     eps[t], tf.exp(tf.divide(sigmaW,2))))
                 model.MC_probs += tf.nn.softmax(logits_t, axis=-1)
+
+            model.MC_probs = tf.divide(model.MC_probs,model.MC_T)
 
             # taking the log of MC-probs in the loss so that when
             # passing to tf.nn.softmax_cross_entropy_with_logits
