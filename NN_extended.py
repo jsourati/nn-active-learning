@@ -15,15 +15,6 @@ import NNAL_tools
 import PW_NN
 import AL
 
-read_file_path = "/home/ch194765/repos/atlas-active-learning/"
-sys.path.insert(0, read_file_path)
-#import prep_dat
-
-read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
-sys.path.insert(0, read_file_path)
-import alexnet
-from alexnet import AlexNet
-
 
 class CNN(object):
     """Class of CNN models
@@ -873,6 +864,40 @@ class CNN(object):
                 tf.placeholder(self.grads_vars[i][1].dtype,
                                self.grads_vars[i][1].shape)]
 
+    def update_BN_stats(self, sess,
+                        img_paths, grnd_paths, batcher):
+        """Only update data statistics in BN while keeping
+        everything else fixed
+
+        `grnd_paths` won't be used here and is given just to
+        avoid any modification of the batch-preparer that needs
+        the ground-truth paths too
+        """
+
+        BN_updates = [par for par in sess.graph.get_collection(tf.GraphKeys.UPDATE_OPS)
+                      if self.name in par.name]
+    
+        # resetting statistics (moving averages) in BN layers
+        BN_pars = [self.var_dict[layer][i] for layer in list(self.var_dict.keys()) 
+                   for i in range(len(self.var_dict[layer])) 
+                   if 'moving' in self.var_dict[layer][i].name]
+
+        sess.run(tf.variables_initializer(BN_pars))
+
+        # starting to estimate new batch statistics
+        epochs = 50
+        b = 3
+        h,w = [self.x.shape[1].value, self.x.shape[2].value]
+        for i in range(epochs):
+            batches = gen_batch_inds(len(img_paths), b) 
+            for batch_inds in batches:
+                batch_img_paths = [img_paths[ind] for ind in batch_inds]
+                batch_grnd_paths = [grnd_paths[ind] for ind in batch_inds]
+                batch_X,_ = batcher(batch_img_paths, batch_grnd_paths, [h,w])
+
+                feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
+                sess.run(BN_updates, feed_dict=feed_dict)
+
 def combine_layer_outputs(model,
                           layer_index,
                           skips,
@@ -951,26 +976,6 @@ def concat_outputs(curr_output, prev_output):
     return output
 
 
-def add_loss_grad(model, pars=[]):
-    """Adding the gradient of the loss
-    with respect to parameters if necessary
-    """
-
-    model.loss_grads = {}
-    for layer_name, pars in model.var_dict.items():
-        grads = []
-        for par in pars:
-            # setting the op's name
-            pdb.set_trace()
-            par_name_wo_colon = par.name.split(':')[:-1][0].split('/')
-            par_grad_name = par_name_wo_colon[:1]+['loss_grad']+\
-                            par_name_wo_colon[1:]
-            par_grad_name = '/'.join(par_grad_name)
-            grads += [tf.gradients(model.loss, par, 
-                                   name=par_grad_name)]
-
-        model.loss_grads.update({layer_name:grads})
-
 def get_loss(model, loss_name='CE'):
 
     with tf.name_scope(model.name):
@@ -1009,14 +1014,17 @@ def get_FCN_loss(model, loss_name='CE'):
 
             # eps_t (for each t, the same eps_t for the whole batch)
             # t=1,...,T (=model.MC_T)
-            eps = tf.random_normal([model.MC_T])
+            noise_dist = tf.distributions.Laplace(0.,1.)
+            eps = noise_dist.sample([model.MC_T])
+            #eps = tf.random_normal([model.MC_T])
             model.MC_probs = 0.
             for t in range(model.MC_T):
                 logits_t = tf.add(fW, tf.scalar_mul(
-                    eps[t], tf.exp(tf.divide(sigmaW,2))))
-                model.MC_probs += tf.nn.softmax(logits_t, axis=-1)
+                    eps[t], sigmaW))
+                model.MC_probs += tf.nn.softmax(logits_t, dim=-1)
 
-            model.MC_probs = tf.divide(model.MC_probs,model.MC_T)
+            model.MC_probs = tf.divide(model.MC_probs,model.MC_T) + \
+                             1e-7
 
             # taking the log of MC-probs in the loss so that when
             # passing to tf.nn.softmax_cross_entropy_with_logits
@@ -1024,7 +1032,7 @@ def get_FCN_loss(model, loss_name='CE'):
             model.loss = tf.reduce_mean(
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=model.y_, 
-                    logits=model.MC_probs, 
+                    logits=tf.log(model.MC_probs), 
                     dim=-1),
                 name='Loss')
             
@@ -1059,7 +1067,8 @@ def get_optimizer(model,
     grads_vars = model.optimizer.compute_gradients(
         model.loss, model.var_dict)
     model.grads_vars = [GV for GV in grads_vars if
-                        GV[1].trainable is True]
+                        GV[1] in tf.get_collection(
+                                     tf.GraphKeys.TRAINABLE_VARIABLES)]
 
     """check if only certain layers are to be modified
     in training/fine-tuning"""
@@ -1695,7 +1704,5 @@ def diagonal_Fisher(model, sess, batch_dat):
             diag_F[j] = (i*diag_F[j] + Gv[j]**2) / (i+1)
 
     return diag_F
-
-    
 
 
