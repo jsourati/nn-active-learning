@@ -1035,7 +1035,31 @@ def get_FCN_loss(model, loss_name='CE'):
                     logits=tf.log(model.MC_probs), 
                     dim=-1),
                 name='Loss')
-            
+        elif loss_name=='CE_MeanTeacher':
+
+            # CE loss (using only lableed samples)
+            label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
+            #labeled_y_ = tf.boolean_mask(model.y_, label_mask)
+            #labeled_output = tf.boolean_mask(model.output, label_mask)
+
+            model.CE_loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(
+                    labels=model.y_, logits=model.output, 
+                    dim=-1),
+                name='Loss')
+
+            # consistency loss (using all samples)
+            output_shape = [model.output.shape[i].value for i in range(1,4)]
+            model.output_placeholder = tf.placeholder(tf.float32, 
+                                                      [None,]+output_shape)
+            model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
+                model.output-model.output_placeholder), axis = [1,2,3]))
+
+            if not(hasattr(model, 'SeSu_coeff')):
+                model.SeSu_coeff = 0.5
+
+            model.loss = tf.add(model.CE_loss, 
+                                tf.multiply(model.SeSu_coeff, model.cons_loss))
 
 def get_optimizer(model, 
                   optimizer_name,
@@ -1092,7 +1116,7 @@ def get_optimizer(model,
             model.grads_vars[i] = (tf.multiply(
                 model.grads_vars[i][0],model.par_placeholders[i]),
                                    model.grads_vars[i][1])
-    
+ 
     # finally, creating the train-step by applying the 
     # resulted gradients-and-variables, and considering
     # the dependency of the apply_gradient operation
