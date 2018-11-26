@@ -1,3 +1,4 @@
+#import MNIST_scripts_IF
 import tensorflow as tf
 import numpy as np
 import NN_extended
@@ -29,17 +30,23 @@ def test_model(model, sess,
            model.x.shape[2].value]
     batches = NN_extended.gen_batch_inds(num_img, b)
     rand_inds = np.random.randint(0,len(img_paths), num_img)
+    total_L = 0.
     for batch_inds in batches:
         batch_img_paths = [img_paths[i] for i in rand_inds[batch_inds]]
         batch_grnd_paths = [grnd_paths[i] for i in rand_inds[batch_inds]]
         batch_X, batch_grnd = batcher(
             batch_img_paths,batch_grnd_paths,[h,w])
+        batch_Y = np.zeros((len(batch_inds),)+tuple([model.y_.shape[i].value for i in range(1,4)]))
+        for j in range(batch_Y.shape[-1]):
+            batch_Y[:,:,:,j] = batch_grnd==j
 
         # prediction
-        P = sess.run(model.posteriors, feed_dict={model.x:batch_X,
-                                                  model.keep_prob:1.,
-                                                  model.is_training:False})
+        L,P = sess.run([model.loss,model.posteriors], feed_dict={model.x:batch_X,
+                                                                 model.y_:batch_Y,
+                                                                 model.keep_prob:1.,
+                                                                 model.is_training:False})
 
+        total_L += L
         for i in range(len(batch_inds)):
             if void_label is not None:
                 void_vol = np.sum(batch_grnd[i,:,:]==void_label)
@@ -49,7 +56,7 @@ def test_model(model, sess,
             intersect_vol = np.sum(preds==batch_grnd[i,:,:])
             accs += [intersect_vol / (np.prod(preds.shape)-void_vol)]
             
-    return accs
+    return accs, total_L/num_img
 
 def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 
@@ -127,42 +134,6 @@ def random_crop(img,h,w,init_h=None,init_w=None):
     return cropped_img, init_h, init_w
 
 
-def extend_weights_to_aleatoric_mode(weights_path, 
-                                     out_channels,
-                                     last_layer_name='last'):
-
-    with h5py.File(weights_path,'r') as f:
-        W = f['%s/Weight'% last_layer_name].value
-    if W.shape[-1]==out_channels:
-        print('The weights already match the extended shape.')
-        return
-
-    """ creating a new file """
-    # preparing the name
-    base_dir = weights_path.split('/')[:-1]
-    name = weights_path.split('/')[-1].split('.')[0]
-    ext_name = name+'_extended.h5'
-    new_path = '/'.join(base_dir+[ext_name])
-    shutil.copy2(weights_path, new_path)
-    
-
-    f = h5py.File(new_path, 'a')
-    # weight
-    ext_W = np.zeros(W.shape[:-1]+
-                     (2*W.shape[-1],))
-    ext_W[:,:,:,:W.shape[-1]] = W
-    del f['%s/Weight'% last_layer_name]
-    f['%s/Weight'% last_layer_name] = ext_W
-
-    # bias
-    b = f['%s/Bias'% last_layer_name]
-    ext_b = np.zeros(2*len(b))
-    ext_b[:len(b)] = b
-    del f['%s/Bias'% last_layer_name]
-    f['%s/Bias'% last_layer_name] = ext_b
-
-    f.close()
-
 def full_slice_segment(model,sess,img_paths, op='prediction'):
 
     # size of batch
@@ -179,6 +150,7 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
     assert h==hx and w==wx, 'Shape of data and model.x should match.'
 
     # loading images
+    # m: number of input channels
     img_list = []
     for i in range(m):
         if m==1:
@@ -189,6 +161,9 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
     # performing the op for all slices in batches
     if op=='prediction':
         out_tensor = np.zeros((h,w,z))
+    elif op=='loss':
+        out_tensor = 0.
+        cnt = 0
     else:
         c = model.y_.shape[-1].value
         out_tensor = np.zeros((c,h,w,z))
@@ -213,7 +188,11 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
             av_P = sess.run(model.posteriors, feed_dict=feed_dict)
             for i in range(1,T):
                 av_P = (i*av_P + sess.run(model.posteriors, feed_dict=feed_dict))/(i+1)
-            out_tensor[:,:,:,batch_inds] = np.swapaxes(av_P,0,3)
+            out_tensor[:,:,:,batch_inds] = np.swapaxes(av_P,i0,3)
+        elif op=='loss':
+            loss = sess.run(model.loss, feed_dict=feed_dict)
+            out_tensor = (len(batch)*loss + cnt*out_tensor) / (cnt+len(batch))
+            cnt += len(batch)
         elif op=='sigma':
             out = sess.run(model.output, feed_dict=feed_dict)
             out_tensor[:,:,:,batch_inds] = np.swapaxes(out[:,:,:,c:],0,3)
