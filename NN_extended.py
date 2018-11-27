@@ -19,6 +19,25 @@ import AL
 class CNN(object):
     """Class of CNN models
     """
+
+    DEFAULT_HYPERS = {
+        'weight_decay': 1e-4,
+        'loss_name': 'CE',
+        'optimizer_name': 'Adam',
+        'lr_schedule': lambda t: exponential_decay(1e-3,t,0.1),
+
+        # Adam optimizer
+        'beta1': 0.9,
+        'beta2': 0.999,
+        # RMSProp optimizer
+        'decay': 0.9,
+        'momentum': 0.,
+        'epsilon': 1e-10,
+
+        # Mean Teacher semi-supervised
+        'max_cons_coeff': 1e-3,
+        'rampup_length': 5000
+    }
     
     def __init__(self, 
                  x, 
@@ -118,11 +137,6 @@ class CNN(object):
         self.layer_type = []
         self.name = name
         self.skips = skips
-        if (self.regularizer is not None) and \
-           ('weight_decay' not in kwargs):
-            print('Weight decay is set to default value of 0.5')
-            self.weight_decay = 0.5
-        
         
         self.keep_prob = tf.placeholder(
             tf.float32, name='keep_prob')
@@ -773,8 +787,9 @@ class CNN(object):
 
 
     def get_optimizer(self,
-                      loss_name='CE',
-                      optimizer_name='SGD',
+                      loss_name=DEFAULT_HYPERS['loss_name'],
+                      optimizer_name=DEFAULT_HYPERS['optimizer_name'],
+                      lr_schedule=DEFAULT_HYPERS['lr_schedule'],
                       **kwargs):
         """Form the loss function and optimizer of the CNN graph
         
@@ -791,8 +806,25 @@ class CNN(object):
                 be a subset of `self.var_dict.keys()`.
         """
 
-        self.learning_rate = tf.placeholder(tf.float32,
-                                            name='learning_rate')
+        self.learning_rate = lr_schedule(self.global_step)
+
+        # setting up the hyperparameters
+        # optimizer
+        if optimizer_name=='Adam':
+            kwargs.setdefault('beta1', self.DEFAULT_HYPERS['beta1'])
+            kwargs.setdefault('beta2', self.DEFAULT_HYPERS['beta2'])
+        elif optimizer_name=='RMSProp':
+            kwargs.setdefault('decay', self.DEFAULT_HYPERS['decay'])
+            kwargs.setdefault('momentum', self.DEFAULT_HYPERS['momentum'])
+            kwargs.setdefault('epsilon', self.DEFAULT_HYPERS['epsilon'])
+        # weight regularization
+        if self.regularizer is not None:
+            kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
+        # consistency-based semi-supervised
+        if 'MeanTeacher' in loss_name:
+            kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
+            kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
+        self.__dict__.update(kwargs)
 
         if len(self.output.shape)==2:
             get_loss(self, loss_name)
@@ -806,16 +838,14 @@ class CNN(object):
                     tf.GraphKeys.REGULARIZATION_LOSSES))
             self.loss += self.weight_decay*reg_term
 
-        if optimizer_name=='Adam':
-            kwargs.setdefault('beta1', 0.9)
-            kwargs.setdefault('beta2', 0.999)
-        elif optimizer_name=='RMSProp':
-            kwargs.setdefault('decay', 0.9)
-            kwargs.setdefault('momentum', 0.)
-            kwargs.setdefault('epsilon', 1e-10)
-        self.__dict__.update(kwargs)
-
         get_optimizer(self, optimizer_name, loss_name)
+
+    def train(self,sess,epochs,
+              train_gen,
+              test_gen=None,
+              eval_step=1000):
+        pass
+
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -1056,9 +1086,7 @@ def get_FCN_loss(model, loss_name='CE'):
             model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
                 model.output-model.output_placeholder), axis = [1,2,3]))
 
-            # setting up value of the consistency coefficient
-            if not(hasattr(model, 'max_cons_coeff')):
-                model.max_cons_coeff = 1e-3
+            # consistency coefficient
             sigmoid_rampup_value = sigmoid_rampup(model.global_step,
                                                   model.rampup_length)
             model.cons_coeff = tf.multiply(sigmoid_rampup_value,
@@ -1149,8 +1177,19 @@ def sigmoid_rampup(global_step, rampup_length):
         phase = 1.0 - tf.maximum(0.0, global_step) / rampup_length
         return tf.exp(-5.0 * phase * phase)
 
-    result = tf.cond(global_step < rampup_length, ramp, lambda: tf.constant(1.0))
+    result = tf.cond(global_step < rampup_length, 
+                     ramp, lambda: tf.constant(1.0))
     return tf.identity(result, name="sigmoid_rampup")
+
+
+def exponential_decay(init_lr, global_step, decay_rate):
+
+    global_step = tf.to_float(global_step)
+    decay_rate = tf.to_float(decay_rate)
+    init_lr = tf.to_float(init_lr)
+
+    result = init_lr*tf.exp(-global_step*decay_rate)
+    return tf.identity(result, name="exp_decay")
 
 
 def keep_k_largest_from_LoV(LoV, k):
