@@ -111,6 +111,7 @@ class CNN(object):
         """
         
         self.x = x
+        self.global_step = tf.Variable(0, trainable=False, name='global_step')
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
         self.__dict__.update(kwargs)      # optional parameters
         self.regularizer = regularizer
@@ -1038,7 +1039,7 @@ def get_FCN_loss(model, loss_name='CE'):
         elif loss_name=='CE_MeanTeacher':
 
             # CE loss (using only lableed samples)
-            label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
+            #label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
             #labeled_y_ = tf.boolean_mask(model.y_, label_mask)
             #labeled_output = tf.boolean_mask(model.output, label_mask)
 
@@ -1055,11 +1056,16 @@ def get_FCN_loss(model, loss_name='CE'):
             model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
                 model.output-model.output_placeholder), axis = [1,2,3]))
 
-            if not(hasattr(model, 'SeSu_coeff')):
-                model.SeSu_coeff = 0.5
-
+            # setting up value of the consistency coefficient
+            if not(hasattr(model, 'max_cons_coeff')):
+                model.max_cons_coeff = 1e-3
+            sigmoid_rampup_value = sigmoid_rampup(model.global_step,
+                                                  model.rampup_length)
+            model.cons_coeff = tf.multiply(sigmoid_rampup_value,
+                                           model.max_cons_coeff)
+            # total loss
             model.loss = tf.add(model.CE_loss, 
-                                tf.multiply(model.SeSu_coeff, model.cons_loss))
+                                tf.multiply(model.cons_coeff, model.cons_loss))
 
 def get_optimizer(model, 
                   optimizer_name,
@@ -1125,7 +1131,27 @@ def get_optimizer(model,
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
         model.train_step = model.optimizer.apply_gradients(
-            model.grads_vars)
+            model.grads_vars, global_step=model.global_step)
+
+
+def sigmoid_rampup(global_step, rampup_length):
+    """Function for ramping up the consistency coefficient
+    in consistency-based semi-supervised training
+
+    Directly copied from Mean-Teacher repository
+        https://github.com/CuriousAI/mean-teacher/blob/
+        master/tensorflow/mean_teacher/model.py
+    """
+
+    global_step = tf.to_float(global_step)
+    rampup_length = tf.to_float(rampup_length)
+    def ramp():
+        phase = 1.0 - tf.maximum(0.0, global_step) / rampup_length
+        return tf.exp(-5.0 * phase * phase)
+
+    result = tf.cond(global_step < rampup_length, ramp, lambda: tf.constant(1.0))
+    return tf.identity(result, name="sigmoid_rampup")
+
 
 def keep_k_largest_from_LoV(LoV, k):
     """Generating a binary mask with the same structure
