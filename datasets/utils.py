@@ -33,8 +33,30 @@ def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 def prepare_batch_BrVol(img_paths, mask_addrs, 
                         img_shape, 
                         one_hot_channels=None,
-                        slice_weight=False,
+                        slice_choice='uniform',
                         labeled_indic=None):
+    """Preparing a batch of image slices from multiple given
+    brain volumes
+
+    If the image shape `img_shape` is not the same as the
+    axial slices of the volumes, the slices will be randomly
+    cropped.
+
+    Possible values for the inpur argument `slice_choice` are:
+    
+    * `'uniform'`: randomly draw a slice from each volume from
+                   a uniform distribution
+    * `'non-uniform'`: randomly draw a slice from each volume
+                       from a non-uniform distribution (fixed PMF)
+    * a list of integers with the same length as `img_paths`:
+        index of slices are pre-specified
+
+    Also `labeled_indic` is an indicator sequence (if given it 
+    is set to all-ones) with the same length as `img_paths`
+    specifying if each volume is a labeled or unlabeled sample
+    (the latter to be used in semi-supervised training). Mask
+    of unlabeled slices will be all-zero matrices.
+    """
 
     h,w = img_shape
     m = len(img_paths[0])
@@ -46,13 +68,17 @@ def prepare_batch_BrVol(img_paths, mask_addrs,
     for i in range(len(img_paths)):
         # sampling a slice
         grnd = nrrd.read(mask_addrs[i])[0]
-        if slice_weight:
-            pmf = np.ones(grnd.shape[-1])
-            pmf[50:220] = 2
-            pmf /= np.sum(pmf)
-            slice_ind = sample_pmf(pmf, 1)[0]
+
+        if isinstance(slice_choice, str):
+            if slice_choice=='uniform':
+                slice_ind = np.random.randint(grnd.shape[-1])
+            elif slice_choice=='non-uniform':
+                pmf = np.ones(grnd.shape[-1])
+                pmf[50:220] = 2
+                pmf /= np.sum(pmf)
+                slice_ind = sample_pmf(pmf, 1)[0]
         else:
-            slice_ind = np.random.randint(grnd.shape[-1])
+            slice_ind = slice_choice[i]
 
         for j in range(m):
             # image (j'th modality)
@@ -102,5 +128,4 @@ def random_crop(img,h,w,init_h=None,init_w=None):
 
     return cropped_img, init_h, init_w
 
-
-    
+#def gaussian_noise(img_batch):
