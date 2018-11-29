@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 from sklearn.metrics import f1_score
+from skimage.util import random_noise
 import linecache
 import copy
 import h5py
@@ -10,6 +11,7 @@ import sys
 #import cv2
 import os
 
+import model_utils
 import patch_utils
 import NNAL_tools
 import PW_NN
@@ -35,6 +37,7 @@ class CNN(object):
         'epsilon': 1e-10,
 
         # Mean Teacher semi-supervised
+        'MT_ema_decay': 0.9999,
         'max_cons_coeff': 1e-3,
         'rampup_length': 5000
     }
@@ -134,7 +137,7 @@ class CNN(object):
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
         self.__dict__.update(kwargs)      # optional parameters
         self.regularizer = regularizer
-        self.layer_type = []
+        self.layer_dict = layer_dict
         self.name = name
         self.skips = skips
         
@@ -807,6 +810,7 @@ class CNN(object):
         """
 
         self.learning_rate = lr_schedule(self.global_step)
+        self.loss_name = loss_name
 
         # setting up the hyperparameters
         # optimizer
@@ -821,7 +825,8 @@ class CNN(object):
         if self.regularizer is not None:
             kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
         # consistency-based semi-supervised
-        if 'MeanTeacher' in loss_name:
+        if 'MT' in loss_name:
+            kwargs.setdefault('MT_ema_decay', self.DEFAULT_HYPERS['MT_ema_decay'])
             kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
             kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
         self.__dict__.update(kwargs)
@@ -843,9 +848,48 @@ class CNN(object):
     def train(self,sess,epochs,
               train_gen,
               test_gen=None,
-              eval_step=1000):
-        pass
+              eval_step=100,
+              save_path=None):
 
+
+        self.valid_metrics = {metric:[] for metric in 
+                              ['av_acc', 'std_acc', 'av_loss']}
+
+        for i in range(epochs):
+            for batch_X, batch_Y in train_gen():
+
+                if test_gen is not None:
+                    if not(self.global_step.eval()%eval_step):
+                        self.eval(sess, test_gen, 4)
+
+                        if save_path is not None:
+                            [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
+                                        self.valid_metrics[metric]) 
+                             for metric in ['av_acc', 'std_acc', 'av_loss']];
+                            self.save_weights(os.path.join(save_path, 'model_pars.h5'))
+                            if hasattr(self, 'MT'):
+                                self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
+
+                # --------------------------------------------- #
+                # --------------------------------------------- #
+
+                feed_dict = {self.x: batch_X,
+                             self.y_: batch_Y,
+                             self.keep_prob:1-self.dropout_rate,
+                             self.is_training: True}
+                # setting up extra feed-dict
+                X_feed_dict = {}
+                if 'MT' in self.loss_name:
+                    MT_output = MT_guidance(self, sess, batch_X)
+                    X_feed_dict = {self.output_placeholder: MT_output}
+
+                feed_dict.update(X_feed_dict)
+                sess.run(self.train_step, feed_dict=feed_dict);
+
+
+    def eval(self, sess, dat_gen, run=1):
+        model_utils.eval_metrics(self, sess, dat_gen, run)
+            
         
     def get_gradients(self, grad_layers=[]):
         """Forming gradients of the log-posteriors
@@ -1066,7 +1110,7 @@ def get_FCN_loss(model, loss_name='CE'):
                     logits=tf.log(model.MC_probs), 
                     dim=-1),
                 name='Loss')
-        elif loss_name=='CE_MeanTeacher':
+        elif loss_name=='CE_MT':
 
             # CE loss (using only lableed samples)
             #label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
@@ -1094,6 +1138,23 @@ def get_FCN_loss(model, loss_name='CE'):
             # total loss
             model.loss = tf.add(model.CE_loss, 
                                 tf.multiply(model.cons_coeff, model.cons_loss))
+
+            # set up the EMA operations and MT model too
+            main_model_updates = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            MT_x = tf.placeholder(tf.float32, model.x.shape)
+            model.MT = CNN(MT_x, model.layer_dict, model.name+'_MT',
+                           model.skips, dropout=[model.dropout_layers,
+                                                 model.dropout_rate])
+            model.MT.output = tf.stop_gradient(model.MT.output)
+            if len(model.MT.output.shape)==2:
+                get_loss(model.MT, loss_name[:-3])
+            else:
+                get_FCN_loss(model.MT, loss_name[:-3])
+            # clearing update_ops and putting only the main model's updates
+            tf.get_default_graph().clear_collection(tf.GraphKeys.UPDATE_OPS)
+            tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            for op in main_model_updates:
+                tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, op)
 
 def get_optimizer(model, 
                   optimizer_name,
@@ -1158,8 +1219,29 @@ def get_optimizer(model,
     # are in tf.GraphKeys.UPDATE_OPS
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        model.train_step = model.optimizer.apply_gradients(
+        train_step = model.optimizer.apply_gradients(
             model.grads_vars, global_step=model.global_step)
+
+    if loss_name=='CE_MT':
+        # here is the order of operations:
+        # Update BN stats --> apply grads --> EMA of weights --> EMA to MT
+        with tf.control_dependencies([train_step]):
+            model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
+            V = []
+            for _,Vars in model.var_dict.items():
+                V += Vars
+            model.ema_apply = model.ema.apply(V)
+            with tf.control_dependencies([model.ema_apply]):
+                tf.get_collection('ema_to_MT')
+                for lname, Vars in model.var_dict.items():
+                    for i, var in enumerate(Vars):
+                        tf.add_to_collection(
+                            'ema_to_MT',
+                            tf.assign(model.MT.var_dict[lname][i],
+                                      model.ema.average(var)))
+                model.train_step = tf.get_collection('ema_to_MT')
+    else:
+        model.train_step = train_step
 
 
 def sigmoid_rampup(global_step, rampup_length):
@@ -1191,6 +1273,27 @@ def exponential_decay(init_lr, global_step, decay_rate):
     result = init_lr*tf.exp(-global_step*decay_rate)
     return tf.identity(result, name="exp_decay")
 
+
+def MT_guidance(model, sess, batch_X, noise_var=0):
+
+    MT_batch = np.zeros(batch_X.shape)
+    if noise_var>0:
+        # making channels of the input data noisy separately
+        for i in range(batch_X.shape[0]):
+            M = np.abs(batch_X[i,:,:,:]).max()
+            dat = batch_X[i,:,:,:] / M
+            noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
+            noisy_dat *= M
+            MT_batch[i,:,:,:] = noisy_dat
+    else:
+        MT_batch = batch_X
+
+    MT_feed_dict = {model.MT.x: MT_batch,
+                    model.MT.keep_prob: 1.-model.MT.dropout_rate,
+                    model.MT.is_training: False}
+    MT_output = sess.run(model.MT.output, feed_dict=MT_feed_dict)
+
+    return MT_output
 
 def keep_k_largest_from_LoV(LoV, k):
     """Generating a binary mask with the same structure

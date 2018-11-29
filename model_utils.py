@@ -1,31 +1,47 @@
 import numpy as np
+import itertools
 import shutil
 import h5py
+import copy
+import pdb
 
 
-def eval_metrics(model, sess, dat_gen,
-               void_label=None):
+def eval_metrics(model, sess, dat_gen, run=1):
 
+    
     accs = []
     av_loss = 0.
-    for batch_X, batch_mask in dat_gen:
-        L,P = sess.run([model.loss,model.posteriors], feed_dict={model.x:batch_X,
-                                                                 model.y_:batch_mask,
-                                                                 model.keep_prob:1.,
-                                                                 model.is_training:False})
-        av_loss = (len(accs)*av_loss+L*batch_X.shape[0]) / (len(accs)+batch_X.shape[0])
-        nohot_batch_mask = np.argmax(batch_mask, axis=-1)
-        preds = np.argmax(P, axis=-1)
-        for i in range(preds.shape[0]):
-            if void_label is not None:
-                void_vol = np.sum(nohot_batch_mask[i,:,:]==void_label)
+    
+    dat_gens = itertools.tee(dat_gen(), run)
+    for gen in dat_gens:
+        for batch_X, batch_mask in gen:
+            
+            if hasattr(model, 'MT'):
+                feed_dict={model.MT.x:batch_X,
+                           model.MT.y_:batch_mask,
+                           model.MT.keep_prob:1.,
+                           model.MT.is_training:False}
+
+                L,P = sess.run([model.MT.loss,model.MT.posteriors], 
+                           feed_dict=feed_dict)
             else:
-                void_vol = 0
+                feed_dict={model.x:batch_X,
+                           model.y_:batch_mask,
+                           model.keep_prob:1.,
+                           model.is_training:False}
+                L,P = sess.run([model.loss,model.posteriors], 
+                               feed_dict=feed_dict)
+
+            av_loss = (len(accs)*av_loss+L*batch_X.shape[0]) / (len(accs)+batch_X.shape[0])
+            nohot_batch_mask = np.argmax(batch_mask, axis=-1)
+            preds = np.argmax(P, axis=-1)
+            for i in range(preds.shape[0]):
+                intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
+                accs += [intersect_vol / (np.prod(preds.shape[1:]))]
             
-            intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
-            accs += [intersect_vol / (np.prod(preds.shape[1:])-void_vol)]
-            
-    return accs, av_loss
+    model.valid_metrics['av_acc'] += [np.mean(accs)]
+    model.valid_metrics['std_acc'] += [np.std(accs)]
+    model.valid_metrics['av_loss'] += [av_loss]
 
 def full_slice_segment(model,sess,img_paths, op='prediction'):
 
