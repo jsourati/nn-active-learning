@@ -23,10 +23,11 @@ class CNN(object):
     """
 
     DEFAULT_HYPERS = {
-        'weight_decay': 1e-4,
         'loss_name': 'CE',
-        'optimizer_name': 'Adam',
+        'optimizer_name': 'SGD',
         'lr_schedule': lambda t: exponential_decay(1e-3,t,0.1),
+        'regularizer': None,
+        'weight_decay': 1e-4,
 
         # Adam optimizer
         'beta1': 0.9,
@@ -47,7 +48,6 @@ class CNN(object):
                  layer_dict, 
                  name,
                  skips=[],
-                 regularizer=None,
                  feature_layer=None,
                  dropout=None,
                  probes=[[],[]],
@@ -132,11 +132,13 @@ class CNN(object):
                 (first item) and the drop-out rate (second item).
         """
         
+        # setting the hyper-parameters
+        self.set_hypers(**kwargs)
+
         self.x = x
         self.global_step = tf.Variable(0, trainable=False, name='global_step')
+        self.learning_rate = self.lr_schedule(self.global_step)
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
-        self.__dict__.update(kwargs)      # optional parameters
-        self.regularizer = regularizer
         self.layer_dict = layer_dict
         self.name = name
         self.skips = skips
@@ -528,6 +530,30 @@ class CNN(object):
             self.output += tf.constant(1., shape=[1,]+output_shape[1:])
             self.output = self.output[:,:,:,:1]
 
+    def set_hypers(self, **kwargs):
+
+        # optimizer and loss
+        kwargs.setdefault('loss_name', self.DEFAULT_HYPERS['loss_name'])
+        kwargs.setdefault('optimizer_name', self.DEFAULT_HYPERS['optimizer_name'])
+        kwargs.setdefault('lr_schedule', self.DEFAULT_HYPERS['lr_schedule'])
+        if kwargs['optimizer_name']=='Adam':
+            kwargs.setdefault('beta1', self.DEFAULT_HYPERS['beta1'])
+            kwargs.setdefault('beta2', self.DEFAULT_HYPERS['beta2'])
+        elif kwargs['optimizer_name']=='RMSProp':
+            kwargs.setdefault('decay', self.DEFAULT_HYPERS['decay'])
+            kwargs.setdefault('momentum', self.DEFAULT_HYPERS['momentum'])
+            kwargs.setdefault('epsilon', self.DEFAULT_HYPERS['epsilon'])
+        # weight regularization
+        kwargs.setdefault('regularizer', self.DEFAULT_HYPERS['regularizer'])
+        if kwargs['regularizer'] is not None:
+            kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
+        # consistency-based semi-supervised
+        if 'MT' in kwargs['loss_name']:
+            kwargs.setdefault('MT_ema_decay', self.DEFAULT_HYPERS['MT_ema_decay'])
+            kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
+            kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
+
+        self.__dict__.update(kwargs)
 
     def initialize_graph(self, 
                          session,
@@ -789,11 +815,7 @@ class CNN(object):
         sess.run(ops_list, feed_dict=feed_dict)
 
 
-    def get_optimizer(self,
-                      loss_name=DEFAULT_HYPERS['loss_name'],
-                      optimizer_name=DEFAULT_HYPERS['optimizer_name'],
-                      lr_schedule=DEFAULT_HYPERS['lr_schedule'],
-                      **kwargs):
+    def get_optimizer(self):
         """Form the loss function and optimizer of the CNN graph
         
         :Parameters;
@@ -809,32 +831,10 @@ class CNN(object):
                 be a subset of `self.var_dict.keys()`.
         """
 
-        self.learning_rate = lr_schedule(self.global_step)
-        self.loss_name = loss_name
-
-        # setting up the hyperparameters
-        # optimizer
-        if optimizer_name=='Adam':
-            kwargs.setdefault('beta1', self.DEFAULT_HYPERS['beta1'])
-            kwargs.setdefault('beta2', self.DEFAULT_HYPERS['beta2'])
-        elif optimizer_name=='RMSProp':
-            kwargs.setdefault('decay', self.DEFAULT_HYPERS['decay'])
-            kwargs.setdefault('momentum', self.DEFAULT_HYPERS['momentum'])
-            kwargs.setdefault('epsilon', self.DEFAULT_HYPERS['epsilon'])
-        # weight regularization
-        if self.regularizer is not None:
-            kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
-        # consistency-based semi-supervised
-        if 'MT' in loss_name:
-            kwargs.setdefault('MT_ema_decay', self.DEFAULT_HYPERS['MT_ema_decay'])
-            kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
-            kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
-        self.__dict__.update(kwargs)
-
         if len(self.output.shape)==2:
-            get_loss(self, loss_name)
+            get_loss(self)
         else:
-            get_FCN_loss(self, loss_name)
+            get_FCN_loss(self)
 
         # adding regularization, if any
         if self.regularizer is not None:
@@ -843,7 +843,7 @@ class CNN(object):
                     tf.GraphKeys.REGULARIZATION_LOSSES))
             self.loss += self.weight_decay*reg_term
 
-        get_optimizer(self, optimizer_name, loss_name)
+        get_optimizer(self)
 
     def train(self,sess,epochs,
               train_gen,
@@ -1051,33 +1051,33 @@ def concat_outputs(curr_output, prev_output):
     return output
 
 
-def get_loss(model, loss_name='CE'):
+def get_loss(model):
 
     with tf.name_scope(model.name):
             
         # Loss 
         # (for now, only cross entropy)
-        if loss_name=='CE':
+        if model.loss_name=='CE':
             model.loss = tf.reduce_mean(
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=tf.transpose(model.y_), 
                     logits=tf.transpose(model.output)),
                 name='CE_Loss')
 
-def get_FCN_loss(model, loss_name='CE'):
+def get_FCN_loss(model):
     
     with tf.name_scope(model.name):
             
         # Loss 
         # (for now, only cross entropy)
-        if loss_name=='CE':
+        if model.loss_name=='CE':
             model.loss = tf.reduce_mean(
                 tf.nn.softmax_cross_entropy_with_logits(
                     labels=model.y_, logits=model.output, 
                     dim=-1),
                 name='Loss')
 
-        elif loss_name=='CE_wAUn':
+        elif model.loss_name=='CE_wAUn':
             # the first half:   f^W(x)
             # the second half:  sigma^W(x)
             c = model.output.shape[-1].value
@@ -1110,7 +1110,7 @@ def get_FCN_loss(model, loss_name='CE'):
                     logits=tf.log(model.MC_probs), 
                     dim=-1),
                 name='Loss')
-        elif loss_name=='CE_MT':
+        elif model.loss_name=='CE_MT':
 
             # CE loss (using only lableed samples)
             #label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
@@ -1128,7 +1128,7 @@ def get_FCN_loss(model, loss_name='CE'):
             model.output_placeholder = tf.placeholder(tf.float32, 
                                                       [None,]+output_shape)
             model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
-                model.output-model.output_placeholder), axis = [1,2,3]))
+                model.posteriors-model.output_placeholder), axis = [1,2,3]))
 
             # consistency coefficient
             sigmoid_rampup_value = sigmoid_rampup(model.global_step,
@@ -1147,34 +1147,32 @@ def get_FCN_loss(model, loss_name='CE'):
                                                  model.dropout_rate])
             model.MT.output = tf.stop_gradient(model.MT.output)
             if len(model.MT.output.shape)==2:
-                get_loss(model.MT, loss_name[:-3])
+                get_loss(model.MT)
             else:
-                get_FCN_loss(model.MT, loss_name[:-3])
+                get_FCN_loss(model.MT)
             # clearing update_ops and putting only the main model's updates
             tf.get_default_graph().clear_collection(tf.GraphKeys.UPDATE_OPS)
             tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             for op in main_model_updates:
                 tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, op)
 
-def get_optimizer(model, 
-                  optimizer_name,
-                  loss_name):
+def get_optimizer(model):
     """Creating an optimizer (if needed) together with
     training step for a given loss
     """
 
     # building the optimizer
     if not(hasattr(model, 'optmizer')):
-        if optimizer_name=='SGD':
+        if model.optimizer_name=='SGD':
             model.optimizer = tf.train.GradientDescentOptimizer(
-                model.learning_rate, name=optimizer_name)
-        elif optimizer_name=='Adam':
+                model.learning_rate, name=model.optimizer_name)
+        elif model.optimizer_name=='Adam':
             model.optimizer = tf.train.AdamOptimizer(
                 model.learning_rate, 
                 model.beta1, 
                 model.beta2,
-                name=optimizer_name)
-        elif optimizer_name=='RMSProp':
+                name=model.optimizer_name)
+        elif model.optimizer_name=='RMSProp':
             model.optimizer = tf.train.RMSPropOptimizer(
             model.learning_rate,
             model.decay,
@@ -1222,7 +1220,7 @@ def get_optimizer(model,
         train_step = model.optimizer.apply_gradients(
             model.grads_vars, global_step=model.global_step)
 
-    if loss_name=='CE_MT':
+    if 'MT' in model.loss_name:
         # here is the order of operations:
         # Update BN stats --> apply grads --> EMA of weights --> EMA to MT
         with tf.control_dependencies([train_step]):
@@ -1291,9 +1289,9 @@ def MT_guidance(model, sess, batch_X, noise_var=0):
     MT_feed_dict = {model.MT.x: MT_batch,
                     model.MT.keep_prob: 1.-model.MT.dropout_rate,
                     model.MT.is_training: False}
-    MT_output = sess.run(model.MT.output, feed_dict=MT_feed_dict)
+    MT_posts = sess.run(model.MT.posteriors, feed_dict=MT_feed_dict)
 
-    return MT_output
+    return MT_posts
 
 def keep_k_largest_from_LoV(LoV, k):
     """Generating a binary mask with the same structure
