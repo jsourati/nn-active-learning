@@ -23,11 +23,14 @@ class CNN(object):
     """
 
     DEFAULT_HYPERS = {
+        'custom_getter': None,
         'loss_name': 'CE',
         'optimizer_name': 'SGD',
         'lr_schedule': lambda t: exponential_decay(1e-3,t,0.1),
         'regularizer': None,
         'weight_decay': 1e-4,
+        'BN_decay': 0.999,
+        'BN_epsilon': 1e-3,
 
         # Adam optimizer
         'beta1': 0.9,
@@ -37,8 +40,11 @@ class CNN(object):
         'momentum': 0.,
         'epsilon': 1e-10,
 
+        # Aleatoric uncertainty
+        'MC_T': 10,
         # Mean Teacher semi-supervised
         'MT_ema_decay': 0.9999,
+        'MT_input_noise': 0,
         'max_cons_coeff': 1e-3,
         'rampup_length': 5000
     }
@@ -355,8 +361,10 @@ class CNN(object):
                                      kernel_dim[1], 
                                      prev_depth, 
                                      kernel_num], 
-                                    self.regularizer),
-                    bias_variable('Bias', [kernel_num])
+                                    self.regularizer,
+                                    self.custom_getter),
+                    bias_variable('Bias', [kernel_num], 
+                                  self.custom_getter)
                 ]
 
         # there may have already been some variables
@@ -383,8 +391,10 @@ class CNN(object):
         prev_depth = self.output.get_shape()[0].value
         new_vars = [weight_variable('Weight',
                                     [layer_specs[0], prev_depth],
-                                    self.regularizer),
-                    bias_variable('Bias', [layer_specs[0], 1])
+                                    self.regularizer,
+                                    self.custom_getter),
+                    bias_variable('Bias', [layer_specs[0], 1],
+                                  self.custom_getter)
                 ]
 
         if layer_name in self.var_dict:
@@ -441,9 +451,11 @@ class CNN(object):
         # creating the variables
         new_vars = [
             tf.get_variable('gamma', dtype=tf.float32,
-                            initializer=tf.ones(shape)),
+                            initializer=tf.ones(shape),
+                            custom_getter=self.custom_getter),
             tf.get_variable('beta', dtype=tf.float32,
-                            initializer=tf.zeros(shape)),
+                            initializer=tf.zeros(shape),
+                            custom_getter=self.custom_getter),
             tf.get_variable('moving_mean', dtype=tf.float32,
                             initializer=tf.zeros(shape),
                             trainable=False),
@@ -493,8 +505,10 @@ class CNN(object):
                                      kernel_dim[1],
                                      kernel_num, 
                                      prev_depth],
-                                    self.regularizer),
-                    bias_variable('Bias', [kernel_num])
+                                    self.regularizer,
+                                    self.custom_getter),
+                    bias_variable('Bias', [kernel_num],
+                                  self.custom_getter)
                 ]
         # there may have already been some variables
         # created for this layer (through BN)
@@ -532,6 +546,9 @@ class CNN(object):
 
     def set_hypers(self, **kwargs):
 
+        kwargs.setdefault('custom_getter', self.DEFAULT_HYPERS['custom_getter'])
+        kwargs.setdefault('BN_decay', self.DEFAULT_HYPERS['BN_decay'])
+        kwargs.setdefault('BN_epsilon', self.DEFAULT_HYPERS['BN_epsilon'])
         # optimizer and loss
         kwargs.setdefault('loss_name', self.DEFAULT_HYPERS['loss_name'])
         kwargs.setdefault('optimizer_name', self.DEFAULT_HYPERS['optimizer_name'])
@@ -547,13 +564,25 @@ class CNN(object):
         kwargs.setdefault('regularizer', self.DEFAULT_HYPERS['regularizer'])
         if kwargs['regularizer'] is not None:
             kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
+        # aleatoric uncertainty
+        if 'wAUn' in kwargs['loss_name']:
+            kwargs.setdefault('MC_T', self.DEFAULT_HYPERS['MC_T'])
         # consistency-based semi-supervised
         if 'MT' in kwargs['loss_name']:
             kwargs.setdefault('MT_ema_decay', self.DEFAULT_HYPERS['MT_ema_decay'])
+            kwargs.setdefault('MT_input_noise', self.DEFAULT_HYPERS['MT_input_noise'])
             kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
             kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
 
         self.__dict__.update(kwargs)
+
+    def get_var_by_layer_and_op_name(self, layer_name, op_name):
+        
+        var_names = [var.name for var in self.var_dict[layer_name]]
+        bin_op_indic = [op_name in var_name for var_name in var_names]
+        op_loc_in_layer = np.where(np.array(bin_op_indic))[0][0]
+        
+        return self.var_dict[layer_name][op_loc_in_layer]
 
     def initialize_graph(self, 
                          session,
@@ -610,9 +639,8 @@ class CNN(object):
                 L1 = L.create_group('Moments1')
                 L2 = L.create_group('Moments2')
                 for var in layer_vars:
+                    # [:-2] is for ':0' in variable names
                     var_name = var.name.split('/')[-1][:-2]
-                    # last line, [:-2] accounts for ':0' in 
-                    # TF variables
                     L0.create_dataset(var_name, data=var.eval())
                     L1.create_dataset(
                         var_name, 
@@ -623,6 +651,10 @@ class CNN(object):
             else:
                 for var in layer_vars:
                     var_name = var.name.split('/')[-1][:-2]
+                    # if self is a MT model, ignore last name, which
+                    # is ExponentialMovingAverage for all variables
+                    if 'Exponential' in var.name:
+                        var_name = var.name.split('/')[-2]
                     # last line, [:-2] accounts for ':0' in 
                     # TF variables
                     L.create_dataset(var_name, data=var.eval())
@@ -866,9 +898,10 @@ class CNN(object):
                             [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
                                         self.valid_metrics[metric]) 
                              for metric in ['av_acc', 'std_acc', 'av_loss']];
-                            self.save_weights(os.path.join(save_path, 'model_pars.h5'))
-                            if hasattr(self, 'MT'):
-                                self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
+                            if self.global_step.eval()>0:
+                                self.save_weights(os.path.join(save_path, 'model_pars.h5'))
+                                if hasattr(self, 'MT'):
+                                    self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
 
                 # --------------------------------------------- #
                 # --------------------------------------------- #
@@ -880,11 +913,18 @@ class CNN(object):
                 # setting up extra feed-dict
                 X_feed_dict = {}
                 if 'MT' in self.loss_name:
-                    MT_output = MT_guidance(self, sess, batch_X)
-                    X_feed_dict = {self.output_placeholder: MT_output}
+                    MT_output = MT_guidance(self, sess, batch_X, self.MT_input_noise)
+                    X_feed_dict = {self.MT.x: batch_X,
+                                   self.MT.keep_prob:1.-self.MT.dropout_rate,
+                                   self.MT.is_training: True,
+                                   self.output_placeholder: MT_output}
 
                 feed_dict.update(X_feed_dict)
                 sess.run(self.train_step, feed_dict=feed_dict);
+
+                if 'MT' in self.loss_name:
+                    # update the teacher
+                    sess.run(self.ema_apply)
 
 
     def eval(self, sess, dat_gen, run=1):
@@ -1067,7 +1107,6 @@ def get_loss(model):
 def get_FCN_loss(model):
     
     with tf.name_scope(model.name):
-            
         # Loss 
         # (for now, only cross entropy)
         if model.loss_name=='CE':
@@ -1140,21 +1179,37 @@ def get_FCN_loss(model):
                                 tf.multiply(model.cons_coeff, model.cons_loss))
 
             # set up the EMA operations and MT model too
+            model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
+            V = []
+            for _,Vars in model.var_dict.items():
+                for var in Vars:
+                    if 'moving' not in var.name:
+                        V += [var]
+            model.ema_apply = model.ema.apply(V)
+
             main_model_updates = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             MT_x = tf.placeholder(tf.float32, model.x.shape)
+            def custom_getter(getter, name, *args, **kwargs):
+                var = getter(name, *args, **kwargs)
+                op_name = var.name.split('/')[2].split(':')[0]
+                layer_name = var.name.split('/')[1]
+                target_var = model.get_var_by_layer_and_op_name(layer_name, op_name)
+                return model.ema.average(target_var)
             model.MT = CNN(MT_x, model.layer_dict, model.name+'_MT',
                            model.skips, dropout=[model.dropout_layers,
-                                                 model.dropout_rate])
+                                                 model.dropout_rate],
+                           custom_getter=custom_getter)
             model.MT.output = tf.stop_gradient(model.MT.output)
             if len(model.MT.output.shape)==2:
                 get_loss(model.MT)
             else:
                 get_FCN_loss(model.MT)
             # clearing update_ops and putting only the main model's updates
-            tf.get_default_graph().clear_collection(tf.GraphKeys.UPDATE_OPS)
-            tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            for op in main_model_updates:
-                tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, op)
+            #tf.get_default_graph().clear_collection(tf.GraphKeys.UPDATE_OPS)
+            #tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            #for op in main_model_updates:
+            #    tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, op)
+
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with
@@ -1217,29 +1272,8 @@ def get_optimizer(model):
     # are in tf.GraphKeys.UPDATE_OPS
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        train_step = model.optimizer.apply_gradients(
+        model.train_step = model.optimizer.apply_gradients(
             model.grads_vars, global_step=model.global_step)
-
-    if 'MT' in model.loss_name:
-        # here is the order of operations:
-        # Update BN stats --> apply grads --> EMA of weights --> EMA to MT
-        with tf.control_dependencies([train_step]):
-            model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
-            V = []
-            for _,Vars in model.var_dict.items():
-                V += Vars
-            model.ema_apply = model.ema.apply(V)
-            with tf.control_dependencies([model.ema_apply]):
-                tf.get_collection('ema_to_MT')
-                for lname, Vars in model.var_dict.items():
-                    for i, var in enumerate(Vars):
-                        tf.add_to_collection(
-                            'ema_to_MT',
-                            tf.assign(model.MT.var_dict[lname][i],
-                                      model.ema.average(var)))
-                model.train_step = tf.get_collection('ema_to_MT')
-    else:
-        model.train_step = train_step
 
 
 def sigmoid_rampup(global_step, rampup_length):
@@ -1747,7 +1781,7 @@ def CNN_variables(kernel_dims, layer_list):
     return W_dict, b_dict
 
 
-def weight_variable(name, shape, reg):
+def weight_variable(name, shape, reg, custom_getter=None):
     """Creating a kernel tensor 
     with specified shape
     
@@ -1760,7 +1794,7 @@ def weight_variable(name, shape, reg):
     It consists of Gaussian initialization
     with zero-mean and a specific variance.
     """
-    
+
     # using Eq (10) of He et al., assuming
     # ReLu activation, independence of 
     # elements of the weight tensors, 
@@ -1781,14 +1815,19 @@ def weight_variable(name, shape, reg):
     initial = tf.random_normal(
         shape, mean=0., stddev=std)
     
-    return tf.get_variable(name, initializer=initial,
-                           regularizer=reg)
+    return tf.get_variable(name, 
+                           initializer=initial,
+                           regularizer=reg,
+                           custom_getter=custom_getter)
 
-def bias_variable(name, shape):
+def bias_variable(name, shape, custom_getter=None):
     """Creating a bias term with specified shape
     """
+
     initial = tf.constant(0., shape=shape)
-    return tf.get_variable(name, initializer=initial)
+    return tf.get_variable(name, 
+                           initializer=initial,
+                           custom_getter=custom_getter)
 
     
 def max_pool(x, w_size, stride):
