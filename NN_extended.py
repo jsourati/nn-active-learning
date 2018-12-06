@@ -43,7 +43,7 @@ class CNN(object):
         # Aleatoric uncertainty
         'MC_T': 10,
         # Mean Teacher semi-supervised
-        'MT_ema_decay': 0.9999,
+        'MT_ema_decay_schedule': lambda: tf.constant(0.999),
         'MT_input_noise': 0,
         'max_cons_coeff': 1e-3,
         'rampup_length': 5000
@@ -137,12 +137,13 @@ class CNN(object):
                 this list contains the layers that need to be dropped out
                 (first item) and the drop-out rate (second item).
         """
-        
-        # setting the hyper-parameters
-        self.set_hypers(**kwargs)
 
         self.x = x
         self.global_step = tf.Variable(0, trainable=False, name='global_step')
+
+        # setting the hyper-parameters
+        self.set_hypers(**kwargs)
+
         self.learning_rate = self.lr_schedule(self.global_step)
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
         self.layer_dict = layer_dict
@@ -569,7 +570,8 @@ class CNN(object):
             kwargs.setdefault('MC_T', self.DEFAULT_HYPERS['MC_T'])
         # consistency-based semi-supervised
         if 'MT' in kwargs['loss_name']:
-            kwargs.setdefault('MT_ema_decay', self.DEFAULT_HYPERS['MT_ema_decay'])
+            kwargs.setdefault('MT_ema_decay_schedule', self.DEFAULT_HYPERS['MT_ema_decay_schedule'])
+            kwargs['MT_ema_decay'] = kwargs['MT_ema_decay_schedule'](self.global_step)
             kwargs.setdefault('MT_input_noise', self.DEFAULT_HYPERS['MT_input_noise'])
             kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
             kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
@@ -1277,8 +1279,8 @@ def get_optimizer(model):
 
 
 def sigmoid_rampup(global_step, rampup_length):
-    """Function for ramping up the consistency coefficient
-    in consistency-based semi-supervised training
+    """Function for ramping up (used for making a schedule
+    for learning rate, consistency coefficient, etc)
 
     Directly copied from Mean-Teacher repository
         https://github.com/CuriousAI/mean-teacher/blob/
@@ -1294,6 +1296,44 @@ def sigmoid_rampup(global_step, rampup_length):
     result = tf.cond(global_step < rampup_length, 
                      ramp, lambda: tf.constant(1.0))
     return tf.identity(result, name="sigmoid_rampup")
+
+def sigmoid_rampdown(global_step, rampdown_length, training_length):
+    """Function for ramping down (used for making a schedule
+    for learning rate, consistency coefficient, etc)
+
+    Directly copied from Mean-Teacher repository
+        https://github.com/CuriousAI/mean-teacher/blob/
+        master/tensorflow/mean_teacher/model.py
+    """
+
+    global_step = tf.to_float(global_step)
+    rampdown_length = tf.to_float(rampdown_length)
+    training_length = tf.to_float(training_length)
+    def ramp():
+        phase = 1.0 - tf.maximum(0.0, training_length - global_step) / rampdown_length
+        return tf.exp(-12.5 * phase * phase)
+
+    result = tf.cond(global_step >= training_length - rampdown_length,
+                     ramp,
+                     lambda: tf.constant(1.0))
+    return tf.identity(result, name="sigmoid_rampdown")
+
+def sigmoid_schedule(global_step, max_lr, rampup_length, 
+                     rampdown_length, train_length):
+
+    global_step = tf.to_float(global_step)
+    max_lr = tf.to_float(max_lr)
+    rampup_length = tf.to_float(rampup_length)
+    rampdown_length = tf.to_float(rampdown_length)
+    train_length = tf.to_float(train_length)
+
+    rampup_val = sigmoid_rampup(global_step, rampup_length)
+    rampdown_val = sigmoid_rampdown(global_step, 
+                                    rampdown_length,
+                                    train_length)
+    result = rampup_val*rampdown_val*max_lr
+
+    return tf.identity(result)
 
 
 def exponential_decay(init_lr, global_step, decay_rate):
@@ -1326,459 +1366,6 @@ def MT_guidance(model, sess, batch_X, noise_var=0):
     MT_posts = sess.run(model.MT.posteriors, feed_dict=MT_feed_dict)
 
     return MT_posts
-
-def keep_k_largest_from_LoV(LoV, k):
-    """Generating a binary mask with the same structure
-    as the input (which is a list of variables) such that
-    the largest k values of the variables get 1 value
-    and the rest 0
-    """
-    
-    # length of all variables
-    Ls = [np.prod(LoV[i].shape) for i in range(len(LoV))]
-
-    # appending everything together (and putting
-    # a minus behind them) and arg-sorting
-    app_LoV = []
-    for i in range(len(LoV)):
-        app_LoV += np.ravel(-LoV[i]).tolist()
-    sort_inds = np.argsort(app_LoV)[:k]
-    
-    local_inds = patch_utils.global2local_inds(
-        sort_inds,Ls)
-    non_empty_locs = np.array([len(local_inds[i]) for 
-                               i in range(len(local_inds))])
-    non_empty_locs = np.where(non_empty_locs>0)[0]
-
-    # generating the mask
-    bmask = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
-    for i in non_empty_locs:
-        multinds = np.unravel_index(local_inds[i],LoV[i].shape)
-        bmask[i][multinds] = 1
-
-    return bmask, non_empty_locs
-
-def threshold_LoV(LoV, thr):
-    """Generating a binary mask with the same size as the
-    LoV (List of Variables) such that the variables whose
-    values are larger than the threshold get one, and zero 
-    otherwise
-    """
-
-    bmask = [np.zeros(LoV[i].shape) for i in range(len(LoV))]
-    for i in range(len(LoV)):
-        bmask[i][LoV[i]>=thr] = 1
-
-    return bmask
-
-def get_LwF(model):
-    """Taking for which a loss has been already defined,
-    and modifying it to LwF (learning without forgetting)
-
-    REMARK: this function needs model.get_optimizer() to be
-        called beforehand 
-
-    CAUTIOUS: modify it for FCNs
-    """
-
-    # needs introducing two hyper-parameters to model
-    model.lambda_o = tf.placeholder(tf.float32)
-    model.T = tf.placeholder(tf.float32)
-
-    # defining output of the previous model
-    model.y__ = tf.placeholder(tf.float32, model.y_.get_shape())
-
-    # knowledge distillation (soft soft-max)
-    soft_target = tf.nn.softmax(tf.transpose(
-        tf.divide(model.y__, model.T)))
-    loss_old_term = tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits(
-            labels=soft_target, 
-            logits=tf.transpose(tf.divide(model.output, model.T))))
-
-    model.LwF_loss = tf.add(model.loss, 
-                            tf.multiply(loss_old_term,
-                                        model.lambda_o))
-
-    if len(model.train_layers)==0:
-        model.LwF_train_step = model.optimizer.minimize(
-            model.LwF_loss)
-    else:
-        var_list = []
-        for layer in model.train_layers:
-            var_list += model.var_dict[layer]
-        model.LwF_train_step = model.optimizer.minimize(
-            model.LwF, var_list=var_list)
-
-def LLFC_hess(model,sess,feed_dict):
-    """Explicit Hessian matrix of the loss with 
-    respect to the last (FC) layer when the loss
-    is the soft-max and the last layer does not
-    have any additional activation except this
-    soft-max
-    """
-
-    # input to the last layer (u)
-    u = sess.run(model.feature_layer,
-                 feed_dict=feed_dict)
-    d = u.shape[0]
-
-    # the class probabilities
-    pi = sess.run(model.posteriors,
-                  feed_dict=feed_dict)
-
-    # A(pi)
-    c = pi.shape[0]
-    repM = np.repeat(pi,c,axis=1) - np.eye(c)
-    A = np.diag(pi[:,0]) @ repM.T
-
-    # Hessian
-    H = np.zeros(((d+1)*c, (d+1)*c))
-    H[:c*d,:c*d] = np.kron(A, np.outer(u,u))
-    H[:c*d,c*d:] = np.kron(A,u)
-    H[c*d:,:c*d] = np.kron(A,u.T)
-    H[c*d:,c*d:] = A
-
-    return H
-
-def LLFC_grads(model, sess, feed_dict, labels=None):
-    """General module for computing gradients
-    of the log-loss with respect to parameters
-    of the (FC) last layer of the network
-    """
-
-    # posteriors (pi)
-    pies = sess.run(model.posteriors,
-                    feed_dict=feed_dict)
-    c,n = pies.shape
-
-    # input to the last layer (u)
-    U = sess.run(model.feature_layer,
-                 feed_dict=feed_dict)
-    d = U.shape[0]
-
-    # term containing [pi_1.u_1 ,..., pi_1.u_d,
-    #                  pi_2.u_1 ,..., pi_2.u_d,...]
-    rep_pies = np.repeat(pies, d, axis=0)
-    rep_U = np.tile(U, (c,1))
-    pies_dot_U = rep_pies * rep_U
-
-    flag=0
-    if labels is None:
-        labels = sess.run(model.prediction,
-                          feed_dict=feed_dict)
-        flag = 1
-    hot_labels = np.zeros((c,n))
-    for j in range(c):
-        hot_labels[j,labels==j]=1
-
-    # sparse term containing columns
-    #         [0,...,0, u_1,...,u_d, 0,...,0].T
-    #                   |____ ____|
-    #                        v
-    #                   y*-th block
-    sparse_term = np.repeat(
-        hot_labels, d, axis=0) * rep_U
-
-    # dJ/dW
-    dJ_dW = sparse_term - pies_dot_U
-
-    # dJ/db
-    dJ_db = hot_labels - pies
-
-    if flag==1:
-        return np.concatenate(
-            (dJ_dW,dJ_db),axis=0), labels
-    else:
-        return np.concatenate(
-            (dJ_dW,dJ_db),axis=0)
-
-def PW_LLFC_grads(model, sess, 
-                  expr,
-                  all_padded_imgs,
-                  img_inds,
-                  labels):
-    """Computing gradients of the log-likelihoods
-    with respect to the parameters of the last
-    layer of a given model
-
-    Given labels are not necessarily the true
-    labels of the indexed sampels (i.e. not
-    necessarily those based on the mask image
-    present in `all_padded_imgs`)
-    """
-
-    s = len(img_inds)
-    n = np.sum([len(img_inds[i]) for i in range(s)])
-    d = model.feature_layer.shape[0].value
-    c = expr.nclass
-
-    all_pies = np.zeros((c,n))
-    all_a = np.zeros((d,n))
-
-    # loading patches
-    patches,_ = patch_utils.get_patches_multimg(
-        all_padded_imgs, img_inds, 
-        expr.pars['patch_shape'], 
-        expr.train_stats)
-
-    cnt=0
-    for i in range(s):
-        # posteriors pie's
-        pies = sess.run(model.posteriors,
-                        feed_dict={model.x:patches[i],
-                                   model.keep_prob:1.})
-        all_pies[:,cnt:cnt+len(img_inds[i])] = pies
-
-        # last layer's inputs a^{n1-1}
-        a_s = sess.run(model.feature_layer,
-                       feed_dict={model.x:patches[i],
-                                  model.keep_prob:1.})
-        all_a[:,cnt:cnt+len(img_inds[i])] = a_s
-
-        cnt += len(img_inds[i])
-
-    # repeating the matrices
-    rep_pies = np.repeat(all_pies, d, axis=0)
-    rep_a = np.tile(all_a, (c,1))
-    pies_dot_as = rep_pies * rep_a
-
-    # forming dJ / dW_(nl-1)
-    term_1 = np.zeros((c*d, n))
-    multinds = (np.zeros(n*d, dtype=int), 
-                np.zeros(n*d, dtype=int))
-    for i in range(n):
-        multinds[0][i*d:(i+1)*d] = np.arange(
-            labels[i]*d,(labels[i]+1)*d)
-        multinds[1][i*d:(i+1)*d] = i
-    term_1[multinds] = np.ravel(a_s.T)
-
-    dJ_dW = term_1 - pies_dot_as
-
-    # appending with dJ / db_{nl-1}
-    term_1 = np.zeros((c,n))
-    multinds = (np.array(labels),
-                np.arange(n))
-    term_1[multinds] = 1.
-    dJ_db = term_1 - pies
-    
-    # final gradient vectors
-    grads = np.concatenate((dJ_dW,dJ_db), axis=0)
-
-    return grads
-
-
-def create_model(model_name,
-                 dropout_rate, 
-                 nclass,
-                 learning_rate, 
-                 grad_layers=[],
-                 train_layers=[],
-                 optimizer_name='SGD',
-                 patch_shape=None):
-    
-    if model_name=='Alex':
-        model = create_Alex(dropout_rate, 
-                            nclass,
-                            learning_rate, 
-                            starting_layer)
-    elif model_name=='VGG19':
-        model = create_VGG19(dropout_rate, 
-                             learning_rate,
-                             nclass, 
-                             grad_layers,
-                             train_layers)
-        
-    elif model_name=='PW':
-        model = create_PW1(nclass,
-                            dropout_rate,
-                            learning_rate,
-                            optimizer_name,
-                            patch_shape)
-        
-    return model
-
-def create_Alex(dropout_rate,
-                n_class,
-                learning_rate,
-                starting_layer):
-    """Creating an AlexNet model 
-    using `AlexNet_CNN` class
-    """
-
-    x = tf.placeholder(tf.float32, 
-                       [None, 227, 227, 3])
-    skip_layer = ['fc8']
-    model = AlexNet_CNN(
-        x, dropout_rate, n_class, skip_layer)
-    
-    model.get_optimizer(learning_rate)
-    
-    # getting the gradient operations
-    model.get_gradients(starting_layer)
-    
-    return model
-
-def create_VGG19(dropout_rate, learning_rate,
-                 n_class, grad_layers,
-                 train_layers):
-    """Creating a VGG19 model using CNN class
-    """
-    
-    # architechture dictionary
-    vgg_dict = {'conv1':[64, 'conv', [3,3]],
-                'conv2':[64, 'conv', [3,3]],
-                'max1': [[2,2], 'pool'],
-                'conv3':[128, 'conv', [3,3]],
-                'conv4':[128, 'conv', [3,3]],
-                'max2' :[[2,2], 'pool'],
-                'conv5':[256, 'conv', [3,3]],
-                'conv6':[256, 'conv', [3,3]],
-                'conv7':[256, 'conv', [3,3]],
-                'conv8':[256, 'conv', [3,3]],
-                'max3': [[2,2], 'pool'],
-                'conv9': [512, 'conv', [3,3]],
-                'conv10':[512, 'conv', [3,3]],
-                'conv11':[512, 'conv', [3,3]],
-                'conv12':[512, 'conv', [3,3]],
-                'max4': [[2,2], 'pool'],
-                'conv13':[512, 'conv', [3,3]],
-                'conv14':[512, 'conv', [3,3]],
-                'conv15':[512, 'conv', [3,3]],
-                'conv16':[512, 'conv', [3,3]],
-                'max5':[[2,2], 'pool'],
-                'fc1':[4096,'fc'],
-                'fc2':[4096,'fc'],
-                'fc3':[n_class,'fc']}
-
-
-    dropout = [[21,22], dropout_rate]
-    x = tf.placeholder(tf.float32,
-                       [None, 224, 224, 3],
-                       name='input')
-    feature_layer = len(vgg_dict) - 2
-    
-    # creating the architecture
-    model = CNN(x, vgg_dict, 'VGG19', 
-                feature_layer, dropout)
-
-    # forming optimizer and gradient operator
-    print('Optimizers..')
-    model.get_optimizer(learning_rate, train_layers)
-    print('Gradients..')
-    model.get_gradients(grad_layers)
-
-    return model
-
-def create_PW1(nclass,
-               dropout_rate,
-               learning_rate,
-               optimizer_name,
-               patch_shape):
-    """Creating a model for patch-wise
-    segmentatio of medical images
-    """
-
-    pw_dict = {'conv1':[24, 'conv', [5,5]],
-               'conv2':[32, 'conv', [5,5]],
-               'max1': [[2,2], 'pool'],
-               'conv3':[48, 'conv', [3,3]],
-               'conv4':[96, 'conv', [3,3]],
-               'max2' :[[2,2], 'pool'],
-               'fc1':[4096,'fc'],
-               'fc2':[4096,'fc'],
-               'fc3':[nclass,'fc']}
-    
-    dropout = [[6,7,8], dropout_rate]
-    x = tf.placeholder(
-        tf.float32,
-        [None, 
-         patch_shape[0],
-         patch_shape[1],
-         patch_shape[2]],
-        name='input')
-    feature_layer = len(pw_dict) - 2
-    probes = [5]
-    
-    # the model
-    model = CNN(x, pw_dict, 'PatchWise', 
-                feature_layer, 
-                dropout, probes)
-    # optimizers
-    model.get_optimizer(learning_rate, [],
-                        optimizer_name)
-    # gradients
-    model.get_gradients()
-    
-    return model
-
-def CNN_layers(W_dict, b_dict, x):
-    """Creating the output of CNN layers 
-    and return them as TF variables
-    
-    Each layer consists of a convolution, 
-    following by a max-pooling and
-    a ReLu activation.
-    The number of channels of the input, 
-    should match the number of
-    input channels to the first layer based 
-    on the parameter dictionary.
-    """
-    
-    L = len(W_dict)
-    
-    output = x
-    for i in range(L):
-        output = tf.nn.conv2d(
-            output, W_dict[str(i)], 
-            strides=[1, 1, 1, 1], 
-            padding='SAME') + b_dict[str(i)]
-        output = tf.nn.relu(output)
-        output = max_pool(output, 2, 2)
-        
-    return output
-    
-
-def CNN_variables(kernel_dims, layer_list):
-    """Creating the CNN variables
-    
-    We should have `depth_lists[0] = in_channels`.
-    In the i-th layer, dimensionality 
-    of the kernel `W` would be
-    `(kernel_dims[i],kernel_dims[i])`, and the 
-    number of them (that is, the number
-     of filters) would be `layer_list[i+1]`. 
-    Moreover, the number
-    of its input channels is `layer_list[i]`.
-    """
-    
-    if not(len(layer_list)==len(kernel_dims)+1):
-        raise ValueError(
-            "List of  layers should have one more"+
-            "element than the list of kernel dimensions.")
-    
-    W_dict = {}
-    b_dict = {}
-    
-    layer_num = len(layer_list)
-    # size of W should be 
-    # [filter_height, filter_width, 
-    # in_channels, out_channels]
-    # here, filter_height = 
-    #       filter_width = 
-    #       kernel_dim
-    for i in range(layer_num-1):
-        W_dict.update(
-            {str(i):weight_variable(
-                [kernel_dims[i], 
-                 kernel_dims[i], 
-                 layer_list[i], 
-                 layer_list[i+1]])})
-        b_dict.update(
-            {str(i): bias_variable(
-                [layer_list[i+1]])})
-        
-    return W_dict, b_dict
 
 
 def weight_variable(name, shape, reg, custom_getter=None):
@@ -1836,102 +1423,4 @@ def max_pool(x, w_size, stride):
         strides=[1, stride, stride, 1], 
         padding='SAME')
     
-
-def test_model(model, sess, test_dat):
-    
-    b = 1000
-    X_test, Y_test = test_dat
-    n = Y_test.shape[1]
-    Y_test = np.argmax(Y_test, axis=0)
-    batches = gen_batch_inds(n,b)
-    preds = np.nan*np.zeros(n)
-
-    for batch_inds in batches:
-        if len(X_test.shape)==2:
-            batch_X = X_test[:,batch_inds]
-            if len(model.x.shape)>2:
-                batch_X = np.reshape(batch_X.T, 
-                                     (len(batch_inds),28,28,1))
-        else:
-            batch_X = X_test[batch_inds,:,:,:]
-
-        feed_dict={model.x:batch_X, model.keep_prob:1.}
-        batch_preds = sess.run(
-            model.prediction,
-            feed_dict=feed_dict)
-        preds[batch_inds] = batch_preds
-        
-    # (multi-class) F1 score
-    F1 = f1_score(y_true=Y_test,
-                  y_pred=preds,
-                  average='weighted')
-    return F1
-
-
-def gen_batch_inds(data_size, batch_size):
-    """Generating a list of random indices 
-    to extract batches
-    """
-    
-    # determine size of the batches
-    quot, rem = np.divmod(data_size, 
-                          batch_size)
-    batches = list()
-    
-    # random permutation of indices
-    rand_perm = np.random.permutation(
-        data_size).tolist()
-    
-    # assigning indices to batches
-    for i in range(quot):
-        this_batch = rand_perm[
-            slice(i*batch_size, 
-                  (i+1)*batch_size)]
-        batches += [this_batch]
-        
-    # if there is remainder, add them
-    # separately
-    if rem>0:
-        batches += [rand_perm[-rem:]]
-        
-    return batches 
-
-def diagonal_Fisher(model, sess, batch_dat):
-    """ Computing diagonal Fisher values for a batch of data
-
-    The output is in a format similar to `model.var_dict`,
-    which is a dictionary with layer names as the keys
-
-    NOTE: for now, there is no batching of the input data,
-    hence large batches might give memory errors
-    """
-    
-    # initializing the output dictionary with all-zero arrays
-    grads = [model.grads_vars[i][0] for i in range(len(model.grads_vars))]
-    diag_F = [np.zeros(grads[i].shape) for i in range(len(grads))]
-
-    # when computing gradients here, be careful about the 
-    # binary masks that have to be provided in case of PFT.
-    if hasattr(model, 'par_placeholders'):
-        X_feed_dict = {model.par_placeholders[i]:
-                       np.ones(model.par_placeholders[i].shape)
-                       for i in range(len(model.par_placeholders))}
-    else:
-        X_feed_dict = {}
-
-    # computing diagonal Fisher for each input sample one-by-one
-    for i in range(batch_dat[0].shape[0]):
-        feed_dict={model.x: batch_dat[0][[i],:,:,:], 
-                   model.y_:batch_dat[1][:,[i]], 
-                   model.keep_prob:1.}
-        feed_dict.update(X_feed_dict)
-        Gv = sess.run(grads, feed_dict=feed_dict)
-
-        # updating layers of Fi dictionary with gradients of the
-        # the current input sample
-        for j in range(len(Gv)):
-            diag_F[j] = (i*diag_F[j] + Gv[j]**2) / (i+1)
-
-    return diag_F
-
 

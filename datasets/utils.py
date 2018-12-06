@@ -12,6 +12,35 @@ import NN_extended
 import patch_utils
 import create_NN
 
+
+def gen_batch_inds(data_size, batch_size):
+    """Generating a list of random indices 
+    to extract batches
+    """
+    
+    # determine size of the batches
+    quot, rem = np.divmod(data_size, 
+                          batch_size)
+    batches = list()
+    
+    # random permutation of indices
+    rand_perm = np.random.permutation(
+        data_size).tolist()
+    
+    # assigning indices to batches
+    for i in range(quot):
+        this_batch = rand_perm[
+            slice(i*batch_size, 
+                  (i+1)*batch_size)]
+        batches += [this_batch]
+        
+    # if there is remainder, add them
+    # separately
+    if rem>0:
+        batches += [rand_perm[-rem:]]
+        
+    return batches
+
 def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 
     h,w = img_shape

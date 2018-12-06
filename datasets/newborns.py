@@ -2,12 +2,12 @@ import numpy as np
 import nrrd
 import pdb
 
-from patch_utils import extract_Hakims_data_path
-from .utils import gen_batch_inds, prepare_batch_BrVol
+from patch_utils import extract_newborn_data_path
+from .utils import prepare_batch_BrVol, gen_batch_inds
 
-class adols(object):
+class NB(object):
 
-    T1_addrs, T2_addrs, mask_addrs, _ = extract_Hakims_data_path()
+    T1_addrs, T2_addrs, mask_addrs, _ = extract_newborn_data_path()
     C = 2
 
     def __init__(self, rnd_seed, labeled_size, unlabeled_size):
