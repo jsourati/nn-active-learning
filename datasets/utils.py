@@ -59,13 +59,19 @@ def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 
     return batch_X, batch_grnd
 
-def prepare_batch_BrVol(img_paths, mask_addrs, 
+def prepare_batch_BrVol(img_paths_or_mats,
+                        mask_paths_or_mats, 
                         img_shape, 
                         one_hot_channels=None,
                         slice_choice='uniform',
                         labeled_indic=None):
     """Preparing a batch of image slices from multiple given
     brain volumes
+
+    Images and their masks could be provided by their paths
+    (list of strings), or loaded images (list of 3D arrays).
+    For now, if given as path strings, only nrrd format is
+    supported.
 
     If the image shape `img_shape` is not the same as the
     axial slices of the volumes, the slices will be randomly
@@ -88,15 +94,20 @@ def prepare_batch_BrVol(img_paths, mask_addrs,
     """
 
     h,w = img_shape
-    m = len(img_paths[0])
-    batch_X = np.zeros((len(img_paths),h,w,m))
-    nohot_batch_mask = np.zeros((len(img_paths),h,w))
+    m = len(img_paths_or_mats[0])
+    b = len(img_paths_or_mats)
+    batch_X = np.zeros((len(img_paths_or_mats),h,w,m))
+    nohot_batch_mask = np.zeros((b,h,w))
     if labeled_indic is None:
-        labeled_indic = np.ones(len(img_paths))
+        labeled_indic = np.ones(b)
 
-    for i in range(len(img_paths)):
+    for i in range(b):
         # sampling a slice
-        grnd = nrrd.read(mask_addrs[i])[0]
+        # ----------------
+        if isinstance(mask_paths_or_mats[i], str):
+            grnd = nrrd.read(mask_paths_or_mats[i])[0]
+        else:
+            grnd = mask_paths_or_mats[i]
 
         if isinstance(slice_choice, str):
             if slice_choice=='uniform':
@@ -111,7 +122,10 @@ def prepare_batch_BrVol(img_paths, mask_addrs,
 
         for j in range(m):
             # image (j'th modality)
-            img = nrrd.read(img_paths[i][j])[0]
+            if isinstance(img_paths_or_mats[i][j], str):
+                img = nrrd.read(img_paths_or_mats[i][j])[0]
+            else:
+                img = img_paths_or_mats[i][j]
             img = img[:,:,slice_ind]
             if j==0:
                 crimg, init_h, init_w = random_crop(img,h,w)
