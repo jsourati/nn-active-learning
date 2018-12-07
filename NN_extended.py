@@ -881,25 +881,34 @@ class CNN(object):
 
     def train(self,sess,epochs,
               train_gen,
-              test_gen=None,
+              valid_gen=None,
               eval_step=100,
               save_path=None):
 
 
-        self.valid_metrics = {metric:[] for metric in 
-                              ['av_acc', 'std_acc', 'av_loss']}
+        self.valid_metrics = {}
+        metrics = ['av_acc', 'std_acc', 'av_loss']
+        for metric in metrics:
+            metric_path = os.path.join(save_path, '%s.txt'%metric)
+            if os.path.exists(metric_path):
+                M = list(np.loadtxt(metric_path))
+            else:
+                M = []
+            self.valid_metrics.update({metric: M})
 
         for i in range(epochs):
             for batch_X, batch_Y in train_gen():
 
-                if test_gen is not None:
+                # first, have an initial evaluation
+                # (if a validation generator is given)
+                if valid_gen is not None:
                     if not(self.global_step.eval()%eval_step):
-                        self.eval(sess, test_gen, 4)
+                        self.eval(sess, valid_gen, 4)
 
                         if save_path is not None:
                             [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
                                         self.valid_metrics[metric]) 
-                             for metric in ['av_acc', 'std_acc', 'av_loss']];
+                             for metric in metrics];
                             if self.global_step.eval()>0:
                                 self.save_weights(os.path.join(save_path, 'model_pars.h5'))
                                 if hasattr(self, 'MT'):
@@ -1353,9 +1362,12 @@ def MT_guidance(model, sess, batch_X, noise_var=0):
         # making channels of the input data noisy separately
         for i in range(batch_X.shape[0]):
             M = np.abs(batch_X[i,:,:,:]).max()
-            dat = batch_X[i,:,:,:] / M
-            noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
-            noisy_dat *= M
+            if M>0:
+                dat = batch_X[i,:,:,:] / M
+                noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
+                noisy_dat *= M
+            else:
+                noisy_dat = random_noise(batch_X[i,:,:,:], 'gaussian', var=noise_var)
             MT_batch[i,:,:,:] = noisy_dat
     else:
         MT_batch = batch_X
