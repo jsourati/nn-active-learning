@@ -1,3 +1,4 @@
+from itertools import zip_longest
 import tensorflow as tf
 import numpy as np
 import imageio
@@ -40,6 +41,39 @@ def gen_batch_inds(data_size, batch_size):
         batches += [rand_perm[-rem:]]
         
     return batches
+
+def gen_minibatch_labeled_unlabeled_inds(
+        L_indic, batch_size, n_labeled=None):
+    
+    n = len(L_indic)
+    if n_labeled is None:
+        def eternal_gen():
+            while True:
+                for inds in gen_batch_inds(n, batch_size):
+                    yield inds
+        gen_tuple = (eternal_gen(),)
+
+    else:
+        n_unlabeled = batch_size - n_labeled
+        labeled_inds = np.where(L_indic==1)[0]
+        unlabeled_inds = np.setdiff1d(np.arange(n),
+                                      labeled_inds)
+        def labeled_eternal_gen():
+            while True:
+                for inds in gen_batch_inds(len(labeled_inds), n_labeled):
+                    yield labeled_inds[inds]
+        def unlabeled_eternal_gen():
+            while True:
+                for inds in gen_batch_inds(len(unlabeled_inds), n_unlabeled):
+                    yield unlabeled_inds[inds]
+        gen_tuple = (labeled_eternal_gen(), unlabeled_eternal_gen())
+
+    return zip_longest(*gen_tuple)
+        
+def gen_minibatch_materials(gen, *args):
+    inds = np.concatenate(next(gen))
+    return tuple([[arg[ind] for ind in inds]
+                  for arg in args])
 
 def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 

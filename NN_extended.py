@@ -879,7 +879,8 @@ class CNN(object):
 
         get_optimizer(self)
 
-    def train(self,sess,epochs,
+    def train(self,sess,
+              global_step_limit,
               train_gen,
               valid_gen=None,
               eval_step=100,
@@ -896,49 +897,50 @@ class CNN(object):
                 M = []
             self.valid_metrics.update({metric: M})
 
-        for i in range(epochs):
-            for batch_X, batch_Y in train_gen():
+        while self.global_step.eval() < global_step_limit:
 
-                # first, have an initial evaluation
-                # (if a validation generator is given)
-                if valid_gen is not None:
-                    if not(self.global_step.eval()%eval_step):
-                        self.eval(sess, valid_gen, 4)
+            batch_X, batch_Y = train_gen()
 
-                        if save_path is not None:
-                            [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
-                                        self.valid_metrics[metric]) 
-                             for metric in metrics];
-                            if self.global_step.eval()>0:
-                                self.save_weights(os.path.join(save_path, 'model_pars.h5'))
-                                if hasattr(self, 'MT'):
-                                    self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
+            # first, have an initial evaluation
+            # (if a validation generator is given)
+            if valid_gen is not None:
+                if not(self.global_step.eval()%eval_step):
+                    self.eval(sess, valid_gen, 50)
 
-                # --------------------------------------------- #
-                # --------------------------------------------- #
+                    if save_path is not None:
+                        [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
+                                    self.valid_metrics[metric]) 
+                         for metric in metrics];
+                        if self.global_step.eval()>0:
+                            self.save_weights(os.path.join(save_path, 'model_pars.h5'))
+                            if hasattr(self, 'MT'):
+                                self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
 
-                feed_dict = {self.x: batch_X,
-                             self.y_: batch_Y,
-                             self.keep_prob:1-self.dropout_rate,
-                             self.is_training: True}
-                # setting up extra feed-dict
-                X_feed_dict = {}
-                if 'MT' in self.loss_name:
-                    MT_output = MT_guidance(self, sess, batch_X, self.MT_input_noise)
-                    X_feed_dict = {self.MT.x: batch_X,
-                                   self.MT.keep_prob:1.-self.MT.dropout_rate,
-                                   self.MT.is_training: True,
-                                   self.output_placeholder: MT_output}
+            # --------------------------------------------- #
+            # --------------------------------------------- #
 
-                feed_dict.update(X_feed_dict)
-                sess.run(self.train_step, feed_dict=feed_dict);
+            feed_dict = {self.x: batch_X,
+                         self.y_: batch_Y,
+                         self.keep_prob:1-self.dropout_rate,
+                         self.is_training: True}
+            # setting up extra feed-dict
+            X_feed_dict = {}
+            if 'MT' in self.loss_name:
+                MT_output = MT_guidance(self, sess, batch_X, self.MT_input_noise)
+                X_feed_dict = {self.MT.x: batch_X,
+                               self.MT.keep_prob:1.-self.MT.dropout_rate,
+                               self.MT.is_training: True,
+                               self.output_placeholder: MT_output}
 
-                if 'MT' in self.loss_name:
-                    # update the teacher
-                    sess.run(self.ema_apply)
+            feed_dict.update(X_feed_dict)
+            sess.run(self.train_step, feed_dict=feed_dict);
+
+            if 'MT' in self.loss_name:
+                # update the teacher
+                sess.run(self.ema_apply)
 
 
-    def eval(self, sess, dat_gen, run=1):
+    def eval(self, sess, dat_gen, run=50):
         model_utils.eval_metrics(self, sess, dat_gen, run)
             
         
