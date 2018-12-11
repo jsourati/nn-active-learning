@@ -1121,13 +1121,11 @@ def get_FCN_loss(model):
     
     with tf.name_scope(model.name):
         # Loss 
-        # (for now, only cross entropy)
         if model.loss_name=='CE':
-            model.loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(
-                    labels=model.y_, logits=model.output, 
-                    dim=-1),
-                name='Loss')
+            model.labels = tf.argmax(model.y_, axis=-1)
+            model.labeled_loc = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            model.loss = tf.losses.sparse_softmax_cross_entropy(
+                labels=model.labels, logits=model.output, weights=model.labeled_loc)
 
         elif model.loss_name=='CE_wAUn':
             # the first half:   f^W(x)
@@ -1162,18 +1160,14 @@ def get_FCN_loss(model):
                     logits=tf.log(model.MC_probs), 
                     dim=-1),
                 name='Loss')
+
         elif model.loss_name=='CE_MT':
 
             # CE loss (using only lableed samples)
-            #label_mask = tf.reduce_any(tf.equal(model.y_, 1.), axis=[1,2,3])
-            #labeled_y_ = tf.boolean_mask(model.y_, label_mask)
-            #labeled_output = tf.boolean_mask(model.output, label_mask)
-
-            model.CE_loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(
-                    labels=model.y_, logits=model.output, 
-                    dim=-1),
-                name='Loss')
+            model.labels = tf.argmax(model.y_, axis=-1)
+            model.labeled_loc = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            model.CE_loss = tf.losses.sparse_softmax_cross_entropy(
+                labels=model.labels, logits=model.output, weights=model.labeled_loc)
 
             # consistency loss (using all samples)
             output_shape = [model.output.shape[i].value for i in range(1,4)]
@@ -1217,11 +1211,6 @@ def get_FCN_loss(model):
                 get_loss(model.MT)
             else:
                 get_FCN_loss(model.MT)
-            # clearing update_ops and putting only the main model's updates
-            #tf.get_default_graph().clear_collection(tf.GraphKeys.UPDATE_OPS)
-            #tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            #for op in main_model_updates:
-            #    tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, op)
 
 
 def get_optimizer(model):
