@@ -882,13 +882,13 @@ class CNN(object):
     def train(self,sess,
               global_step_limit,
               train_gen,
+              metrics=[],
               valid_gen=None,
               eval_step=100,
               save_path=None):
 
 
         self.valid_metrics = {}
-        metrics = ['av_acc', 'std_acc', 'av_loss']
         for metric in metrics:
             metric_path = os.path.join(save_path, '%s.txt'%metric)
             if os.path.exists(metric_path):

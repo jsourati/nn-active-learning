@@ -7,42 +7,96 @@ import copy
 import pdb
 
 import NN_extended
+from datasets.utils import gen_batch_inds
 
-def eval_metrics(model, sess, dat_gen, slices=50):
+def eval_metrics(model, sess, 
+                 dat_gen, 
+                 slices=50,
+                 update=True):
 
-    
-    accs = []
-    av_loss = 0.
-    
+
+    # metrics
+    eval_metrics = list(model.valid_metrics.keys())
+    op_dict = {}
+    eval_dict = {}
+    model_inclusion = False
+    MT_model_inclusion = False
+    if 'av_acc' in eval_metrics:
+        op_dict.update({'accs': model.posteriors})
+        eval_dict.update({'accs': []})
+        model_inclusion = True
+    if 'av_loss' in eval_metrics:
+        op_dict.update({'av_loss': model.loss})
+        eval_dict.update({'av_loss': 0.})
+        model_inclusion = True
+    if 'av_CE_loss' in eval_metrics:
+        op_dict.update({'av_CE_loss': model.CE_loss})
+        eval_dict.update({'av_CE_loss': 0.})
+        model_inclusion = True
+    if 'av_cons_loss' in eval_metrics:
+        op_dict.update({'av_cons_loss': model.cons_loss})
+        eval_dict.update({'av_cons_loss': 0.})
+        model_inclusion = True
+    if 'av_MT_loss' in eval_metrics:
+        op_dict.update({'av_MT_loss': model.MT.loss})
+        eval_dict.update({'av_MT_loss': 0.})
+        MT_model_inclusion = True
+
+
+    vol = 0
     for _ in range(slices):
         batch_X, batch_mask = dat_gen()
-            
-        if hasattr(model, 'MT'):
-            feed_dict={model.MT.x:batch_X,
-                       model.MT.y_:batch_mask,
-                       model.MT.keep_prob:1.,
-                       model.MT.is_training:False}
+        b = batch_X.shape[0]
 
-            L,P = sess.run([model.MT.loss,model.MT.posteriors], 
-                       feed_dict=feed_dict)
-        else:
-            feed_dict={model.x:batch_X,
-                       model.y_:batch_mask,
-                       model.keep_prob:1.,
-                       model.is_training:False}
-            L,P = sess.run([model.loss,model.posteriors], 
-                           feed_dict=feed_dict)
+        feed_dict = {}
+        if model_inclusion:
+            feed_dict.update({model.x:batch_X,
+                              model.y_:batch_mask,
+                              model.keep_prob:1.,
+                              model.is_training:False})
+        if MT_model_inclusion:
+            feed_dict.update({model.MT.x:batch_X,
+                              model.MT.y_:batch_mask,
+                              model.MT.keep_prob:1.,
+                              model.MT.is_training:False})
+        if hasattr(model,'MT') and \
+           hasattr(model, 'output_placeholder'):
+            MT_output = NN_extended.MT_guidance(model,
+                                                sess,
+                                                batch_X,
+                                                model.MT_input_noise)
+            feed_dict.update({model.output_placeholder: 
+                              MT_output})
 
-        av_loss = (len(accs)*av_loss+L*batch_X.shape[0]) / (len(accs)+batch_X.shape[0])
-        nohot_batch_mask = np.argmax(batch_mask, axis=-1)
-        preds = np.argmax(P, axis=-1)
-        for i in range(preds.shape[0]):
-            intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
-            accs += [intersect_vol / (np.prod(preds.shape[1:]))]
-            
-    model.valid_metrics['av_acc'] += [np.mean(accs)]
-    model.valid_metrics['std_acc'] += [np.std(accs)]
-    model.valid_metrics['av_loss'] += [av_loss]
+
+        results = sess.run(op_dict, feed_dict=feed_dict)
+
+        for key, val in results.items():
+            if 'loss' in key:
+                # eval_dict[key]    : total av. loss computed so far
+                # val==results[key] : the newest av. loss computed
+                eval_dict[key] = (vol*eval_dict[key]+val*b) / (vol+b)
+
+            if 'accs' in key:
+                # val in this case is actually posterior
+                preds = np.argmax(val, axis=-1)
+                nohot_batch_mask = np.argmax(batch_mask, axis=-1)
+                for i in range(b):
+                    intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
+                    eval_dict['accs'] = eval_dict['accs'] + \
+                                        [intersect_vol/(np.prod(preds.shape[1:]))]
+        vol += b
+
+    if update:
+        for metric in eval_metrics:
+            if metric=='av_acc':
+                model.valid_metrics[metric] += [np.mean(eval_dict['accs'])]
+            elif metric=='std_acc':
+                model.valid_metrics[metric] += [np.std(eval_dict['accs'])]
+            elif 'loss' in metric:
+                model.valid_metrics[metric] += [eval_dict[metric]]
+    else:
+        return eval_dict
 
 def full_slice_segment(model,sess,img_paths, op='prediction'):
 
@@ -77,7 +131,7 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
     else:
         c = model.y_.shape[-1].value
         out_tensor = np.zeros((c,h,w,z))
-    batches = NN_extended.gen_batch_inds(z, b)
+    batches = gen_batch_inds(z, b)
     for batch in batches:
         batch_inds = np.sort(batch)
         batch_X = np.zeros((len(batch_inds),h,w,m))
