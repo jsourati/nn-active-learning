@@ -3,7 +3,7 @@ import nrrd
 import pdb
 
 from patch_utils import extract_Hakims_data_path
-from .utils import gen_minibatch_labeled_unlabeled_inds, \
+from datasets.utils import gen_minibatch_labeled_unlabeled_inds, \
     gen_minibatch_materials, prepare_batch_BrVol
 
 class adols(object):
@@ -133,3 +133,35 @@ class adols(object):
             yield prepare_batch_BrVol(img_paths, mask_paths,
                                       img_shape, self.C, 
                                       slice_choice, None)
+
+def combine_two_dats(dat_1, dat_2, 
+                     load_train_valid=False):
+    
+    # create an empty data object
+    # (since it's empty it does not matter what
+    # function to use)
+    dat = adols(0, 0, 0, 0, load_train_valid)
+    
+    # loading the new data with the union of variables 
+    dat.L_indic = np.concatenate((dat_1.L_indic,
+                                  dat_2.L_indic))
+    dat.train_inds_1 = dat_1.train_inds
+    dat.train_inds_2 = dat_2.train_inds
+    dat.valid_inds_1 = dat_1.valid_inds
+    dat.valid_inds_2 = dat_2.valid_inds
+    dat.test_inds_1 = dat_1.test_inds
+    dat.test_inds_2 = dat_2.test_inds
+
+    dat.tr_img_paths = dat_1.tr_img_paths + dat_2.tr_img_paths
+    dat.tr_mask_paths = dat_1.tr_mask_paths + dat_2.tr_mask_paths
+    dat.val_img_paths = dat_1.val_img_paths + dat_2.val_img_paths
+    dat.val_mask_paths = dat_1.val_mask_paths + dat_2.val_mask_paths
+    dat.test_img_paths = dat_1.test_img_paths + dat_2.test_img_paths
+    dat.test_mask_paths = dat_1.test_mask_paths + dat_2.test_mask_paths
+    if load_train_valid:
+        dat.tr_imgs = dat_1.tr_imgs + dat_2.tr_imgs
+        dat.tr_masks = dat_1.tr_masks + dat_2.tr_masks
+        dat.val_imgs = dat_1.val_imgs + dat_2.val_imgs
+        dat.val_masks = dat_1.val_masks + dat_2.val_masks
+
+    return dat

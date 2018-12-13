@@ -9,9 +9,7 @@ import pdb
 import os
 
 from NNAL_tools import sample_query_dstr as sample_pmf
-import NN_extended
 import patch_utils
-import create_NN
 
 
 def gen_batch_inds(data_size, batch_size):

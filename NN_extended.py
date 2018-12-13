@@ -11,7 +11,7 @@ import sys
 #import cv2
 import os
 
-import model_utils
+from model_utils import eval_metrics
 import patch_utils
 import NNAL_tools
 import PW_NN
@@ -882,35 +882,48 @@ class CNN(object):
     def train(self,sess,
               global_step_limit,
               train_gen,
-              metrics=[],
-              valid_gen=None,
+              metric_gens=[],
               eval_step=100,
               save_path=None):
+        """ The argument `metric_gens` should be a list of
+        two elements: (1) the set of metrics to be computed
+        as the evaluation metrics, (2) the data generator to be used
+        for computing the metrics
+        """
 
+        if len(metric_gens)>0:
+            if not(isinstance(metric_gens[0], list)):
+                   metric_gens = [metric_gens]
+        for i in range(len(metric_gens)):
+            valid_dict = {}
+            for metric in metric_gens[i][0]:
+                metric_path = os.path.join(save_path,'%s_%d.txt'%(metric, i))
+                if os.path.exists(metric_path):
+                    M = list(np.loadtxt(metric_path))
+                else:
+                    M = []
+                valid_dict.update({metric: M})    
+            setattr(self, 'valid_metrics_%d'%i, valid_dict)
 
-        self.valid_metrics = {}
-        for metric in metrics:
-            metric_path = os.path.join(save_path, '%s.txt'%metric)
-            if os.path.exists(metric_path):
-                M = list(np.loadtxt(metric_path))
-            else:
-                M = []
-            self.valid_metrics.update({metric: M})
-
+        # training iterations
         while self.global_step.eval() < global_step_limit:
 
             batch_X, batch_Y = train_gen()
 
             # first, have an initial evaluation
             # (if a validation generator is given)
-            if valid_gen is not None:
-                if not(self.global_step.eval()%eval_step):
-                    self.eval(sess, valid_gen, 50)
-
+            if not(self.global_step.eval()%eval_step):
+                for i in range(len(metric_gens)):
+                    eval_metrics(self, sess, 
+                                 metric_gens[i][1], 
+                                 50,
+                                 True,
+                                 'valid_metrics_%d'%i)
                     if save_path is not None:
-                        [np.savetxt(os.path.join(save_path,'%s.txt'% metric), 
-                                    self.valid_metrics[metric]) 
-                         for metric in metrics];
+                        for metric in metric_gens[i][0]:
+                            np.savetxt(os.path.join(save_path,'%s_%d.txt'%(metric, i)), 
+                                       getattr(self, 'valid_metrics_%d'%i)[metric])
+                               
                         if self.global_step.eval()>0:
                             self.save_weights(os.path.join(save_path, 'model_pars.h5'))
                             if hasattr(self, 'MT'):
@@ -938,10 +951,6 @@ class CNN(object):
             if 'MT' in self.loss_name:
                 # update the teacher
                 sess.run(self.ema_apply)
-
-
-    def eval(self, sess, dat_gen, run=50):
-        model_utils.eval_metrics(self, sess, dat_gen, run)
             
         
     def get_gradients(self, grad_layers=[]):

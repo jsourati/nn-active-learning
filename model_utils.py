@@ -12,11 +12,22 @@ from datasets.utils import gen_batch_inds
 def eval_metrics(model, sess, 
                  dat_gen, 
                  slices=50,
-                 update=True):
+                 update=True,
+                 alt_attr=None):
+    """ The alternative attribute will be used if `alt_attr`
+    is given; otherwise `model.valid_metrics` will be used 
+    """
 
 
     # metrics
-    eval_metrics = list(model.valid_metrics.keys())
+    if alt_attr is not None:
+        assert hasattr(model,alt_attr), 'The alternative attribute'+\
+            ' does not exist.'
+        valid_metrics = getattr(model, alt_attr)
+    else:
+        valid_metrics = model.valid_metrics
+    eval_metrics = list(valid_metrics.keys())
+
     op_dict = {}
     eval_dict = {}
     model_inclusion = False
@@ -90,11 +101,11 @@ def eval_metrics(model, sess,
     if update:
         for metric in eval_metrics:
             if metric=='av_acc':
-                model.valid_metrics[metric] += [np.mean(eval_dict['accs'])]
+                valid_metrics[metric] += [np.mean(eval_dict['accs'])]
             elif metric=='std_acc':
-                model.valid_metrics[metric] += [np.std(eval_dict['accs'])]
+                valid_metrics[metric] += [np.std(eval_dict['accs'])]
             elif 'loss' in metric:
-                model.valid_metrics[metric] += [eval_dict[metric]]
+                valid_metrics[metric] += [eval_dict[metric]]
     else:
         return eval_dict
 
