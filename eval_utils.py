@@ -39,6 +39,10 @@ def eval_metrics(model, sess,
         op_dict.update({'accs': model.posteriors})
         eval_dict.update({'accs': []})
         model_inclusion = True
+    if 'av_F1' in eval_metrics:
+        op_dict.update({'F1s': model.posteriors})
+        eval_dict.update({'F1s': []})
+        model_inclusion = True
     if 'av_loss' in eval_metrics:
         op_dict.update({'av_loss': model.loss})
         eval_dict.update({'av_loss': 0.})
@@ -99,6 +103,14 @@ def eval_metrics(model, sess,
                     intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
                     eval_dict['accs'] = eval_dict['accs'] + \
                                         [intersect_vol/(np.prod(preds.shape[1:]))]
+            if 'F1s' in key:
+                # val in this case is actually posterior
+                preds = np.argmax(val, axis=-1)
+                nohot_batch_mask = np.argmax(batch_mask, axis=-1)
+                for i in range(b):
+                    eval_dict['F1s'] = eval_dict['F1s'] + \
+                                       [F1_scores(preds[i,:,:], nohot_batch_mask[i,:,:])]
+                
         vol += b
 
     if update:
@@ -107,6 +119,11 @@ def eval_metrics(model, sess,
                 valid_metrics[metric] += [np.mean(eval_dict['accs'])]
             elif metric=='std_acc':
                 valid_metrics[metric] += [np.std(eval_dict['accs'])]
+            elif metric=='av_F1':
+                valid_metrics[metric] += [np.mean(eval_dict['F1s'])]
+            elif metric=='std_F1':
+                valid_metrics[metric] += [np.std(eval_dict['F1s'])]
+
             elif 'loss' in metric:
                 valid_metrics[metric] += [eval_dict[metric]]
     else:

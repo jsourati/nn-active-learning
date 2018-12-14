@@ -11,7 +11,7 @@ import sys
 #import cv2
 import os
 
-from model_utils import eval_metrics
+from eval_utils import eval_metrics
 import patch_utils
 import NNAL_tools
 import PW_NN
