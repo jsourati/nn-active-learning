@@ -7,38 +7,37 @@ from .path_loader import extract_ISBI2015_MSLesion_data_path
 from .utils import gen_minibatch_labeled_unlabeled_inds, \
     gen_minibatch_materials, prepare_batch_BrVol
 
-class MS_challenge(object):
+class regular(object):
 
-    (
-        FLAIR_addrs,
-        MPRAGE_addrs,
-        PD_addrs,
-        T2_addrs,
-        mask1_addrs, 
-        mask2_addrs
-    ) = extract_ISBI2015_MSLesion_data_path('training')
     C = 2
 
-    def __init__(self, rnd_seed, 
+    def __init__(self,
+                 img_addrs,
+                 mask_addrs,
+                 data_reader,
+                 rnd_seed, 
                  labeled_size, 
                  unlabeled_size,
                  valid_size,
                  load_train_valid=False):
-        self.seed = rnd_seed
 
-        self.combined_paths = [[self.FLAIR_addrs[i], 
-                                self.MPRAGE_addrs[i], 
-                                self.PD_addrs[i], 
-                                self.T2_addrs[i]] 
-                               for i in range(len(self.FLAIR_addrs))]
+        self.seed = rnd_seed
+        self.data_reader = data_reader
+        self.mods = list(img_addrs.keys())
+        self.combined_paths = [[img_addrs[mod][i] for mod in self.mods] 
+                               for i in range(len(img_addrs[self.mods[0]]))]
+        self.mask_addrs = mask_addrs
         n = len(self.combined_paths)
 
-        rand_inds = np.random.RandomState(seed=rnd_seed).permutation(len(self.T2_addrs))
-        L_inds = rand_inds[:labeled_size]
-        UL_inds = rand_inds[labeled_size : labeled_size+unlabeled_size]
-        ntrain = labeled_size+unlabeled_size
-        self.train_inds = np.concatenate((L_inds, UL_inds))
-        self.L_indic = np.array([1]*len(L_inds) + [0]*len(UL_inds))
+        rand_inds = np.random.RandomState(seed=rnd_seed).permutation(n)
+        self.labeled_inds = rand_inds[:labeled_size]
+        self.unlabeled_inds = rand_inds[labeled_size : 
+                                        labeled_size+unlabeled_size]
+        self.train_inds = np.concatenate((self.labeled_inds, 
+                                          self.unlabeled_inds))
+        ntrain = len(self.train_inds)
+        self.L_indic = np.array([1]*len(self.labeled_inds) + \
+                                [0]*len(self.unlabeled_inds))
 
         self.valid_inds = rand_inds[ntrain : ntrain+valid_size]
         self.test_inds = list(set(np.arange(n)) - 
@@ -46,32 +45,29 @@ class MS_challenge(object):
                               set(self.valid_inds))
         
         self.tr_img_paths = [self.combined_paths[i] for i in self.train_inds]
-        self.tr_mask_paths = [self.mask1_addrs[i] for i in self.train_inds]
+        self.tr_mask_paths = [self.mask_addrs[i] for i in self.train_inds]
         self.val_img_paths = [self.combined_paths[i] for i in self.valid_inds]
-        self.val_mask_paths = [self.mask1_addrs[i] for i in self.valid_inds]
+        self.val_mask_paths = [self.mask_addrs[i] for i in self.valid_inds]
         self.test_img_paths = [self.combined_paths[i] for i in self.test_inds]
-        self.test_mask_paths = [self.mask1_addrs[i] for i in self.test_inds]
+        self.test_mask_paths = [self.mask_addrs[i] for i in self.test_inds]
 
         if load_train_valid:
             self.tr_imgs  = [[] for i in range(ntrain)]
             self.tr_masks = [[] for i in range(ntrain)]
             for i,_ in enumerate(self.train_inds):
-                for j in range(len(self.combined_paths[0])):
-                    nii_dat = nib.load(self.tr_img_paths[i][j])
-                    img = nii_dat.get_data()
+                for j in range(len(self.mods)):
+                    img = self.data_reader(self.tr_img_paths[i][j])
                     self.tr_imgs[i] += [img]
-                nii_dat = nib.load(self.tr_mask_paths[i])
-                mask = nii_dat.get_data()
+                mask = self.data_reader(self.tr_mask_paths[i])
                 self.tr_masks[i] = mask
+                pdb.set_trace()
             self.val_imgs  = [[] for i in range(len(self.valid_inds))]
             self.val_masks = [[] for i in range(len(self.valid_inds))]
             for i,_ in enumerate(self.valid_inds):
-                for j in range(len(self.combined_paths[0])):
-                    nii_dat = nib.load(self.val_img_paths[i][j])
-                    img = nii_dat.get_data()
+                for j in range(len(self.mods)):
+                    img = self.data_reader(self.val_img_paths[i][j])
                     self.val_imgs[i] += [img]
-                nii_dat = nib.load(self.val_mask_paths[i])
-                mask = nii_dat.get_data()
+                mask = self.data_reader(self.val_mask_paths[i])
                 self.val_masks[i] = mask
 
     def create_train_valid_gens(self, 

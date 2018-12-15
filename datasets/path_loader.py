@@ -48,8 +48,7 @@ def extract_Hakims_data_path():
                 name,mask_rest_of_path,
                 'c%s_s01_BrainMask.nrrd'% idx)]
         
-    return T1_addrs, T2_addrs, \
-        mask_addrs, Orig_addrs
+    return {'T1': T1_addrs, 'T2': T2_addrs}, mask_addrs
 
 def extract_newborn_data_path():
     """Preparing addresses pointing to
@@ -136,7 +135,7 @@ def extract_newborn_data_path():
     mask_addrs = list(np.array(mask_addrs)[sort_inds])
 
         
-    return T1_addrs, T2_addrs, mask_addrs, sub_codes
+    return {'T1': T1_addrs, 'T2': T2_addrs}, mask_addrs
 
 
 def extract_lesion_data_path(group='ACE', scans=[]):
@@ -189,7 +188,7 @@ def extract_lesion_data_path(group='ACE', scans=[]):
             root_dir,dir,mask_rest_of_path)
         mask_addrs += [mask_path]
 
-    return T1_addrs, T2_addrs, mask_addrs, sub_codes
+    return {'T1': T1_addrs, 'T2': T2_addrs}, mask_addrs
     
 
 def extract_NVM_data_path():
@@ -234,7 +233,7 @@ def extract_ISBI2015_MSLesion_data_path(test_or_training='train'):
 
     subdirs = np.sort(get_subdirs(root_dir, test_or_training))
 
-    img_addrs = {mod: [] for mod in modalities}
+    img_addrs = {mod.upper(): [] for mod in modalities}
     mask_addrs = {'mask1': [], 'mask2': []}
     for sbd in subdirs:
         
@@ -253,7 +252,7 @@ def extract_ISBI2015_MSLesion_data_path(test_or_training='train'):
             tp_inds = [int(name.split('_')[1]) for name in fnames]
             sort_inds = np.argsort(tp_inds)
             mod_names = list(np.array(fnames)[sort_inds])
-            img_addrs[mod] += [os.path.join(full_img_dir, name) for  
+            img_addrs[mod.upper()] += [os.path.join(full_img_dir, name) for  
                                name in mod_names]
 
         if test_or_training=='training':
@@ -276,12 +275,11 @@ def extract_ISBI2015_MSLesion_data_path(test_or_training='train'):
                                     name in mask2_names]
 
     if test_or_training=='training':
-        return img_addrs['flair'], img_addrs['mprage'], img_addrs['pd'],\
-            img_addrs['t2'], mask_addrs['mask1'], mask_addrs['mask2']
+        return img_addrs, mask_addrs
 
     else:
-        return img_addrs['flair'], img_addrs['mprage'], img_addrs['pd'],\
-            img_addrs['t2']
+        return img_addrs
+
 
 def get_subdirs(path, common_term=None):
     """returning all sub-directories of a 

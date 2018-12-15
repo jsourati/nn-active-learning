@@ -1,5 +1,6 @@
 from itertools import zip_longest
 import tensorflow as tf
+import nibabel as nib
 import numpy as np
 import imageio
 import shutil
@@ -146,7 +147,7 @@ def prepare_batch_BrVol(img_paths_or_mats,
                 slice_ind = np.random.randint(grnd.shape[-1])
             elif slice_choice=='non-uniform':
                 pmf = np.ones(grnd.shape[-1])
-                pmf[50:220] = 2
+                pmf[60:120] = 2
                 pmf /= np.sum(pmf)
                 slice_ind = sample_pmf(pmf, 1)[0]
         else:
@@ -203,4 +204,9 @@ def random_crop(img,h,w,init_h=None,init_w=None):
 
     return cropped_img, init_h, init_w
 
-#def gaussian_noise(img_batch):
+def nrrd_reader(path):
+    return nrrd.read(path)[0]
+
+def nii_reader(path):
+    dat = nib.load(path)
+    return dat.get_data()
