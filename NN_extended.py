@@ -1132,9 +1132,25 @@ def get_FCN_loss(model):
         # Loss 
         if model.loss_name=='CE':
             model.labels = tf.argmax(model.y_, axis=-1)
-            model.labeled_loc = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            model.vox_loss_weights = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            if model.bin_class_weights is not None:
+                class_zero = tf.multiply(
+                    tf.ones_like(model.labels, dtype=tf.float32),
+                    model.bin_class_weights[0])
+                class_one = tf.multiply(
+                    tf.ones_like(model.labels, dtype=tf.float32),
+                    model.bin_class_weights[1])
+                class_weights_tensor = tf.where(
+                    tf.equal(tf.to_float(model.labels), 1.),
+                    class_one,
+                    class_zero)
+                model.vox_loss_weights = tf.multiply(
+                    tf.to_float(model.vox_loss_weights),
+                    class_weights_tensor)
+                
             model.loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=model.output, weights=model.labeled_loc)
+                labels=model.labels, logits=model.output,
+                weights=model.vox_loss_weights)
 
         elif model.loss_name=='CE_wAUn':
             # the first half:   f^W(x)
@@ -1174,9 +1190,25 @@ def get_FCN_loss(model):
 
             # CE loss (using only lableed samples)
             model.labels = tf.argmax(model.y_, axis=-1)
-            model.labeled_loc = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            model.vox_loss_weights = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            if model.bin_class_weights is not None:
+                class_zero = tf.multiply(
+                    tf.ones_like(model.labels, dtype=tf.float32),
+                    model.bin_class_weights[0])
+                class_one = tf.multiply(
+                    tf.ones_like(model.labels, dtype=tf.float32),
+                    model.bin_class_weights[1])
+                class_weights_tensor = tf.where(
+                    tf.equal(tf.to_float(model.labels), 1.),
+                    class_one,
+                    class_zero)
+                model.vox_loss_weights = tf.multiply(
+                    tf.to_float(model.vox_loss_weights),
+                    class_weights_tensor)
+            
             model.CE_loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=model.output, weights=model.labeled_loc)
+                labels=model.labels, logits=model.output, w
+                eights=model.vox_loss_weights)
 
             # consistency loss (using all samples)
             output_shape = [model.output.shape[i].value for i in range(1,4)]
