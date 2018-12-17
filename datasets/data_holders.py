@@ -60,7 +60,6 @@ class regular(object):
                     self.tr_imgs[i] += [img]
                 mask = self.data_reader(self.tr_mask_paths[i])
                 self.tr_masks[i] = mask
-                pdb.set_trace()
             self.val_imgs  = [[] for i in range(len(self.valid_inds))]
             self.val_masks = [[] for i in range(len(self.valid_inds))]
             for i,_ in enumerate(self.valid_inds):
@@ -149,34 +148,25 @@ class regular(object):
                                       img_shape, self.C, 
                                       slice_choice, None)
 
-def combine_two_dats(dat_1, dat_2, 
-                     load_train_valid=False):
-    
-    # create an empty data object
-    # (since it's empty it does not matter what
-    # function to use)
-    dat = adols(0, 0, 0, 0, load_train_valid)
-    
-    # loading the new data with the union of variables 
-    dat.L_indic = np.concatenate((dat_1.L_indic,
-                                  dat_2.L_indic))
-    dat.train_inds_1 = dat_1.train_inds
-    dat.train_inds_2 = dat_2.train_inds
-    dat.valid_inds_1 = dat_1.valid_inds
-    dat.valid_inds_2 = dat_2.valid_inds
-    dat.test_inds_1 = dat_1.test_inds
-    dat.test_inds_2 = dat_2.test_inds
+    def combine_with_other_data(self, dat_2):
 
-    dat.tr_img_paths = dat_1.tr_img_paths + dat_2.tr_img_paths
-    dat.tr_mask_paths = dat_1.tr_mask_paths + dat_2.tr_mask_paths
-    dat.val_img_paths = dat_1.val_img_paths + dat_2.val_img_paths
-    dat.val_mask_paths = dat_1.val_mask_paths + dat_2.val_mask_paths
-    dat.test_img_paths = dat_1.test_img_paths + dat_2.test_img_paths
-    dat.test_mask_paths = dat_1.test_mask_paths + dat_2.test_mask_paths
-    if load_train_valid:
-        dat.tr_imgs = dat_1.tr_imgs + dat_2.tr_imgs
-        dat.tr_masks = dat_1.tr_masks + dat_2.tr_masks
-        dat.val_imgs = dat_1.val_imgs + dat_2.val_imgs
-        dat.val_masks = dat_1.val_masks + dat_2.val_masks
+        self.L_indic = np.concatenate((self.L_indic, dat_2.L_indic))
+        # storing indices of the other data in case we need
+        self.train_inds_2 = dat_2.train_inds
+        self.valid_inds_2 = dat_2.train_inds
+        self.test_inds_2  = dat_2.test_inds
+        self.labeled_inds_2   = dat_2.labeled_inds
+        self.unlabeled_inds_2 = dat_2.unlabeled_inds
 
-    return dat
+        self.tr_img_paths = self.tr_img_paths + dat_2.tr_img_paths
+        self.tr_mask_paths = self.tr_mask_paths + dat_2.tr_mask_paths
+        self.val_img_paths = self.val_img_paths + dat_2.val_img_paths
+        self.val_mask_paths = self.val_mask_paths + dat_2.val_mask_paths
+        self.test_img_paths = self.test_img_paths + dat_2.test_img_paths
+        self.test_mask_paths = self.test_mask_paths + dat_2.test_mask_paths
+
+        if hasattr(self, 'tr_imgs') and hasattr(dat_2, 'tr_imgs'):
+            self.tr_imgs = self.tr_imgs + dat_2.tr_imgs
+            self.tr_masks = self.tr_masks + dat_2.tr_masks
+            self.val_imgs = self.val_imgs + dat_2.val_imgs
+            self.val_masks = self.val_masks + dat_2.val_masks
