@@ -29,6 +29,7 @@ class CNN(object):
         'lr_schedule': lambda t: exponential_decay(1e-3,t,0.1),
         'regularizer': None,
         'weight_decay': 1e-4,
+        'bin_class_weights': None,
         'BN_decay': 0.999,
         'BN_epsilon': 1e-3,
 
@@ -561,8 +562,10 @@ class CNN(object):
             kwargs.setdefault('decay', self.DEFAULT_HYPERS['decay'])
             kwargs.setdefault('momentum', self.DEFAULT_HYPERS['momentum'])
             kwargs.setdefault('epsilon', self.DEFAULT_HYPERS['epsilon'])
-        # weight regularization
+        # weight regularization 
         kwargs.setdefault('regularizer', self.DEFAULT_HYPERS['regularizer'])
+        # binary class weighting
+        kwargs.setdefault('bin_class_weights', self.DEFAULT_HYPERS['bin_class_weights'])
         if kwargs['regularizer'] is not None:
             kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
         # aleatoric uncertainty
@@ -1207,8 +1210,8 @@ def get_FCN_loss(model):
                     class_weights_tensor)
             
             model.CE_loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=model.output, w
-                eights=model.vox_loss_weights)
+                labels=model.labels, logits=model.output,
+                weights=model.vox_loss_weights)
 
             # consistency loss (using all samples)
             output_shape = [model.output.shape[i].value for i in range(1,4)]
