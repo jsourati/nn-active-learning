@@ -30,6 +30,7 @@ class CNN(object):
         'regularizer': None,
         'weight_decay': 1e-4,
         'bin_class_weights': None,
+        'focal_gamma': None,
         'BN_decay': 0.999,
         'BN_epsilon': 1e-3,
 
@@ -251,6 +252,7 @@ class CNN(object):
                 self.y_ = tf.placeholder(tf.float32, 
                                          [c, None],
                                          name='labels')
+                self.labels = tf.argmax(self.y_, axis=0)
             else:
                 h = self.output.shape[1].value
                 w = self.output.shape[2].value
@@ -260,9 +262,11 @@ class CNN(object):
                     self.posteriors = tf.nn.softmax(
                         self.output[:,:,:,:c])
                 else:
-                    self.posteriors = tf.nn.softmax(self.output)
-                self.y_ = tf.placeholder(tf.float32,[None,h,w,c])
-            
+                    self.posteriors = tf.nn.softmax(self.output, name='posterior')
+                self.y_ = tf.placeholder(tf.float32,[None,h,w,c], name='one_hot_labels')
+                self.labels = tf.argmax(self.y_, axis=-1, name='labels')
+                self.prediction = tf.argmax(self.posteriors, axis=-1, name='prediction')
+
     def add_layer(self, 
                   layer_name,
                   layer_type, 
@@ -566,6 +570,7 @@ class CNN(object):
         kwargs.setdefault('regularizer', self.DEFAULT_HYPERS['regularizer'])
         # binary class weighting
         kwargs.setdefault('bin_class_weights', self.DEFAULT_HYPERS['bin_class_weights'])
+        kwargs.setdefault('focal_gamma', self.DEFAULT_HYPERS['focal_gamma'])
         if kwargs['regularizer'] is not None:
             kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
         # aleatoric uncertainty
@@ -1134,8 +1139,22 @@ def get_FCN_loss(model):
     with tf.name_scope(model.name):
         # Loss 
         if model.loss_name=='CE':
-            model.labels = tf.argmax(model.y_, axis=-1)
-            model.vox_loss_weights = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            # vox_labeled_loss_weights will be the weights of
+            # labeled samples in CE loss or its imbalanced variants 
+            model.vox_labeled_loss_weights = tf.to_float(
+                tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+            )
+            
+            # if focal loss is being used with CE
+            if model.focal_gamma is not None:
+                model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
+                                    model.posteriors[:,:,:,1],
+                                    model.posteriors[:,:,:,0])
+                focal_weights = tf.pow(1.-model.pt, model.focal_gamma)
+                model.vox_labeled_loss_weights = tf.multiply(
+                    focal_weights,
+                    model.vox_labeled_loss_weights)
+
             if model.bin_class_weights is not None:
                 class_zero = tf.multiply(
                     tf.ones_like(model.labels, dtype=tf.float32),
@@ -1147,13 +1166,13 @@ def get_FCN_loss(model):
                     tf.equal(tf.to_float(model.labels), 1.),
                     class_one,
                     class_zero)
-                model.vox_loss_weights = tf.multiply(
-                    tf.to_float(model.vox_loss_weights),
+                model.vox_labeled_loss_weights = tf.multiply(
+                    model.vox_labeled_loss_weights,
                     class_weights_tensor)
                 
             model.loss = tf.losses.sparse_softmax_cross_entropy(
                 labels=model.labels, logits=model.output,
-                weights=model.vox_loss_weights)
+                weights=model.vox_labeled_loss_weights)
 
         elif model.loss_name=='CE_wAUn':
             # the first half:   f^W(x)
@@ -1192,7 +1211,6 @@ def get_FCN_loss(model):
         elif model.loss_name=='CE_MT':
 
             # CE loss (using only lableed samples)
-            model.labels = tf.argmax(model.y_, axis=-1)
             model.vox_loss_weights = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
             if model.bin_class_weights is not None:
                 class_zero = tf.multiply(
@@ -1256,6 +1274,18 @@ def get_FCN_loss(model):
             else:
                 get_FCN_loss(model.MT)
 
+        elif model.loss_name=='F_1':
+            model.TP = tf.reduce_sum(tf.multiply(model.labels, model.prediction))
+            model.FP = tf.reduce_sum(tf.multiply(1-model.labels, model.prediction))
+            model.P  = tf.reduce_sum(model.labels)
+            model.TPFP = tf.add(model.TP, model.FP)
+            denom = tf.add(model.P, model.TPFP)
+
+            model.loss = tf.cond(tf.equal(denom, 0),
+                                 lambda: tf.constant(0.),
+                                 lambda: tf.div(
+                                     tf.to_float(2*model.TP), 
+                                     tf.to_float(denom)))
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with

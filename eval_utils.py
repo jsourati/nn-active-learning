@@ -9,8 +9,6 @@ import os
 import NN_extended
 from datasets.utils import gen_batch_inds
 from patch_utils import extract_Hakims_data_path
-from PW_analyze_results import F1_scores
-
 
 def eval_metrics(model, sess, 
                  dat_gen, 
@@ -109,7 +107,7 @@ def eval_metrics(model, sess,
                 nohot_batch_mask = np.argmax(batch_mask, axis=-1)
                 for i in range(b):
                     eval_dict['F1s'] = eval_dict['F1s'] + \
-                                       [F1_scores(preds[i,:,:], nohot_batch_mask[i,:,:])]
+                                       [F1_score(preds[i,:,:], nohot_batch_mask[i,:,:])]
                 
         vol += b
 
@@ -262,3 +260,11 @@ def full_eval_for_adols(models_dict, sess, save_path, dat):
                    labeled_A_stats)
         np.savetxt(os.path.join(save_path, 'unlabeled_A_stats.txt'), 
                    unlabeled_A_stats)
+
+def F1_score(preds,labels):
+
+    TP = np.sum(preds*labels)
+    P = np.sum(labels)
+    TPFP = np.sum(preds)
+
+    return 2*TP/(P+TPFP) if P+TPFP!=0. else 1.
