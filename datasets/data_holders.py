@@ -5,7 +5,7 @@ import pdb
 
 from .path_loader import extract_ISBI2015_MSLesion_data_path
 from .utils import gen_minibatch_labeled_unlabeled_inds, \
-    gen_minibatch_materials, prepare_batch_BrVol
+    gen_minibatch_materials, global2local_inds, prepare_batch_BrVol
 
 class regular(object):
 
@@ -23,10 +23,11 @@ class regular(object):
 
         self.seed = rnd_seed
         self.data_reader = data_reader
+        self.img_addrs = img_addrs
+        self.mask_addrs = mask_addrs
         self.mods = list(img_addrs.keys())
         self.combined_paths = [[img_addrs[mod][i] for mod in self.mods] 
                                for i in range(len(img_addrs[self.mods[0]]))]
-        self.mask_addrs = mask_addrs
         n = len(self.combined_paths)
 
         rand_inds = np.random.RandomState(seed=rnd_seed).permutation(n)
@@ -74,52 +75,53 @@ class regular(object):
                                 img_shape,
                                 n_labeled_train=None):
 
-        train_gen_inds = gen_minibatch_labeled_unlabeled_inds(
-            self.L_indic, batch_size, n_labeled_train)
-        train_gen = lambda: self.train_generator(
-            train_gen_inds, img_shape, 'non-uniform', True)
+        # training
+        self.train_n_slices = [self.tr_masks[i].shape[2] 
+                               for i in range(len(self.tr_masks))]
+        self.slices_L_indic = np.concatenate(
+            [np.ones(self.train_n_slices[i])*self.L_indic[i] 
+             for i in range(len(self.tr_masks))])
+        train_generator = gen_minibatch_labeled_unlabeled_inds(
+            self.slices_L_indic, batch_size, n_labeled_train)
+        train_gen_slices = lambda: self.generate_training_stuff(
+            img_shape, train_generator)
+
 
         valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
-            self.L_indic, batch_size)
-        valid_gen = lambda: self.train_generator(
-            valid_gen_inds, img_shape, 'uniform', False)
+            np.ones(len(self.val_img_paths)), batch_size)
+        valid_gen = lambda: self.valid_generator(
+            valid_gen_inds, img_shape, 'uniform')
 
-        self.train_gen_fn = train_gen
+        self.train_gen_fn = train_gen_slices
         self.valid_gen_fn = valid_gen
 
-    def train_generator(self, generator,
-                        img_shape, 
-                        slice_choice='uniform', 
-                        SeSu_phase=True):
-    
-        if hasattr(self, 'tr_imgs'):
-            (img_paths_or_mats, 
-             mask_paths_or_mats,
-             L_indic) = gen_minibatch_materials(
-                 generator, 
-                 self.tr_imgs, 
-                 self.tr_masks, 
-                 self.L_indic)
+    def generate_training_stuff(self,
+                                img_shape, 
+                                inds_generator):
+        # training
+        inds = np.concatenate(next(inds_generator))
+        # extracting slice indices from the generated indices
+        img_slice_inds = global2local_inds(inds, self.train_n_slices)
+        img_inds = np.concatenate([
+            np.ones(len(img_slice_inds[i]))*i for i in range(len(img_slice_inds))])
+        img_slice_inds = np.concatenate(img_slice_inds)
+        imgs = [self.tr_imgs[int(i)] for i in img_inds]
+        masks = [self.tr_masks[int(i)] for i in img_inds]
+        if np.any(self.L_indic==0):
+            inds_L_indic = np.ones(len(img_inds))
+            inds_L_indic[self.L_indic[img_inds]==0] = 0
         else:
-            (img_paths_or_mats,
-             mask_paths_or_mats,
-             L_indic)= gen_minibatch_materials(
-                 generator, 
-                 self.tr_img_paths, 
-                 self.tr_mask_paths,
-                 self.L_indic)
+            inds_L_indic=None
 
-        if not(SeSu_phase): L_indic=None
-        return prepare_batch_BrVol(img_paths_or_mats, 
-                                  mask_paths_or_mats, 
-                                  img_shape, 
-                                  self.C, slice_choice, 
-                                  L_indic)
+        return prepare_batch_BrVol(
+            imgs, masks, img_shape, self.C, img_slice_inds, inds_L_indic)
 
-    def valid_generator(self, img_shape, batch_size=3, 
-                       slice_choice='uniform'):
+
+    def valid_generator(self, generator, 
+                        img_shape,
+                        slice_choice='uniform'):
     
-        if hasattr(self, 'tr_imgs'):
+        if hasattr(self, 'val_imgs'):
             (img_paths_or_mats, 
              mask_paths_or_mats) = gen_minibatch_materials(
                  generator, 
@@ -127,15 +129,15 @@ class regular(object):
                  self.val_masks)
         else:
             (img_paths_or_mats,
-             mask_paths_or_mats)= gen_minibatch_materials(
+             mask_paths_or_mats) = gen_minibatch_materials(
                  generator, 
-                 self.tr_img_paths, 
-                 self.tr_mask_paths)
+                 self.val_img_paths, 
+                 self.val_mask_paths)
 
         return prepare_batch_BrVol(img_paths_or_mats, 
-                                  mask_paths_or_mats, 
-                                  img_shape, 
-                                  self.C, slice_choice)
+                                   mask_paths_or_mats, 
+                                   img_shape, 
+                                   self.C, slice_choice)
 
 
     def test_generator(self, img_shape, batch_size=3, 

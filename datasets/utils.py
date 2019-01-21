@@ -49,6 +49,7 @@ def gen_minibatch_labeled_unlabeled_inds(
         def eternal_gen():
             while True:
                 for inds in gen_batch_inds(n, batch_size):
+                    if len(inds)==1: continue
                     yield inds
         gen_tuple = (eternal_gen(),)
 
@@ -203,6 +204,44 @@ def random_crop(img,h,w,init_h=None,init_w=None):
         cropped_img = img[init_h:init_h+h, init_w:init_w+w]
 
     return cropped_img, init_h, init_w
+
+def global2local_inds(batch_inds,
+                      set_sizes):
+    """Having a finite set of sets with
+    ordered elements and aiming to extract
+    a subset of them, this function takes
+    global indices of the elements in this
+    subset and output which elements in
+    each set belongs to this subset; the 
+    given subset can be one of the batches
+    after batch-ifying voxels of a set of
+    images
+    
+    By "global index", we mean an indexing
+    system that we can refer to a specific
+    element of one of the sets uniquely. 
+    Here, assuming that the sets and their
+    elements are ordered, our global indexing 
+    system refers to the i-th element of the
+    j-th set by an index calculated by
+    `len(S1) + len(S2) + .. len(Si-1) + j-1`
+    
+    where `S1` to `Si-1` are the sets that
+    are located before the target i-th set
+    """
+
+    cumvols = np.append(
+        -1, np.cumsum(set_sizes)-1)
+    
+    # finding the set indices 
+    set_inds = cumvols.searchsorted(
+        batch_inds) - 1
+    # local index for each set
+    local_inds = [np.array(batch_inds)[
+        set_inds==i]-cumvols[i]-1 for i in
+                  range(len(set_sizes))]
+
+    return local_inds
 
 def nrrd_reader(path):
     return nrrd.read(path)[0]
