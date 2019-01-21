@@ -127,17 +127,17 @@ def eval_metrics(model, sess,
     else:
         return eval_dict
 
-def full_slice_segment(model,sess,img_paths, op='prediction'):
+def full_slice_segment(model,sess,img_paths, data_reader, op='prediction'):
 
     # size of batch
     b = 3
 
     if isinstance(img_paths, list):
         m = len(img_paths)
-        h,w,z = nrrd.read(img_paths[0])[0].shape
+        h,w,z = data_reader(img_paths[0]).shape
     else:
         m = 1
-        h,w,z = nrrd.read(img_paths).shape
+        h,w,z = data_reader(img_paths).shape
 
     hx,wx = [model.x.shape[1].value, model.x.shape[2].value]
     assert h==hx and w==wx, 'Shape of data and model.x should match.'
@@ -147,9 +147,9 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
     img_list = []
     for i in range(m):
         if m==1:
-            img_list = [nrrd.read(img_paths)[0]] 
+            img_list = [data_reader(img_paths)] 
         else:
-            img_list += [nrrd.read(img_paths[i])[0]]
+            img_list += [data_reader(img_paths[i])]
 
     # performing the op for all slices in batches
     if op=='prediction':
@@ -201,23 +201,25 @@ def full_slice_segment(model,sess,img_paths, op='prediction'):
 
     return out_tensor
 
-def full_eval_for_adols(models_dict, sess, save_path, dat):
-
-    T1_addrs, T2_addrs, mask_addrs, _ = extract_Hakims_data_path()
+def full_eval(models_dict, 
+              sess, 
+              save_path, 
+              dat):
         
-    accs = np.zeros(len(T1_addrs))
-    Fscores = np.zeros(len(T1_addrs))
-    for i in range(len(T1_addrs)):
-        mask = nrrd.read(mask_addrs[i])[0]
+    n = len(dat.img_addrs[dat.mods[0]])
+    accs = np.zeros(n)
+    Fscores = np.zeros(n)
+    for i in range(n):
+        mask = nrrd.read(dat.mask_addrs[i])[0]
         shape = mask.shape[:2]
-        img_paths = [T1_addrs[i], T2_addrs[i]]
+        img_paths = [dat.img_addrs[mod][i] for mod in dat.mods]
 
         model_key = '{}'.format(shape)
         model = models_dict[model_key]
-        preds = full_slice_segment(model,sess,img_paths)
+        preds = full_slice_segment(model,sess,img_paths, dat.reader)
 
         accs[i] = np.sum(preds==mask) / np.prod(mask.shape)
-        Fscores[i] = F1_scores(preds, mask)
+        Fscores[i] = F1_score(preds, mask)
         
     np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
     np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
@@ -267,4 +269,4 @@ def F1_score(preds,labels):
     P = np.sum(labels)
     TPFP = np.sum(preds)
 
-    return 2*TP/(P+TPFP) if P+TPFP!=0. else 1.
+    return 2*TP/(P+TPFP) if P+TPFP!=0. else 0.
