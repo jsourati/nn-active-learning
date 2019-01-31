@@ -210,7 +210,7 @@ def full_eval(models_dict,
     accs = np.zeros(n)
     Fscores = np.zeros(n)
     for i in range(n):
-        mask = nrrd.read(dat.mask_addrs[i])[0]
+        mask = dat.reader(dat.mask_addrs[i])
         shape = mask.shape[:2]
         img_paths = [dat.img_addrs[mod][i] for mod in dat.mods]
 
@@ -270,3 +270,28 @@ def F1_score(preds,labels):
     TPFP = np.sum(preds)
 
     return 2*TP/(P+TPFP) if P+TPFP!=0. else 0.
+
+def models_dict_for_different_sizes(model_builder,
+                                    dat):
+    """Form a dictionary of FCN models, which has a model
+    for each image size exists in the given data set
+
+    Model builder should be a function that only takes an
+    input size and a model name, and returns a model object 
+    that accepts inputs of the given size
+    """
+
+    shapes = []
+    for i in range(len(dat.img_addrs[dat.mods[0]])):
+        img = dat.data_reader(dat.img_addrs[dat.mods[0]][i])
+        shapes += [img.shape[:2]]
+    shapes = np.unique(set(shapes))[0]
+
+    models_dict = {}
+    for shape in shapes:
+        key = str(shape)
+        model_name = '{}x{}'.format(shape[0],shape[1])
+        models_dict[key] = model_builder(list(shape), model_name)
+        models_dict[key].add_assign_ops()
+
+    return models_dict
