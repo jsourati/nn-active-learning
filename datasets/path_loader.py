@@ -221,7 +221,7 @@ def extract_NVM_data_path():
 
     return T1_addrs, parc_addrs, mask_addrs, list(sub_codes)
 
-def extract_ISBI2015_MSLesion_data_path(test_or_training='train'):
+def extract_ISBI2015_MSLesion_data_path(test_or_training='training'):
 
     modalities = ['flair', 'mprage', 'pd', 't2']
 
