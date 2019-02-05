@@ -43,8 +43,11 @@ class CNN(object):
         'epsilon': 1e-10,
 
         # Aleatoric uncertainty
+        'AU_4L': False,  # for labeled samples
+        'AU_4U': False,  # for unlabeled samples
         'MC_T': 10,
         # Mean Teacher semi-supervised
+        'MT_SSL': False,
         'MT_ema_decay_schedule': lambda: tf.constant(0.999),
         'MT_input_noise': 0,
         'max_cons_coeff': 1e-3,
@@ -257,10 +260,10 @@ class CNN(object):
                 h = self.output.shape[1].value
                 w = self.output.shape[2].value
                 c = self.output.shape[3].value
-                if hasattr(self, 'MC_T'):
+                if self.AU_4L:
                     c = int(c/2)
-                    self.posteriors = tf.nn.softmax(
-                        self.output[:,:,:,:c])
+                    # corrupting outputs using AU values for labeled samples
+                    corrput_output_wAU_4L_FCN(self)
                 else:
                     self.posteriors = tf.nn.softmax(self.output, name='posterior')
                 self.y_ = tf.placeholder(tf.float32,[None,h,w,c], name='one_hot_labels')
@@ -574,10 +577,13 @@ class CNN(object):
         if kwargs['regularizer'] is not None:
             kwargs.setdefault('weight_decay', self.DEFAULT_HYPERS['weight_decay'])
         # aleatoric uncertainty
-        if 'wAUn' in kwargs['loss_name']:
+        kwargs.setdefault('AU_4L', self.DEFAULT_HYPERS['AU_4L'])
+        kwargs.setdefault('AU_4U', self.DEFAULT_HYPERS['AU_4U'])
+        if kwargs['AU_4L']:
             kwargs.setdefault('MC_T', self.DEFAULT_HYPERS['MC_T'])
         # consistency-based semi-supervised
-        if 'MT' in kwargs['loss_name']:
+        kwargs.setdefault('MT_SSL', self.DEFAULT_HYPERS['MT_SSL'])
+        if kwargs['MT_SSL']:
             kwargs.setdefault('MT_ema_decay_schedule', self.DEFAULT_HYPERS['MT_ema_decay_schedule'])
             kwargs['MT_ema_decay'] = kwargs['MT_ema_decay_schedule'](self.global_step)
             kwargs.setdefault('MT_input_noise', self.DEFAULT_HYPERS['MT_input_noise'])
@@ -946,7 +952,7 @@ class CNN(object):
                          self.is_training: True}
             # setting up extra feed-dict
             X_feed_dict = {}
-            if 'MT' in self.loss_name:
+            if self.MT_SSL:
                 MT_output = MT_guidance(self, sess, batch_X, self.MT_input_noise)
                 X_feed_dict = {self.MT.x: batch_X,
                                self.MT.keep_prob:1.-self.MT.dropout_rate,
@@ -1174,62 +1180,7 @@ def get_FCN_loss(model):
                 labels=model.labels, logits=model.output,
                 weights=model.vox_labeled_loss_weights)
 
-        elif model.loss_name=='CE_wAUn':
-            # the first half:   f^W(x)
-            # the second half:  sigma^W(x)
-            c = model.output.shape[-1].value
-            assert not(c%2), 'In models with Aleatoric uncertainty'+\
-                ", the number of channels in the output should be even."
-            # c is definitely even
-            fW = model.output[:,:,:,:int(c/2)]
-            sigmaW = model.output[:,:,:,int(c/2):]
-
-            # eps_t (for each t, the same eps_t for the whole batch)
-            # t=1,...,T (=model.MC_T)
-            noise_dist = tf.distributions.Laplace(0.,1.)
-            eps = noise_dist.sample([model.MC_T])
-            #eps = tf.random_normal([model.MC_T])
-            model.MC_probs = 0.
-            for t in range(model.MC_T):
-                logits_t = tf.add(fW, tf.scalar_mul(
-                    eps[t], sigmaW))
-                model.MC_probs += tf.nn.softmax(logits_t, dim=-1)
-
-            model.MC_probs = tf.divide(model.MC_probs,model.MC_T) + \
-                             1e-7
-
-            # taking the log of MC-probs in the loss so that when
-            # passing to tf.nn.softmax_cross_entropy_with_logits
-            # it won't change the average PMF probabilities
-            model.loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(
-                    labels=model.y_, 
-                    logits=tf.log(model.MC_probs), 
-                    dim=-1),
-                name='Loss')
-
-        elif model.loss_name=='CE_MT':
-
-            # CE loss (using only lableed samples)
-            model.vox_loss_weights = tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
-            if model.bin_class_weights is not None:
-                class_zero = tf.multiply(
-                    tf.ones_like(model.labels, dtype=tf.float32),
-                    model.bin_class_weights[0])
-                class_one = tf.multiply(
-                    tf.ones_like(model.labels, dtype=tf.float32),
-                    model.bin_class_weights[1])
-                class_weights_tensor = tf.where(
-                    tf.equal(tf.to_float(model.labels), 1.),
-                    class_one,
-                    class_zero)
-                model.vox_loss_weights = tf.multiply(
-                    tf.to_float(model.vox_loss_weights),
-                    class_weights_tensor)
-            
-            model.CE_loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=model.output,
-                weights=model.vox_loss_weights)
+        if model.MT_SSL:
 
             # consistency loss (using all samples)
             output_shape = [model.output.shape[i].value for i in range(1,4)]
@@ -1244,7 +1195,7 @@ def get_FCN_loss(model):
             model.cons_coeff = tf.multiply(sigmoid_rampup_value,
                                            model.max_cons_coeff)
             # total loss
-            model.loss = tf.add(model.CE_loss, 
+            model.loss = tf.add(model.loss, 
                                 tf.multiply(model.cons_coeff, model.cons_loss))
 
             # set up the EMA operations and MT model too
@@ -1269,23 +1220,6 @@ def get_FCN_loss(model):
                                                  model.dropout_rate],
                            custom_getter=custom_getter)
             model.MT.output = tf.stop_gradient(model.MT.output)
-            if len(model.MT.output.shape)==2:
-                get_loss(model.MT)
-            else:
-                get_FCN_loss(model.MT)
-
-        elif model.loss_name=='F_1':
-            model.TP = tf.reduce_sum(tf.multiply(model.labels, model.prediction))
-            model.FP = tf.reduce_sum(tf.multiply(1-model.labels, model.prediction))
-            model.P  = tf.reduce_sum(model.labels)
-            model.TPFP = tf.add(model.TP, model.FP)
-            denom = tf.add(model.P, model.TPFP)
-
-            model.loss = tf.cond(tf.equal(denom, 0),
-                                 lambda: tf.constant(0.),
-                                 lambda: tf.div(
-                                     tf.to_float(2*model.TP), 
-                                     tf.to_float(denom)))
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with
@@ -1444,6 +1378,31 @@ def MT_guidance(model, sess, batch_X, noise_var=0):
 
     return MT_posts
 
+def corrupt_output_wAU_4L_FCN(model):
+    """Corrputing outut with AU for labeled samples
+    in FCN models 
+    """
+    c = model.output.shape[3].value
+
+    # c is definitely even
+    model.clean_output = model.output[:,:,:,:int(c/2)]
+    model.AU_4L_vals = model.output[:,:,:,int(c/2):]
+
+    # model posterior will be based on clean output
+    model.posteriors = tf.nn.softmax(model.clean_output)
+
+    # eps_t (for each t, the same eps_t for the whole batch)
+    # t=1,...,T (=model.MC_T)
+    noise_dist = tf.distributions.Laplace(0.,1.)
+    eps = noise_dist.sample([model.MC_T])
+    #eps = tf.random_normal([model.MC_T])
+    model.output = 0.
+    for t in range(model.MC_T):
+        logits_t = tf.add(model.clean_output, 
+                          tf.scalar_mul(eps[t], model.AU_4L_vals))
+        model.output += tf.nn.softmax(logits_t, dim=-1)
+
+        model.output = tf.divide(model.MC_probs,model.MC_T) + 1e-7
 
 def weight_variable(name, shape, reg, custom_getter=None):
     """Creating a kernel tensor 
