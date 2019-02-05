@@ -57,13 +57,13 @@ class regular(object):
                                               self.unlabeled_inds))
         else:
             rand_inds = np.random.RandomState(seed=rnd_seed).permutation(n)
-            self.labeled_inds = rand_inds[:labeled_size]
-            self.unlabeled_inds = rand_inds[labeled_size : 
-                                            labeled_size+unlabeled_size]
+            self.labeled_inds = rand_inds[:LUV_inds_or_sizes[0]]
+            self.unlabeled_inds = rand_inds[LUV_inds_or_sizes[0] : 
+                                            LUV_inds_or_sizes[0]+LUV_inds_or_sizes[1]]
             self.train_inds = np.concatenate((self.labeled_inds, 
                                               self.unlabeled_inds))
             ntrain = len(self.train_inds)
-            self.valid_inds = rand_inds[ntrain : ntrain+valid_size]
+            self.valid_inds = rand_inds[ntrain : ntrain+LUV_inds_or_sizes[2]]
         
 
         self.L_indic = np.array([1]*len(self.labeled_inds) + \
@@ -136,7 +136,8 @@ class regular(object):
         # extracting slice indices from the generated indices
         img_slice_inds = global2local_inds(inds, self.train_n_slices)
         img_inds = np.concatenate([
-            np.ones(len(img_slice_inds[i]))*i for i in range(len(img_slice_inds))])
+            np.ones(len(img_slice_inds[i]),dtype=int)*i 
+            for i in range(len(img_slice_inds))])
         img_slice_inds = np.concatenate(img_slice_inds)
         imgs = [self.tr_imgs[int(i)] for i in img_inds]
         masks = [self.tr_masks[int(i)] for i in img_inds]
