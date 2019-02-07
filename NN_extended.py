@@ -260,15 +260,22 @@ class CNN(object):
                 h = self.output.shape[1].value
                 w = self.output.shape[2].value
                 c = self.output.shape[3].value
-                if self.AU_4L:
+                if self.AU_4L or self.AU_4U:
+                    # c is definitely even
                     c = int(c/2)
-                    # corrupting outputs using AU values for labeled samples
-                    corrput_output_wAU_4L_FCN(self)
+                    self.clean_output = self.output[:,:,:,:c]
+                    self.AU_vals = self.output[:,:,:,c:]
+                    self.posteriors = tf.nn.softmax(self.clean_output)
+                    # if AU values are to be used with labeled samples,
+                    # corrupt the outputs with AU-dependent noise
+                    if self.AU_4L:
+                        corrupt_output_wAU_4L_FCN(self)
                 else:
                     self.posteriors = tf.nn.softmax(self.output, name='posterior')
                 self.y_ = tf.placeholder(tf.float32,[None,h,w,c], name='one_hot_labels')
                 self.labels = tf.argmax(self.y_, axis=-1, name='labels')
                 self.prediction = tf.argmax(self.posteriors, axis=-1, name='prediction')
+                self.class_num = c
 
     def add_layer(self, 
                   layer_name,
@@ -962,7 +969,7 @@ class CNN(object):
             feed_dict.update(X_feed_dict)
             sess.run(self.train_step, feed_dict=feed_dict);
 
-            if 'MT' in self.loss_name:
+            if self.MT_SSL:
                 # update the teacher
                 sess.run(self.ema_apply)
             
@@ -1183,11 +1190,22 @@ def get_FCN_loss(model):
         if model.MT_SSL:
 
             # consistency loss (using all samples)
-            output_shape = [model.output.shape[i].value for i in range(1,4)]
+            output_shape = [model.output.shape[1].value,
+                            model.output.shape[2].value,
+                            model.class_num]
             model.output_placeholder = tf.placeholder(tf.float32, 
                                                       [None,]+output_shape)
-            model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
-                model.posteriors-model.output_placeholder), axis = [1,2,3]))
+            if model.AU_4U:
+                # if AU should be used for unlabeled samples, include the
+                # AU values inside the MT consistency terms
+                # AU_vals = log(sigma(x)^2)
+                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
+                    tf.multiply(tf.square(model.posteriors-model.output_placeholder),
+                                tf.exp(-model.AU_vals)) + 0.5*model.AU_vals, 
+                    axis = [1,2,3]))
+            else:
+                model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
+                    model.posteriors-model.output_placeholder), axis = [1,2,3]))
 
             # consistency coefficient
             sigmoid_rampup_value = sigmoid_rampup(model.global_step,
@@ -1207,7 +1225,6 @@ def get_FCN_loss(model):
                         V += [var]
             model.ema_apply = model.ema.apply(V)
 
-            main_model_updates = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             MT_x = tf.placeholder(tf.float32, model.x.shape)
             def custom_getter(getter, name, *args, **kwargs):
                 var = getter(name, *args, **kwargs)
@@ -1215,11 +1232,18 @@ def get_FCN_loss(model):
                 layer_name = var.name.split('/')[1]
                 target_var = model.get_var_by_layer_and_op_name(layer_name, op_name)
                 return model.ema.average(target_var)
+            keywords = {'custom_getter': custom_getter,
+                        'AU_4U': model.AU_4U,
+                        'AU_4L': model.AU_4L}
             model.MT = CNN(MT_x, model.layer_dict, model.name+'_MT',
                            model.skips, dropout=[model.dropout_layers,
-                                                 model.dropout_rate],
-                           custom_getter=custom_getter)
+                                                 model.dropout_rate], **keywords)
             model.MT.output = tf.stop_gradient(model.MT.output)
+            if len(model.MT.output.shape)==2:
+                get_loss(model.MT)
+            else:
+                get_FCN_loss(model.MT)
+
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with
@@ -1382,14 +1406,6 @@ def corrupt_output_wAU_4L_FCN(model):
     """Corrputing outut with AU for labeled samples
     in FCN models 
     """
-    c = model.output.shape[3].value
-
-    # c is definitely even
-    model.clean_output = model.output[:,:,:,:int(c/2)]
-    model.AU_4L_vals = model.output[:,:,:,int(c/2):]
-
-    # model posterior will be based on clean output
-    model.posteriors = tf.nn.softmax(model.clean_output)
 
     # eps_t (for each t, the same eps_t for the whole batch)
     # t=1,...,T (=model.MC_T)
@@ -1399,7 +1415,7 @@ def corrupt_output_wAU_4L_FCN(model):
     model.output = 0.
     for t in range(model.MC_T):
         logits_t = tf.add(model.clean_output, 
-                          tf.scalar_mul(eps[t], model.AU_4L_vals))
+                          tf.scalar_mul(eps[t], model.AU_vals))
         model.output += tf.nn.softmax(logits_t, dim=-1)
 
         model.output = tf.divide(model.MC_probs,model.MC_T) + 1e-7

@@ -276,14 +276,17 @@ def models_dict_for_different_sizes(model_builder,
     """Form a dictionary of FCN models, which has a model
     for each image size exists in the given data set
 
+    Only one field of data class `dat` will be used, and that
+    is `img_addrs` that contains image paths of all modalities.
+
     Model builder should be a function that only takes an
     input size and a model name, and returns a model object 
-    that accepts inputs of the given size
+    that accepts inputs of the given size.
     """
 
     shapes = []
     for i in range(len(dat.img_addrs[dat.mods[0]])):
-        img = dat.data_reader(dat.img_addrs[dat.mods[0]][i])
+        img = dat.reader(dat.img_addrs[dat.mods[0]][i])
         shapes += [img.shape[:2]]
     shapes = np.unique(set(shapes))[0]
 
