@@ -264,7 +264,7 @@ class CNN(object):
                     # c is definitely even
                     c = int(c/2)
                     self.clean_output = self.output[:,:,:,:c]
-                    self.AU_vals = self.output[:,:,:,c:]
+                    self.AU_vals = tf.nn.relu(self.output[:,:,:,c:])
                     self.posteriors = tf.nn.softmax(self.clean_output)
                     # if AU values are to be used with labeled samples,
                     # corrupt the outputs with AU-dependent noise
