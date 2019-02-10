@@ -92,7 +92,14 @@ class regular(object):
             for j in range(len(self.mods)):
                 img = self.reader(self.tr_img_paths[i][j])
                 self.tr_imgs[i] += [img]
-            mask = self.reader(self.tr_mask_paths[i])
+            if self.tr_mask_paths[i]=='NA':
+                # if a training sample does not have any mask path
+                # put an all-zero mask in its place, just to keep
+                # everything consistent, otherwise it will never be used
+                # as this sample should be unlabeled 
+                mask = np.zeros(img.shape)
+            else:
+                mask = self.reader(self.tr_mask_paths[i])
             self.tr_masks[i] = mask
         self.val_imgs  = [[] for i in range(len(self.valid_inds))]
         self.val_masks = [[] for i in range(len(self.valid_inds))]
