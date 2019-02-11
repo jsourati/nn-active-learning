@@ -127,29 +127,42 @@ def eval_metrics(model, sess,
     else:
         return eval_dict
 
-def full_slice_segment(model,sess,img_paths, data_reader, op='prediction'):
+def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction'):
 
     # size of batch
-    b = 3
+    b = 4
 
-    if isinstance(img_paths, list):
-        m = len(img_paths)
-        h,w,z = data_reader(img_paths[0]).shape
+    if isinstance(img_paths_or_mats, list):
+        m = len(img_paths_or_mats)
+        if isinstance(img_paths_or_mats[0], np.ndarray):
+            h,w,z = img_paths_or_mats[0].shape
+            paths_or_mats = 'mats'
+        else:
+            h,w,z = data_reader(img_paths_or_mats[0]).shape
+            paths_or_mats = 'paths'
     else:
         m = 1
-        h,w,z = data_reader(img_paths).shape
+        if isinstance(img_paths_or_mats, np.ndarray):
+            h,w,z = img_paths_or_mats.shape
+            paths_or_mats = 'mats'
+        else:
+            h,w,z = data_reader(img_paths_or_mats).shape
+            paths_or_mats = 'paths'
 
     hx,wx = [model.x.shape[1].value, model.x.shape[2].value]
     assert h==hx and w==wx, 'Shape of data and model.x should match.'
 
     # loading images
     # m: number of input channels
-    img_list = []
-    for i in range(m):
-        if m==1:
-            img_list = [data_reader(img_paths)] 
-        else:
-            img_list += [data_reader(img_paths[i])]
+    if paths_or_mats=='mats':
+        img_list = img_paths_or_mats
+    else:
+        img_list = []
+        for i in range(m):
+            if m==1:
+                img_list = [data_reader(img_paths)] 
+            else:
+                img_list += [data_reader(img_paths[i])]
 
     # performing the op for all slices in batches
     if op=='prediction':
@@ -157,8 +170,11 @@ def full_slice_segment(model,sess,img_paths, data_reader, op='prediction'):
     elif op=='loss':
         out_tensor = 0.
         cnt = 0
+    elif op=='output' and (model.AU_4U or model.AU_4L):
+        c = model.output.shape[-1].value
+        out_tensor = np.zeros((c,h,w,z))
     else:
-        c = model.y_.shape[-1].value
+        c = model.y_.shape[-1].value  # = model.class_num in new version
         out_tensor = np.zeros((c,h,w,z))
     batches = gen_batch_inds(z, b)
     for batch in batches:
@@ -172,6 +188,12 @@ def full_slice_segment(model,sess,img_paths, data_reader, op='prediction'):
             P = sess.run(model.posteriors, feed_dict=feed_dict)
             batch_preds = np.argmax(P, axis=-1)
             out_tensor[:,:,batch_inds] = np.rollaxis(batch_preds,axis=0,start=3)
+        elif op=='AU_vals':
+            P = sess.run(model.AU_vals, feed_dict=feed_dict)
+            out_tensor[:,:,:,batch_inds] = np.swapaxes(P,0,3)
+        elif op=='output':
+            P = sess.run(model.output, feed_dict=feed_dict)
+            out_tensor[:,:,:,batch_inds] = np.swapaxes(P,0,3)
         elif op=='posterior':
             P = sess.run(model.posteriors, feed_dict=feed_dict)
             out_tensor[:,:,:,batch_inds] = np.swapaxes(P,0,3)
@@ -221,8 +243,8 @@ def full_eval(models_dict,
         accs[i] = np.sum(preds==mask) / np.prod(mask.shape)
         Fscores[i] = F1_score(preds, mask)
         
-    np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
-    np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
+        np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
+        np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
         
     train_F_stats = [np.mean(Fscores[dat.train_inds]),
                      np.std(Fscores[dat.train_inds])]
