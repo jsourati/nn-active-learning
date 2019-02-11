@@ -3,6 +3,7 @@ import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
 from sklearn.metrics import f1_score
 from skimage.util import random_noise
+from scipy.ndimage import rotate
 import linecache
 import copy
 import h5py
@@ -1378,20 +1379,10 @@ def exponential_decay(init_lr, global_step, decay_rate):
     return tf.identity(result, name="exp_decay")
 
 
-def MT_guidance(model, sess, batch_X, noise_var=0):
+def MT_guidance(model, sess, batch_X, perturb_par=0):
 
-    MT_batch = np.zeros(batch_X.shape)
-    if noise_var>0:
-        # making channels of the input data noisy separately
-        for i in range(batch_X.shape[0]):
-            M = np.abs(batch_X[i,:,:,:]).max()
-            if M>0:
-                dat = batch_X[i,:,:,:] / M
-                noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
-                noisy_dat *= M
-            else:
-                noisy_dat = random_noise(batch_X[i,:,:,:], 'gaussian', var=noise_var)
-            MT_batch[i,:,:,:] = noisy_dat
+    if perturb_par>0:
+        MT_batch = perturb_input_with_rotation(batch_X, perturb_par)
     else:
         MT_batch = batch_X
 
@@ -1401,6 +1392,46 @@ def MT_guidance(model, sess, batch_X, noise_var=0):
     MT_posts = sess.run(model.MT.posteriors, feed_dict=MT_feed_dict)
 
     return MT_posts
+
+def perturb_input_with_Gaussian_noise(X, noise_var):
+    """Perturbing slices of the of the input volume with
+    Gaussian noise
+
+    It is assumed that X is a 4-dimensional tensor with
+    channels [b,h,w,z] where b is the # of input channels
+    and z is the # of output channels
+    """
+
+    perturbed_X = np.zeros(X.shape)
+
+    # making channels of the input data noisy separately
+    for i in range(X.shape[0]):
+        M = np.abs(X[i,:,:,:]).max()
+        if M>0:
+            dat = batch_X[i,:,:,:] / M
+            noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
+            noisy_dat *= M
+        else:
+            noisy_dat = random_noise(batch_X[i,:,:,:], 'gaussian', var=noise_var)
+        perturbed_X[i,:,:,:] = noisy_dat
+
+    return perturbed_X
+
+def perturb_input_with_rotation(X, angle):
+    """Perturbing the input volume with rotation
+
+    Here, we use scipy.ndimage.rotate with reshape=False to 
+    get the same image size as input, and prefilter=False
+    to get the same intensity range with input. The latter
+    option causes the rotated image to be blurry. This is
+    desirable for us too, since we aim to perturb the input 
+    image. So blurring can be an additional step of this
+    perturbation as well as rotation.
+    """
+
+    return rotate(X, angle, [0,1], 
+                  reshape=False,
+                  prefilter=False)
 
 def corrupt_output_wAU_4L_FCN(model):
     """Corrputing outut with AU for labeled samples
