@@ -45,19 +45,6 @@ def eval_metrics(model, sess,
         op_dict.update({'av_loss': model.loss})
         eval_dict.update({'av_loss': 0.})
         model_inclusion = True
-    if 'av_CE_loss' in eval_metrics:
-        op_dict.update({'av_CE_loss': model.CE_loss})
-        eval_dict.update({'av_CE_loss': 0.})
-        model_inclusion = True
-    if 'av_cons_loss' in eval_metrics:
-        op_dict.update({'av_cons_loss': model.cons_loss})
-        eval_dict.update({'av_cons_loss': 0.})
-        model_inclusion = True
-    if 'av_MT_loss' in eval_metrics:
-        op_dict.update({'av_MT_loss': model.MT.loss})
-        eval_dict.update({'av_MT_loss': 0.})
-        MT_model_inclusion = True
-
 
     vol = 0
     for _ in range(slices):
@@ -70,20 +57,9 @@ def eval_metrics(model, sess,
                               model.y_:batch_mask,
                               model.keep_prob:1.,
                               model.is_training:False})
-        if MT_model_inclusion:
-            feed_dict.update({model.MT.x:batch_X,
-                              model.MT.y_:batch_mask,
-                              model.MT.keep_prob:1.,
-                              model.MT.is_training:False})
-        if hasattr(model,'MT') and \
-           hasattr(model, 'output_placeholder'):
-            MT_output = NN_extended.MT_guidance(model,
-                                                sess,
-                                                batch_X,
-                                                model.MT_input_noise)
-            feed_dict.update({model.output_placeholder: 
-                              MT_output})
-
+        if hasattr(model, 'teacher'):
+            feed_dict.update({model.teacher.keep_prob:1.,
+                              model.teacher.is_training:False})
 
         results = sess.run(op_dict, feed_dict=feed_dict)
 

@@ -50,7 +50,9 @@ class CNN(object):
         # Mean Teacher semi-supervised
         'MT_SSL': False,
         'MT_ema_decay_schedule': lambda: tf.constant(0.999),
-        'MT_input_noise': 0,
+        'rotation_angle': None,
+        'Gaussian_noise_std': None,
+        'output_perturbation_measure': 'CE',
         'max_cons_coeff': 1e-3,
         'rampup_length': 5000
     }
@@ -262,8 +264,11 @@ class CNN(object):
                 w = self.output.shape[2].value
                 c = self.output.shape[3].value
                 if self.AU_4L or self.AU_4U:
-                    # c is definitely even
-                    c = int(c/2)
+                    if self.AU_4L:
+                        # c is definitely even
+                        c = int(c/2)
+                    elif self.AU_4U:
+                        c -= 1
                     self.clean_output = self.output[:,:,:,:c]
                     self.AU_vals = tf.nn.relu(self.output[:,:,:,c:])
                     self.posteriors = tf.nn.softmax(self.clean_output)
@@ -594,7 +599,9 @@ class CNN(object):
         if kwargs['MT_SSL']:
             kwargs.setdefault('MT_ema_decay_schedule', self.DEFAULT_HYPERS['MT_ema_decay_schedule'])
             kwargs['MT_ema_decay'] = kwargs['MT_ema_decay_schedule'](self.global_step)
-            kwargs.setdefault('MT_input_noise', self.DEFAULT_HYPERS['MT_input_noise'])
+            kwargs.setdefault('Gaussian_noise_std', self.DEFAULT_HYPERS['Gaussian_noise_std'])
+            kwargs.setdefault('rotation_angle', self.DEFAULT_HYPERS['rotation_angle'])
+            kwargs.setdefault('output_perturbation_measure', self.DEFAULT_HYPERS['output_perturbation_measure'])
             kwargs.setdefault('max_cons_coeff', self.DEFAULT_HYPERS['max_cons_coeff'])
             kwargs.setdefault('rampup_length', self.DEFAULT_HYPERS['rampup_length'])
 
@@ -901,6 +908,22 @@ class CNN(object):
 
         get_optimizer(self)
 
+
+    def perturb_input(self):
+
+        self.perturbed_x = self.x
+
+        # Gaussian noise
+        if self.Gaussian_noise_std is not None:
+            eps = tf.random_normal(tf.shape(self.perturbed_x), 
+                                   stddev=self.Gaussian_noise_std)
+            self.perturbed_x = tf.add(model.perturbed_x, eps)
+        
+        # rotation
+        if self.rotation_angle is not None:
+            self.perturbed_x = tf.contrib.image.rotate(
+                self.perturbed_x, self.rotation_angle)
+            
     def train(self,sess,
               global_step_limit,
               train_gen,
@@ -958,16 +981,12 @@ class CNN(object):
                          self.y_: batch_Y,
                          self.keep_prob:1-self.dropout_rate,
                          self.is_training: True}
-            # setting up extra feed-dict
-            X_feed_dict = {}
-            if self.MT_SSL:
-                MT_output = MT_guidance(self, sess, batch_X, self.MT_input_noise)
-                X_feed_dict = {self.MT.x: batch_X,
-                               self.MT.keep_prob:1.-self.MT.dropout_rate,
-                               self.MT.is_training: True,
-                               self.output_placeholder: MT_output}
+            # setting up extra feed-dict if a teacher exists
+            if hasattr(self, 'teacher'):
+                feed_dict.update({
+                    self.teacher.keep_prob:1.-self.teacher.dropout_rate,
+                    self.teacher.is_training: True})
 
-            feed_dict.update(X_feed_dict)
             sess.run(self.train_step, feed_dict=feed_dict);
 
             if self.MT_SSL:
@@ -1190,33 +1209,13 @@ def get_FCN_loss(model):
 
         if model.MT_SSL:
 
-            # consistency loss (using all samples)
-            output_shape = [model.output.shape[1].value,
-                            model.output.shape[2].value,
-                            model.class_num]
-            model.output_placeholder = tf.placeholder(tf.float32, 
-                                                      [None,]+output_shape)
-            if model.AU_4U:
-                # if AU should be used for unlabeled samples, include the
-                # AU values inside the MT consistency terms
-                # AU_vals = log(sigma(x)^2)
-                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
-                    tf.multiply(tf.square(model.posteriors-model.output_placeholder),
-                                tf.exp(-model.AU_vals)) + 0.5*model.AU_vals, 
-                    axis = [1,2,3]))
-            else:
-                model.cons_loss = tf.reduce_mean(tf.reduce_mean(tf.square(
-                    model.posteriors-model.output_placeholder), axis = [1,2,3]))
+            model.labeled_loss = model.loss
 
-            # consistency coefficient
-            sigmoid_rampup_value = sigmoid_rampup(model.global_step,
-                                                  model.rampup_length)
-            model.cons_coeff = tf.multiply(sigmoid_rampup_value,
-                                           model.max_cons_coeff)
-            # total loss
-            model.loss = tf.add(model.loss, 
-                                tf.multiply(model.cons_coeff, model.cons_loss))
+            # perturbing the input
+            if not(hasattr(model, 'perturbed_x')):
+                model.perturb_input()
 
+            # building the teacher...
             # set up the EMA operations and MT model too
             model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
             V = []
@@ -1226,7 +1225,7 @@ def get_FCN_loss(model):
                         V += [var]
             model.ema_apply = model.ema.apply(V)
 
-            MT_x = tf.placeholder(tf.float32, model.x.shape)
+            MT_x = model.perturbed_x
             def custom_getter(getter, name, *args, **kwargs):
                 var = getter(name, *args, **kwargs)
                 op_name = var.name.split('/')[2].split(':')[0]
@@ -1236,15 +1235,38 @@ def get_FCN_loss(model):
             keywords = {'custom_getter': custom_getter,
                         'AU_4U': model.AU_4U,
                         'AU_4L': model.AU_4L}
-            model.MT = CNN(MT_x, model.layer_dict, model.name+'_MT',
-                           model.skips, dropout=[model.dropout_layers,
+            model.teacher = CNN(MT_x, model.layer_dict, model.name+'_teacher',
+                                model.skips, dropout=[model.dropout_layers,
                                                  model.dropout_rate], **keywords)
-            model.MT.output = tf.stop_gradient(model.MT.output)
-            if len(model.MT.output.shape)==2:
-                get_loss(model.MT)
+            model.teacher.output = tf.stop_gradient(model.teacher.output)
+            if len(model.teacher.output.shape)==2:
+                get_loss(model.teacher)
             else:
-                get_FCN_loss(model.MT)
+                get_FCN_loss(model.teacher)
 
+            # forming the consistency loss
+            model.cons_loss = measure_output_perturbation(model)
+            if model.AU_4U:
+                # if AU should be used for unlabeled samples, include the
+                # AU values inside the MT consistency terms
+                # AU_vals = log(sigma(x)^2)
+                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
+                    tf.multiply(model.cons_loss,
+                                tf.exp(-model.AU_vals)) + 0.5*model.AU_vals, 
+                    axis=[1,2]))
+            else:
+                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
+                    model.cons_loss, axis=[1,2]))
+
+            # consistency coefficient
+            sigmoid_rampup_value = sigmoid_rampup(model.global_step,
+                                                  model.rampup_length)
+            model.cons_coeff = tf.multiply(sigmoid_rampup_value,
+                                           model.max_cons_coeff)
+
+            # ... finally, here's the total loss
+            model.loss = tf.add(model.loss, 
+                                tf.multiply(model.cons_coeff, model.cons_loss))
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with
@@ -1379,59 +1401,29 @@ def exponential_decay(init_lr, global_step, decay_rate):
     return tf.identity(result, name="exp_decay")
 
 
-def MT_guidance(model, sess, batch_X, perturb_par=0):
+def measure_output_perturbation(model):
+    """ NOT COMPLETED YET
 
-    if perturb_par>0:
-        MT_batch = perturb_input_with_rotation(batch_X, perturb_par)
-    else:
-        MT_batch = batch_X
+    Computing divergence between the output class probability
+    distribution of the model, and the pertubed version of it
 
-    MT_feed_dict = {model.MT.x: MT_batch,
-                    model.MT.keep_prob: 1.-model.MT.dropout_rate,
-                    model.MT.is_training: False}
-    MT_posts = sess.run(model.MT.posteriors, feed_dict=MT_feed_dict)
-
-    return MT_posts
-
-def perturb_input_with_Gaussian_noise(X, noise_var):
-    """Perturbing slices of the of the input volume with
-    Gaussian noise
-
-    It is assumed that X is a 4-dimensional tensor with
-    channels [b,h,w,z] where b is the # of input channels
-    and z is the # of output channels
+    The divergence measure is specified by `model.SSL_div_measure`,
+    and the perturbation is obtained by perutrbing parameters of the 
+    teacher model (which could be the EMA model) and the perturbing
+    the input (e.g., by rotation and blurring). The latter will be 
+    given through a placeholder `model.output_placeholder`
     """
 
-    perturbed_X = np.zeros(X.shape)
+    if model.output_perturbation_measure=='L2':
+        div = tf.reduce_mean(
+            tf.square(model.posteriors-model.teacher.posteriors),
+            axis=3)
+    elif model.output_perturbation_measure=='CE':
+        div = tf.nn.softmax_cross_entropy_with_logits(
+            labels=model.posteriors,
+            logits=model.teacher.output)
 
-    # making channels of the input data noisy separately
-    for i in range(X.shape[0]):
-        M = np.abs(X[i,:,:,:]).max()
-        if M>0:
-            dat = batch_X[i,:,:,:] / M
-            noisy_dat = random_noise(dat, 'gaussian', var=noise_var)
-            noisy_dat *= M
-        else:
-            noisy_dat = random_noise(batch_X[i,:,:,:], 'gaussian', var=noise_var)
-        perturbed_X[i,:,:,:] = noisy_dat
-
-    return perturbed_X
-
-def perturb_input_with_rotation(X, angle):
-    """Perturbing the input volume with rotation
-
-    Here, we use scipy.ndimage.rotate with reshape=False to 
-    get the same image size as input, and prefilter=False
-    to get the same intensity range with input. The latter
-    option causes the rotated image to be blurry. This is
-    desirable for us too, since we aim to perturb the input 
-    image. So blurring can be an additional step of this
-    perturbation as well as rotation.
-    """
-
-    return rotate(X, angle, [0,1], 
-                  reshape=False,
-                  prefilter=False)
+    return div
 
 def corrupt_output_wAU_4L_FCN(model):
     """Corrputing outut with AU for labeled samples
