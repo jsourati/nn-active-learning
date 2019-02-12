@@ -276,6 +276,8 @@ class CNN(object):
                     # corrupt the outputs with AU-dependent noise
                     if self.AU_4L:
                         corrupt_output_wAU_4L_FCN(self)
+                    elif self.AU_4U:
+                        self.AU_vals = self.AU_vals[:,:,:,0]
                 else:
                     self.posteriors = tf.nn.softmax(self.output, name='posterior')
                 self.y_ = tf.placeholder(tf.float32,[None,h,w,c], name='one_hot_labels')
@@ -971,8 +973,8 @@ class CNN(object):
                                
                         if self.global_step.eval()>0:
                             self.save_weights(os.path.join(save_path, 'model_pars.h5'))
-                            if hasattr(self, 'MT'):
-                                self.MT.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
+                            if hasattr(self, 'teacher'):
+                                self.teacher.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
 
             # --------------------------------------------- #
             # --------------------------------------------- #
@@ -1402,26 +1404,29 @@ def exponential_decay(init_lr, global_step, decay_rate):
 
 
 def measure_output_perturbation(model):
-    """ NOT COMPLETED YET
-
-    Computing divergence between the output class probability
+    """Computing divergence between the output class probability
     distribution of the model, and the pertubed version of it
 
-    The divergence measure is specified by `model.SSL_div_measure`,
+    The divergence measure is specified by `model.output_perturbation_measure`,
     and the perturbation is obtained by perutrbing parameters of the 
     teacher model (which could be the EMA model) and the perturbing
     the input (e.g., by rotation and blurring). The latter will be 
     given through a placeholder `model.output_placeholder`
     """
-
+    
     if model.output_perturbation_measure=='L2':
         div = tf.reduce_mean(
             tf.square(model.posteriors-model.teacher.posteriors),
             axis=3)
     elif model.output_perturbation_measure=='CE':
+        if model.AU_4U:
+            teacher_logits = model.teacher.clean_output
+        else:
+            teacher_logits = model.teacher.output
+
         div = tf.nn.softmax_cross_entropy_with_logits(
             labels=model.posteriors,
-            logits=model.teacher.output)
+            logits=teacher_logits)
 
     return div
 
