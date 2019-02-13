@@ -1,4 +1,5 @@
 import os
+import pdb
 import numpy as np
 
 def extract_Hakims_data_path():
@@ -279,6 +280,37 @@ def extract_ISBI2015_MSLesion_data_path(test_or_training='training'):
 
     else:
         return img_addrs
+
+def extract_iSeg2017_data_path(test_or_training='Training'):
+
+    root_dir = '/data/iSeg2017'
+
+    # maker the first letter capital: test --> Test
+    test_or_training = test_or_training[0].upper() + test_or_training[1:]
+    root_dir = os.path.join(root_dir, 'iSeg-2017-{}/nii'.format(test_or_training))
+
+    if test_or_training=='Training':
+        sub_ids = np.arange(1,11)
+    else:
+        sub_ids = np.arange(11,24)
+
+    T1_addrs = []
+    T2_addrs = []
+    mask_addrs = []
+    for i in sub_ids:
+        filename = 'subject-{}-T1.nii'.format(i)
+        T1_addrs += [os.path.join(root_dir, filename)]
+
+        filename = 'subject-{}-T2.nii'.format(i)
+        T2_addrs += [os.path.join(root_dir, filename)]
+
+        filename = 'subject-{}-label.nii'.format(i)
+        mask_addrs += [os.path.join(root_dir, filename)]
+
+    if test_or_training=='Training':
+        return {'T1': T1_addrs, 'T2': T2_addrs}, mask_addrs
+    else:
+        return {'T1': T1_addrs, 'T2': T2_addrs}
 
 
 def get_subdirs(path, common_term=None):
