@@ -69,9 +69,9 @@ class regular(object):
         self.L_indic = np.array([1]*len(self.labeled_inds) + \
                                 [0]*len(self.unlabeled_inds))
 
-        self.test_inds = list(set(np.arange(n)) - 
-                              set(self.train_inds) - 
-                              set(self.valid_inds))
+        self.test_inds = np.array(list(set(np.arange(n)) - 
+                                       set(self.train_inds) - 
+                                       set(self.valid_inds)))
         
         self.tr_img_paths = [self.combined_paths[i] for i in self.train_inds]
         self.tr_mask_paths = [self.mask_addrs[i] for i in self.train_inds]
@@ -88,7 +88,7 @@ class regular(object):
         ntrain = len(self.train_inds)
         self.tr_imgs  = [[] for i in range(ntrain)]
         self.tr_masks = [[] for i in range(ntrain)]
-        for i,_ in enumerate(self.train_inds):
+        for i in range(len(self.tr_img_paths)):
             for j in range(len(self.mods)):
                 img = self.reader(self.tr_img_paths[i][j])
                 self.tr_imgs[i] += [img]
@@ -114,26 +114,34 @@ class regular(object):
                                 batch_size, 
                                 img_shape,
                                 n_labeled_train=None):
+        """Creating sample generator from training and validation
+        data sets. 
+
+        It is assumed that images are loaed through load_images().
+        """
 
         # training
-        self.train_n_slices = [self.tr_masks[i].shape[2] 
-                               for i in range(len(self.tr_masks))]
-        self.slices_L_indic = np.concatenate(
-            [np.ones(self.train_n_slices[i])*self.L_indic[i] 
-             for i in range(len(self.tr_masks))])
-        train_generator = gen_minibatch_labeled_unlabeled_inds(
-            self.slices_L_indic, batch_size, n_labeled_train)
-        train_gen_slices = lambda: self.generate_training_stuff(
-            img_shape, train_generator)
+        if len(self.tr_masks)>0:
+            self.train_n_slices = [self.tr_masks[i].shape[2] 
+                                   for i in range(len(self.tr_masks))]
+            self.slices_L_indic = np.concatenate(
+                [np.ones(self.train_n_slices[i])*self.L_indic[i] 
+                 for i in range(len(self.tr_masks))])
+            train_generator = gen_minibatch_labeled_unlabeled_inds(
+                self.slices_L_indic, batch_size, n_labeled_train)
+            train_gen_slices = lambda: self.generate_training_stuff(
+                img_shape, train_generator)
+
+            self.train_gen_fn = train_gen_slices
 
         # validation
-        valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
-            np.ones(len(self.val_img_paths)), batch_size)
-        valid_gen = lambda: self.valid_generator(
-            valid_gen_inds, img_shape, 'uniform')
+        if len(self.val_masks)>0:
+            valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
+                np.ones(len(self.val_img_paths)), batch_size)
+            valid_gen = lambda: self.valid_generator(
+                valid_gen_inds, img_shape, 'uniform')
 
-        self.train_gen_fn = train_gen_slices
-        self.valid_gen_fn = valid_gen
+            self.valid_gen_fn = valid_gen
 
     def generate_training_stuff(self,
                                 img_shape, 
@@ -193,24 +201,31 @@ class regular(object):
 
     def combine_with_other_data(self, dat_2):
 
-        self.L_indic = np.concatenate((self.L_indic, dat_2.L_indic))
-        # storing indices of the other data in case we need
-        self.train_inds_2 = dat_2.train_inds
-        self.valid_inds_2 = dat_2.train_inds
-        self.test_inds_2  = dat_2.test_inds
-        self.labeled_inds_2   = dat_2.labeled_inds
-        self.unlabeled_inds_2 = dat_2.unlabeled_inds
+        assert self.mods==dat_2.mods, 'The combining data sets should have '+\
+            'the same image modalities.'
 
+        # combining everything
+        for mod in self.mods:
+            self.img_addrs[mod] += dat_2.img_addrs[mod]
+        self.mask_addrs += dat_2.mask_addrs
+        self.L_indic = np.concatenate((self.L_indic, dat_2.L_indic))
+        # .. including the combined_paths
+        self.train_inds = np.concatenate((self.train_inds,
+                                         dat_2.train_inds+len(self.combined_paths)))
+        self.valid_inds = np.concatenate((self.valid_inds,
+                                         dat_2.valid_inds+len(self.combined_paths)))
+        self.test_inds = np.concatenate((self.test_inds,
+                                         dat_2.test_inds+len(self.combined_paths)))
+        self.combined_paths += dat_2.combined_paths
+        
         self.tr_img_paths = self.tr_img_paths + dat_2.tr_img_paths
         self.tr_mask_paths = self.tr_mask_paths + dat_2.tr_mask_paths
         self.val_img_paths = self.val_img_paths + dat_2.val_img_paths
         self.val_mask_paths = self.val_mask_paths + dat_2.val_mask_paths
         self.test_img_paths = self.test_img_paths + dat_2.test_img_paths
         self.test_mask_paths = self.test_mask_paths + dat_2.test_mask_paths
-        for mod in self.mods:
-            self.img_addrs[mod] += dat_2.img_addrs[mod]
-        self.mask_addrs += dat_2.mask_addrs
 
+        # .. in case images are loaded
         if hasattr(self, 'tr_imgs') and hasattr(dat_2, 'tr_imgs'):
             self.tr_imgs = self.tr_imgs + dat_2.tr_imgs
             self.tr_masks = self.tr_masks + dat_2.tr_masks
