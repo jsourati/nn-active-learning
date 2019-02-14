@@ -9,14 +9,13 @@ from .utils import gen_minibatch_labeled_unlabeled_inds, \
 
 class regular(object):
 
-    C = 2
-
     def __init__(self,
                  img_addrs,
                  mask_addrs,
                  data_reader,
                  rnd_seed, 
-                 LUV_inds_or_sizes):
+                 LUV_inds_or_sizes,
+                 class_labels):
         """
         * LUV = Labeled + Unlabeled + Validation
           This list characterizes sample indices for these three
@@ -40,6 +39,8 @@ class regular(object):
               test_inds = {1..n} - {inds of L} - {inds of U} - {inds of V}   
         """
 
+        self.class_labels = class_labels
+        self.C = len(self.class_labels)
         self.seed = rnd_seed
         self.reader = data_reader
         self.img_addrs = img_addrs
@@ -101,6 +102,12 @@ class regular(object):
             else:
                 mask = self.reader(self.tr_mask_paths[i])
             self.tr_masks[i] = mask
+            # ensuring that the masks have values 1,...,c
+            if np.any(self.class_labels != np.arange(self.C)):
+                self.tr_masks[i] = np.zeros(mask.shape)
+                for c, label in enumerate(self.class_labels):
+                    self.tr_masks[i][mask==label] = c
+
         self.val_imgs  = [[] for i in range(len(self.valid_inds))]
         self.val_masks = [[] for i in range(len(self.valid_inds))]
         for i,_ in enumerate(self.valid_inds):
@@ -109,6 +116,11 @@ class regular(object):
                 self.val_imgs[i] += [img]
             mask = self.reader(self.val_mask_paths[i])
             self.val_masks[i] = mask
+            # ensuring that the masks have values 1,...,c
+            if np.any(self.class_labels != np.arange(self.C)):
+                self.val_masks[i] = np.zeros(mask.shape)
+                for c, label in enumerate(self.class_labels):
+                    self.val_masks[i][mask==label] = c
 
     def create_train_valid_gens(self, 
                                 batch_size, 
@@ -137,7 +149,7 @@ class regular(object):
         # validation
         if len(self.val_masks)>0:
             valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
-                np.ones(len(self.val_img_paths)), batch_size)
+                np.ones(len(self.val_imgs)), batch_size)
             valid_gen = lambda: self.valid_generator(
                 valid_gen_inds, img_shape, 'uniform')
 

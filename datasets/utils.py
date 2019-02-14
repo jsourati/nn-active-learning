@@ -49,7 +49,7 @@ def gen_minibatch_labeled_unlabeled_inds(
         def eternal_gen():
             while True:
                 for inds in gen_batch_inds(n, batch_size):
-                    if len(inds)==1: continue # not interested in small batches
+                    #if len(inds)==1: continue # not interested in small batches
                     yield inds
         gen_tuple = (eternal_gen(),)
 
