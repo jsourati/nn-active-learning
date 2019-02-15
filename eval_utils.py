@@ -136,9 +136,9 @@ def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction
         img_list = []
         for i in range(m):
             if m==1:
-                img_list = [data_reader(img_paths)] 
+                img_list = [data_reader(img_paths_or_mats)] 
             else:
-                img_list += [data_reader(img_paths[i])]
+                img_list += [data_reader(img_paths_or_mats[i])]
 
     # performing the op for all slices in batches
     if op=='prediction':
@@ -149,6 +149,8 @@ def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction
     elif op=='output' and (model.AU_4U or model.AU_4L):
         c = model.output.shape[-1].value
         out_tensor = np.zeros((c,h,w,z))
+    elif op=='AU_vals' and model.AU_4U:
+        out_tensor = np.zeros((h,w,z))
     else:
         c = model.y_.shape[-1].value  # = model.class_num in new version
         out_tensor = np.zeros((c,h,w,z))
@@ -166,7 +168,7 @@ def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction
             out_tensor[:,:,batch_inds] = np.rollaxis(batch_preds,axis=0,start=3)
         elif op=='AU_vals':
             P = sess.run(model.AU_vals, feed_dict=feed_dict)
-            out_tensor[:,:,:,batch_inds] = np.swapaxes(P,0,3)
+            out_tensor[:,:,batch_inds] = np.swapaxes(np.swapaxes(P,1,2),0,2)
         elif op=='output':
             P = sess.run(model.output, feed_dict=feed_dict)
             out_tensor[:,:,:,batch_inds] = np.swapaxes(P,0,3)
