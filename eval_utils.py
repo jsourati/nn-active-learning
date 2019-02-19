@@ -7,6 +7,7 @@ import pdb
 import os
 
 import NN_extended
+from post_processing import connected_component_analysis_3d, fill_holes
 from datasets.utils import gen_batch_inds
 from patch_utils import extract_Hakims_data_path
 
@@ -202,13 +203,20 @@ def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction
     return out_tensor
 
 def full_eval(models_dict, 
-              sess, 
-              save_path, 
-              dat):
+              sess,
+              dat,
+              post_process=False,
+              slice_partitions=None,
+              save_path=None):
         
     n = len(dat.img_addrs[dat.mods[0]])
-    accs = np.zeros(n)
-    Fscores = np.zeros(n)
+    if slice_partitions is None:
+        accs = np.zeros((1,n))
+        Fscores = np.zeros((1,n))
+    else:
+        accs = np.zeros((len(slice_partitions)+1, n))
+        Fscores = np.zeros((len(slice_partitions)+1, n))
+
     for i in range(n):
         mask = dat.reader(dat.mask_addrs[i])
         shape = mask.shape[:2]
@@ -216,52 +224,38 @@ def full_eval(models_dict,
 
         model_key = '{}'.format(shape)
         model = models_dict[model_key]
-        preds = full_slice_segment(model,sess,img_paths, dat.reader)
+        seg = full_slice_segment(model,sess,img_paths, dat.reader)
+        if post_process:
+            seg = connected_component_analysis_3d(seg)
+            seg = fill_holes(seg)
 
-        accs[i] = np.sum(preds==mask) / np.prod(mask.shape)
-        Fscores[i] = F1_score(preds, mask)
+        if slice_partitions is None:
+            accs[0,i] = np.sum(seg==mask) / np.prod(mask.shape)
+            Fscores[0,i] = F1_score(seg, mask)
+        else:
+            # first partition
+            seg_part = seg[:,:,:slice_partitions[0]]
+            mask_part = mask[:,:,:slice_partitions[0]]
+            accs[0,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
+            Fscores[0,i] = F1_score(seg_part, mask_part)
+            # middle partitions (if any)
+            for j in range(len(slice_partitions)-1):
+                seg_part = seg[:,:,slice_partitions[j]:slice_partitions[j+1]]
+                mask_part = mask[:,:,slice_partitions[j]:slice_partitions[j+1]]
+                accs[j+1,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
+                Fscores[j+1,i] = F1_score(seg_part, mask_part)
+            # last partition
+            seg_part = seg[:,:,slice_partitions[-1]:]
+            mask_part = mask[:,:,slice_partitions[-1]:]
+            accs[-1,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
+            Fscores[-1,i] = F1_score(seg_part, mask_part)
         
-        np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
-        np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
+        if save_path is not None:
+            np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
+            np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
+
+    return accs, Fscores
         
-    train_F_stats = [np.mean(Fscores[dat.train_inds]),
-                     np.std(Fscores[dat.train_inds])]
-    test_F_stats = [np.mean(Fscores[dat.test_inds]),
-                    np.std(Fscores[dat.test_inds])]
-    np.savetxt(os.path.join(save_path, 'train_F_stats.txt'), 
-               train_F_stats)
-    np.savetxt(os.path.join(save_path, 'test_F_stats.txt'), 
-               test_F_stats)
-    train_A_stats = [np.mean(accs[dat.train_inds]),
-                     np.std(accs[dat.train_inds])]
-    test_A_stats = [np.mean(accs[dat.test_inds]),
-                    np.std(accs[dat.test_inds])]
-    np.savetxt(os.path.join(save_path, 'train_A_stats.txt'), 
-               train_A_stats)
-    np.savetxt(os.path.join(save_path, 'test_A_stats.txt'), 
-               test_A_stats)
-
-    if np.any(dat.L_indic==0):
-        labeled_size = np.sum(dat.L_indic)
-        labeled_inds = dat.train_inds[:labeled_size]
-        unlabeled_inds = dat.train_inds[labeled_size:]
-
-        labeled_F_stats = [np.mean(Fscores[labeled_inds]),
-                           np.std(Fscores[labeled_inds])]
-        unlabeled_F_stats = [np.mean(Fscores[unlabeled_inds]),
-                             np.std(Fscores[unlabeled_inds])]
-        np.savetxt(os.path.join(save_path, 'labeled_F_stats.txt'), 
-                   labeled_F_stats)
-        np.savetxt(os.path.join(save_path, 'unlabeled_F_stats.txt'), 
-                   unlabeled_F_stats)
-        labeled_A_stats = [np.mean(accs[labeled_inds]),
-                           np.std(accs[labeled_inds])]
-        unlabeled_A_stats = [np.mean(accs[unlabeled_inds]),
-                             np.std(accs[unlabeled_inds])]
-        np.savetxt(os.path.join(save_path, 'labeled_A_stats.txt'), 
-                   labeled_A_stats)
-        np.savetxt(os.path.join(save_path, 'unlabeled_A_stats.txt'), 
-                   unlabeled_A_stats)
 
 def F1_score(preds,labels):
 
