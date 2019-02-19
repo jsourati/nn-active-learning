@@ -43,6 +43,7 @@ class regular(object):
         self.C = len(self.class_labels)
         self.seed = rnd_seed
         self.reader = data_reader
+        self.mask_reader = lambda x: self.read_mask(x)
         self.img_addrs = img_addrs
         self.mask_addrs = mask_addrs
         self.mods = list(img_addrs.keys())
@@ -100,13 +101,7 @@ class regular(object):
                 # as this sample should be unlabeled 
                 mask = np.zeros(img.shape)
             else:
-                mask = self.reader(self.tr_mask_paths[i])
-            self.tr_masks[i] = mask
-            # ensuring that the masks have values 1,...,c
-            if np.any(self.class_labels != np.arange(self.C)):
-                self.tr_masks[i] = np.zeros(mask.shape)
-                for c, label in enumerate(self.class_labels):
-                    self.tr_masks[i][mask==label] = c
+                self.tr_masks[i] = self.mask_reader(self.tr_mask_paths[i])
 
         self.val_imgs  = [[] for i in range(len(self.valid_inds))]
         self.val_masks = [[] for i in range(len(self.valid_inds))]
@@ -114,13 +109,23 @@ class regular(object):
             for j in range(len(self.mods)):
                 img = self.reader(self.val_img_paths[i][j])
                 self.val_imgs[i] += [img]
-            mask = self.reader(self.val_mask_paths[i])
-            self.val_masks[i] = mask
-            # ensuring that the masks have values 1,...,c
-            if np.any(self.class_labels != np.arange(self.C)):
-                self.val_masks[i] = np.zeros(mask.shape)
-                for c, label in enumerate(self.class_labels):
-                    self.val_masks[i][mask==label] = c
+            self.val_masks[i] = self.mask_reader(self.val_mask_paths[i])
+
+    def read_mask(self, path):
+        """This is useful when the masks have values other 
+        than 1,...,c, so they have to be mapped appropriately
+        """
+
+        # first, read the original file
+        orig_mask = self.reader(path)
+        if np.any(self.class_labels != np.arange(self.C)):
+            mask = np.zeros(orig_mask.shape)
+            for c, label in enumerate(self.class_labels):
+                mask[orig_mask==label] = c
+            return mask
+
+        else:
+            return orig_mask
 
     def create_train_valid_gens(self, 
                                 batch_size, 
