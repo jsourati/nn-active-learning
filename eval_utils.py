@@ -6,6 +6,8 @@ import copy
 import pdb
 import os
 
+from sklearn.metrics import f1_score
+
 import NN_extended
 from post_processing import connected_component_analysis_3d, fill_holes
 from datasets.utils import gen_batch_inds
@@ -42,6 +44,9 @@ def eval_metrics(model, sess,
         op_dict.update({'F1s': model.posteriors})
         eval_dict.update({'F1s': []})
         model_inclusion = True
+        # binary or multiple F1 score
+        F1_score = lambda x,y: binary_F1_score(x,y) if model.class_num==2 \
+                   else lambda x,y: multi_F1_score(x,y)[1]
     if 'av_loss' in eval_metrics:
         op_dict.update({'av_loss': model.loss})
         eval_dict.update({'av_loss': 0.})
@@ -217,6 +222,8 @@ def full_eval(models_dict,
         accs = np.zeros((len(slice_partitions)+1, n))
         Fscores = np.zeros((len(slice_partitions)+1, n))
 
+    F1_score = lambda x,y:binary_F1_score(x,y) if dat.C==2 \
+               else lambda x,y:multi_F1_score(x,y)[1]
     for i in range(n):
         mask = dat.reader(dat.mask_addrs[i])
         shape = mask.shape[:2]
@@ -257,13 +264,27 @@ def full_eval(models_dict,
     return accs, Fscores
         
 
-def F1_score(preds,labels):
+def binary_F1_score(preds, labels):
 
     TP = np.sum(preds*labels)
     P = np.sum(labels)
     TPFP = np.sum(preds)
 
     return 2*TP/(P+TPFP) if P+TPFP!=0. else 0.
+
+def multi_F1_score(preds,labels):
+    """F1 score for multi-class classification
+    using `f1_score` function of scikit-learn package
+    """
+
+    indiv_scores = f1_score(np.ravel(labels), np.ravel(preds), 
+                            average=None)
+    av_score = f1_score(np.ravel(labels), np.ravel(preds), 
+                        average='weighted')
+
+    return indiv_scores, av_score
+
+    
 
 def models_dict_for_different_sizes(model_builder,
                                     dat):
