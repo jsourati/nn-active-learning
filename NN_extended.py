@@ -1044,8 +1044,7 @@ class CNN(object):
                 tf.placeholder(self.grads_vars[i][1].dtype,
                                self.grads_vars[i][1].shape)]
 
-    def update_BN_stats(self, sess,
-                        img_paths, grnd_paths, batcher):
+    def update_BN_stats(self, sess, sample_gen):
         """Only update data statistics in BN while keeping
         everything else fixed
 
@@ -1062,21 +1061,14 @@ class CNN(object):
                    for i in range(len(self.var_dict[layer])) 
                    if 'moving' in self.var_dict[layer][i].name]
 
-        sess.run(tf.variables_initializer(BN_pars))
+        #sess.run(tf.variables_initializer(BN_pars))
 
         # starting to estimate new batch statistics
-        epochs = 50
-        b = 3
-        h,w = [self.x.shape[1].value, self.x.shape[2].value]
-        for i in range(epochs):
-            batches = gen_batch_inds(len(img_paths), b) 
-            for batch_inds in batches:
-                batch_img_paths = [img_paths[ind] for ind in batch_inds]
-                batch_grnd_paths = [grnd_paths[ind] for ind in batch_inds]
-                batch_X,_ = batcher(batch_img_paths, batch_grnd_paths, [h,w])
-
-                feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
-                sess.run(BN_updates, feed_dict=feed_dict)
+        iters = 200
+        for i in range(iters):
+            batch_X,_ = sample_gen()
+            feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
+            sess.run(BN_updates, feed_dict=feed_dict)
 
 def combine_layer_outputs(model,
                           layer_index,
@@ -1254,7 +1246,7 @@ def get_FCN_loss(model):
                 # AU_vals = log(sigma(x)^2)
                 model.cons_loss = tf.reduce_mean(tf.reduce_mean(
                     tf.multiply(model.cons_loss,
-                                tf.exp(-model.AU_vals)) + 0.5*model.AU_vals, 
+                                tf.exp(-model.AU_vals)) + 5e-2*model.AU_vals, 
                     axis=[1,2]))
             else:
                 model.cons_loss = tf.reduce_mean(tf.reduce_mean(
