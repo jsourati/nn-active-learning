@@ -46,7 +46,8 @@ class CNN(object):
         # Aleatoric uncertainty
         'AU_4L': False,  # for labeled samples
         'AU_4U': False,  # for unlabeled samples
-        'MC_T': 10,
+        'AU_log_rel_coeff': 0.1,
+        'MC_T': 10,      # for classification AU
         # Mean Teacher semi-supervised
         'MT_SSL': False,
         'MT_ema_decay_schedule': lambda: tf.constant(0.999),
@@ -594,6 +595,7 @@ class CNN(object):
         # aleatoric uncertainty
         kwargs.setdefault('AU_4L', self.DEFAULT_HYPERS['AU_4L'])
         kwargs.setdefault('AU_4U', self.DEFAULT_HYPERS['AU_4U'])
+        kwargs.setdefault('AU_log_rel_coeff', self.DEFAULT_HYPERS['AU_log_rel_coeff'])
         if kwargs['AU_4L']:
             kwargs.setdefault('MC_T', self.DEFAULT_HYPERS['MC_T'])
         # consistency-based semi-supervised
@@ -1246,7 +1248,7 @@ def get_FCN_loss(model):
                 # AU_vals = log(sigma(x)^2)
                 model.cons_loss = tf.reduce_mean(tf.reduce_mean(
                     tf.multiply(model.cons_loss,
-                                tf.exp(-model.AU_vals)) + 5e-2*model.AU_vals, 
+                                tf.exp(-model.AU_vals))+0.5*model.AU_log_rel_coeff*model.AU_vals, 
                     axis=[1,2]))
             else:
                 model.cons_loss = tf.reduce_mean(tf.reduce_mean(
