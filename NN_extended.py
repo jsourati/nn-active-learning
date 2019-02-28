@@ -65,7 +65,7 @@ class CNN(object):
                  skips=[],
                  feature_layer=None,
                  dropout=None,
-                 probes=[[],[]],
+                 probes=[{},{}],
                  **kwargs):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
@@ -172,7 +172,7 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.probes = [{}, {}]
+        self.probes = probes
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
@@ -976,7 +976,20 @@ class CNN(object):
                         if self.global_step.eval()>0:
                             self.save_weights(os.path.join(save_path, 'model_pars.h5'))
                             if hasattr(self, 'teacher'):
-                                self.teacher.save_weights(os.path.join(save_path, 'teacher_pars.h5'))
+                                self.teacher.save_weights(os.path.join(save_path, 
+                                                                       'teacher_pars.h5'))
+
+                            if len(metric_gens[0])==3:
+                                V =  self.valid_metrics_0[metric_gens[0][2]]
+                                if np.all(V[-1] > V[:-1]):
+                                    np.savetxt(os.path.join(save_path,'max_valid_iter.txt'), 
+                                               [self.global_step.eval()])
+                                    self.save_weights(os.path.join(save_path,
+                                                                   'max_model_pars.h5'))
+                                    if hasattr(self, 'teacher'):
+                                        self.teacher.save_weights(os.path.join(save_path, 
+                                                                               'max_teacher_pars.h5'))
+
 
             # --------------------------------------------- #
             # --------------------------------------------- #
@@ -1071,6 +1084,7 @@ class CNN(object):
             batch_X,_ = sample_gen()
             feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
             sess.run(BN_updates, feed_dict=feed_dict)
+
 
 def combine_layer_outputs(model,
                           layer_index,

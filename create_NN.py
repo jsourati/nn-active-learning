@@ -12,15 +12,6 @@ import os
 
 import NN_extended
 
-read_file_path = "/home/ch194765/repos/atlas-active-learning/"
-sys.path.insert(0, read_file_path)
-#import prep_dat
-
-read_file_path = "/home/ch194765/repos/atlas-active-learning/AlexNet"
-sys.path.insert(0, read_file_path)
-import alexnet
-from alexnet import AlexNet
-
 
 def create_VGG19(dropout_rate, learning_rate,
                  n_class, grad_layers,
@@ -228,7 +219,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     pw_dict.update(BT)
 
     ''' TU+DB '''
-    Ls = np.flip(Ls+[15])
+    Ls = np.flip(Ls+[15], 0)
     for i in range(1,len(Ls)):
         # transition up
         nfmap = Ls[i-1]*k
@@ -418,14 +409,13 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     for name in no_dp:
         loc = np.where(layer_names==name)[0][0]
         dp_layers.remove(loc)
-    dp_rate = 0.2
+    dp_rate = 0.1
 
     
     ''' Creating the Model '''
     x = tf.placeholder(tf.float32, [None,]+input_shape)
-    reg = tf.nn.l2_loss
     model = NN_extended.CNN(x, pw_dict, model_name, 
-                            sorted_skips,reg,None,
+                            sorted_skips,None,
                             [dp_layers, dp_rate],
                             probes,
                             **kwargs)
