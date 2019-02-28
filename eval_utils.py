@@ -45,8 +45,8 @@ def eval_metrics(model, sess,
         eval_dict.update({'F1s': []})
         model_inclusion = True
         # binary or multiple F1 score
-        F1_score = lambda x,y: binary_F1_score(x,y) if model.class_num==2 \
-                   else lambda x,y: multi_F1_score(x,y)[1]
+        F1_score = (lambda x,y: binary_F1_score(x,y)) if model.class_num==2 \
+                   else lambda x,y: multi_F1_score(x,y,model.class_num)[1]
     if 'av_loss' in eval_metrics:
         op_dict.update({'av_loss': model.loss})
         eval_dict.update({'av_loss': 0.})
@@ -207,25 +207,20 @@ def full_slice_segment(model,sess,img_paths_or_mats, data_reader, op='prediction
 
     return out_tensor
 
-def full_eval(models_dict, 
-              sess,
-              dat,
-              post_process=False,
-              slice_partitions=None,
-              save_path=None):
+def get_full_segs(models_dict, 
+                  sess,
+                  dat,
+                  post_process=False,
+                  save_path=None,
+                  dat_writer=None):
         
     n = len(dat.img_addrs[dat.mods[0]])
-    if slice_partitions is None:
-        accs = np.zeros((1,n))
-        Fscores = np.zeros((1,n))
-    else:
-        accs = np.zeros((len(slice_partitions)+1, n))
-        Fscores = np.zeros((len(slice_partitions)+1, n))
 
-    F1_score = lambda x,y:binary_F1_score(x,y) if dat.C==2 \
-               else lambda x,y:multi_F1_score(x,y)[1]
+    #F1_score = (lambda x,y:binary_F1_score(x,y)) if dat.C==2 \
+    #           else lambda x,y:multi_F1_score(x,y,dat.C)[1]
+    segs = []
     for i in range(n):
-        mask = dat.reader(dat.mask_addrs[i])
+        mask = dat.mask_reader(dat.mask_addrs[i])
         shape = mask.shape[:2]
         img_paths = [dat.img_addrs[mod][i] for mod in dat.mods]
 
@@ -236,33 +231,145 @@ def full_eval(models_dict,
             seg = connected_component_analysis_3d(seg)
             seg = fill_holes(seg)
 
-        if slice_partitions is None:
-            accs[0,i] = np.sum(seg==mask) / np.prod(mask.shape)
-            Fscores[0,i] = F1_score(seg, mask)
-        else:
-            # first partition
-            seg_part = seg[:,:,:slice_partitions[0]]
-            mask_part = mask[:,:,:slice_partitions[0]]
-            accs[0,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
-            Fscores[0,i] = F1_score(seg_part, mask_part)
-            # middle partitions (if any)
-            for j in range(len(slice_partitions)-1):
-                seg_part = seg[:,:,slice_partitions[j]:slice_partitions[j+1]]
-                mask_part = mask[:,:,slice_partitions[j]:slice_partitions[j+1]]
-                accs[j+1,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
-                Fscores[j+1,i] = F1_score(seg_part, mask_part)
-            # last partition
-            seg_part = seg[:,:,slice_partitions[-1]:]
-            mask_part = mask[:,:,slice_partitions[-1]:]
-            accs[-1,i] = np.sum(seg_part==mask_part) / np.prod(mask_part.shape)
-            Fscores[-1,i] = F1_score(seg_part, mask_part)
-        
-        if save_path is not None:
-            np.savetxt(os.path.join(save_path, 'accs.txt'), accs)
-            np.savetxt(os.path.join(save_path, 'Fscores.txt'), Fscores)
+        segs += [seg]
 
-    return accs, Fscores
+    if save_path is not None:
+        if not(os.path.exists(save_path)):
+            print('The specified path for saving data does not exist.')
+            return segs
+        if dat_writer is None:
+            dat_writer = lambda path,dat: nrrd.write(path,dat)
+        for i,seg in enumerate(segs):
+            dat_writer(os.path.join(save_path,'seg_{}.nrrd'.format(i)),seg)
+
+    return segs
         
+
+def eval_full_segs_explicit_partitions(seg_paths_or_mats, 
+                                       mask_paths_or_mats,
+                                       slice_partitions,
+                                       **kwargs):
+    """
+    """
+
+    kwargs.setdefault('dat_reader', lambda x:nrrd.read(x)[0])
+    kwargs.setdefault('mask_reader', lambda x:nrrd.read(x)[0])
+    dat_reader = kwargs['dat_reader']
+    mask_reader = kwargs['mask_reader']
+    
+    # loading the data if only some paths are given
+    if isinstance(seg_paths_or_mats[0], str):
+        segs = []
+        for path in seg_paths_or_mats:
+            segs += [dat_reader(path)]
+    else:
+        segs = seg_paths_or_mats
+
+    if isinstance(mask_paths_or_mats[0], str):
+        masks = []
+        for path in mask_paths_or_mats:
+            masks += [mask_reader(path)]
+    else:
+        masks = mask_paths_or_mats
+
+    # get the partitions
+    if isinstance(slice_partitions, list):
+        slice_partitions = np.repeat(np.array(slice_partitions),
+                                     len(segs), axis=0)
+
+    # computing the scores
+    M = slice_partitions.shape[1]+1
+    part_Fscores = np.zeros((len(segs), M))
+    overall_Fscores = np.zeros(len(segs))
+
+    for i in range(len(segs)):
+        overall_Fscores[i] = binary_F1_score(segs[i], masks[i])
+
+        # first partition
+        seg = segs[i]
+        mask = masks[i]
+        seg_part = seg[:,:,:slice_partitions[i,0]]
+        mask_part = mask[:,:,:slice_partitions[i,0]]
+        part_Fscores[i,0] = binary_F1_score(seg_part, mask_part)
+        # middle partitions (if any)
+        for j in range(slice_partitions.shape[1]-1):
+            seg_part = seg[:,:,slice_partitions[i,j]:slice_partitions[i,j+1]]
+            mask_part = mask[:,:,slice_partitions[i,j]:slice_partitions[i,j+1]]
+            part_Fscores[i,j+1] = binary_F1_score(seg_part, mask_part)
+        # last partition
+        seg_part = seg[:,:,slice_partitions[i,-1]:]
+        mask_part = mask[:,:,slice_partitions[i,-1]:]
+        part_Fscores[i,-1] = binary_F1_score(seg_part, mask_part)
+
+    return overall_Fscores, part_Fscores
+
+def eval_full_segs_label_percentage(seg_paths_or_mats, 
+                                    mask_paths_or_mats,
+                                    label, percentage,
+                                    **kwargs):
+    """ This is for a 3-fold partitioning of top and bottom
+    slices that with voxels of a particular label less than
+    a certain threshold (percentage in terms of the number of
+    voxels in axial slices).
+    """
+
+    kwargs.setdefault('dat_reader', lambda x:nrrd.read(x)[0])
+    kwargs.setdefault('mask_reader', lambda x:nrrd.read(x)[0])
+    dat_reader = kwargs['dat_reader']
+    mask_reader = kwargs['mask_reader']
+    
+    # loading the data if only some paths are given
+    if isinstance(seg_paths_or_mats[0], str):
+        segs = []
+        for path in seg_paths_or_mats:
+            segs += [dat_reader(path)]
+    else:
+        segs = seg_paths_or_mats
+
+    if isinstance(mask_paths_or_mats[0], str):
+        masks = []
+        for path in mask_paths_or_mats:
+            masks += [mask_reader(path)]
+    else:
+        masks = mask_paths_or_mats
+
+    # computing the scores
+    M = 3
+    part_Fscores = np.zeros((len(segs), M))
+    overall_Fscores = np.zeros(len(segs))
+
+    for i in range(len(segs)):
+        overall_Fscores[i] = binary_F1_score(segs[i], masks[i])
+
+        # get the partition for this volume
+        label_num = np.sum(masks[i]==label, axis=(0,1))
+        thr_slices = np.where(label_num/np.prod(masks[i].shape[:2])
+                              <percentage)[0]
+        gap_loc = np.where((thr_slices[1:] - thr_slices[:-1]) > 1)[0]
+        if len(gap_loc)>1:
+            print('There are more than one gap for slice-wise label volume' + \
+                  ' of image {}'.format(i))
+            continue
+        edge_1 = thr_slices[gap_loc[0]]
+        edge_2 = thr_slices[gap_loc[0]+1]
+
+        # top partition
+        seg = segs[i]
+        mask = masks[i]
+        seg_part = seg[:,:,:edge_1]
+        mask_part = mask[:,:,:edge_1]
+        part_Fscores[i,0] = binary_F1_score(seg_part, mask_part)
+        # middle partitions
+        seg_part = seg[:,:,edge_1:edge_2]
+        mask_part = mask[:,:,edge_1:edge_2]
+        part_Fscores[i,1] = binary_F1_score(seg_part, mask_part)
+        # last partition
+        seg_part = seg[:,:,edge_2:]
+        mask_part = mask[:,:,edge_2:]
+        part_Fscores[i,2] = binary_F1_score(seg_part, mask_part)
+
+    return overall_Fscores, part_Fscores
+
 
 def binary_F1_score(preds, labels):
 
@@ -272,15 +379,20 @@ def binary_F1_score(preds, labels):
 
     return 2*TP/(P+TPFP) if P+TPFP!=0. else 0.
 
-def multi_F1_score(preds,labels):
+def multi_F1_score(preds,labels,C=None):
     """F1 score for multi-class classification
     using `f1_score` function of scikit-learn package
     """
 
+    if C is None:
+        C = len(np.unique(labels))
+
     indiv_scores = f1_score(np.ravel(labels), np.ravel(preds), 
-                            average=None)
-    av_score = f1_score(np.ravel(labels), np.ravel(preds), 
-                        average='weighted')
+                            labels=np.arange(1,C),average=None)
+    # in computing the weighted average, do not consider
+    # background as a separate class
+    av_score = f1_score(np.ravel(labels), np.ravel(preds),
+                        labels=np.arange(1,C),average='weighted')
 
     return indiv_scores, av_score
 
