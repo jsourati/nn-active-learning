@@ -60,7 +60,7 @@ def extract_newborn_data_path():
     """
 
     # common root directory 
-    root_dir = '/data/Jamshid/Hakim_newborn/'
+    root_dir = '/fileserver/collections/dHCP/dHCP_DCI_spatiotemporal_atlas/Processed/'
     
     # common sub-directories
     # (except the data files which include
@@ -283,7 +283,7 @@ def extract_ISBI2015_MSLesion_data_path(test_or_training='training'):
 
 def extract_iSeg2017_data_path(test_or_training='Training'):
 
-    root_dir = '/data/iSeg2017'
+    root_dir = '/fileserver/projects/iSeg2017'
 
     # maker the first letter capital: test --> Test
     test_or_training = test_or_training[0].upper() + test_or_training[1:]

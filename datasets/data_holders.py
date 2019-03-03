@@ -99,7 +99,7 @@ class regular(object):
                 # put an all-zero mask in its place, just to keep
                 # everything consistent, otherwise it will never be used
                 # as this sample should be unlabeled 
-                mask = np.zeros(img.shape)
+                self.tr_masks[i] = np.zeros(img.shape)
             else:
                 self.tr_masks[i] = self.mask_reader(self.tr_mask_paths[i])
 
@@ -130,6 +130,7 @@ class regular(object):
     def create_train_valid_gens(self, 
                                 batch_size, 
                                 img_shape,
+                                valid_mode='random',
                                 n_labeled_train=None):
         """Creating sample generator from training and validation
         data sets. 
@@ -153,10 +154,22 @@ class regular(object):
 
         # validation
         if len(self.val_masks)>0:
-            valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
-                np.ones(len(self.val_imgs)), batch_size)
-            valid_gen = lambda: self.valid_generator(
-                valid_gen_inds, img_shape, 'uniform')
+            if valid_mode == 'random':
+                valid_gen_inds = gen_minibatch_labeled_unlabeled_inds(
+                    np.ones(len(self.val_imgs)), batch_size)
+                valid_gen = lambda: self.valid_generator(
+                    valid_gen_inds, img_shape, 'uniform')
+            elif valid_mode == 'full':
+                # just follow what has been done above for training
+                self.valid_n_slices = [self.val_masks[i].shape[2] 
+                                       for i in range(len(self.val_masks))]
+                valid_slices_L_indices = np.concatenate(
+                    [np.ones(self.valid_n_slices[i]) for i 
+                     in range(len(self.valid_n_slices))])
+                self.valid_generator = gen_minibatch_labeled_unlabele_inds(
+                    valid_slices_L_indic, batch_size, None)
+                valid_gen = lambda: generate_training_stuff(
+                    img_shape, self.valid_generator)
 
             self.valid_gen_fn = valid_gen
 
