@@ -965,7 +965,7 @@ class CNN(object):
                 for i in range(len(metric_gens)):
                     eval_metrics(self, sess, 
                                  metric_gens[i][1], 
-                                 50,
+                                 metric_gens[i][2],
                                  True,
                                  'valid_metrics_%d'%i)
                     if save_path is not None:
@@ -979,8 +979,8 @@ class CNN(object):
                                 self.teacher.save_weights(os.path.join(save_path, 
                                                                        'teacher_pars.h5'))
 
-                            if len(metric_gens[0])==3:
-                                V =  self.valid_metrics_0[metric_gens[0][2]]
+                            if len(metric_gens[0])==4:
+                                V =  self.valid_metrics_0[metric_gens[0][3]]
                                 if np.all(V[-1] > V[:-1]):
                                     np.savetxt(os.path.join(save_path,'max_valid_iter.txt'), 
                                                [self.global_step.eval()])
@@ -1084,7 +1084,6 @@ class CNN(object):
             batch_X,_ = sample_gen()
             feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
             sess.run(BN_updates, feed_dict=feed_dict)
-
 
 def combine_layer_outputs(model,
                           layer_index,

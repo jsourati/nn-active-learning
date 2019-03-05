@@ -15,7 +15,7 @@ from patch_utils import extract_Hakims_data_path
 
 def eval_metrics(model, sess, 
                  dat_gen, 
-                 slices=50,
+                 iters=50,
                  update=True,
                  alt_attr=None):
     """ The alternative attribute will be used if `alt_attr`
@@ -40,7 +40,7 @@ def eval_metrics(model, sess,
         op_dict.update({'accs': model.posteriors})
         eval_dict.update({'accs': []})
         model_inclusion = True
-    if 'av_F1' in eval_metrics:
+    if 'F1' in eval_metrics:
         op_dict.update({'F1s': model.posteriors})
         eval_dict.update({'F1s': []})
         model_inclusion = True
@@ -52,8 +52,10 @@ def eval_metrics(model, sess,
         eval_dict.update({'av_loss': 0.})
         model_inclusion = True
 
+    all_preds = []
+    all_masks = []
     vol = 0
-    for _ in range(slices):
+    for _ in range(iters):
         batch_X, batch_mask = dat_gen()
         b = batch_X.shape[0]
 
@@ -75,35 +77,25 @@ def eval_metrics(model, sess,
                 # val==results[key] : the newest av. loss computed
                 eval_dict[key] = (vol*eval_dict[key]+val*b) / (vol+b)
 
-            if 'accs' in key:
+            if ('F1s' in key) or ('accs' in key):
                 # val in this case is actually posterior
                 preds = np.argmax(val, axis=-1)
+                all_preds += [preds]
                 nohot_batch_mask = np.argmax(batch_mask, axis=-1)
-                for i in range(b):
-                    intersect_vol = np.sum(preds[i,:,:]==nohot_batch_mask[i,:,:])
-                    eval_dict['accs'] = eval_dict['accs'] + \
-                                        [intersect_vol/(np.prod(preds.shape[1:]))]
-            if 'F1s' in key:
-                # val in this case is actually posterior
-                preds = np.argmax(val, axis=-1)
-                nohot_batch_mask = np.argmax(batch_mask, axis=-1)
-                for i in range(b):
-                    eval_dict['F1s'] = eval_dict['F1s'] + \
-                                       [F1_score(preds[i,:,:], nohot_batch_mask[i,:,:])]
+                all_masks += [nohot_batch_mask]
                 
         vol += b
 
     if update:
         for metric in eval_metrics:
-            if metric=='av_acc':
-                valid_metrics[metric] += [np.mean(eval_dict['accs'])]
-            elif metric=='std_acc':
-                valid_metrics[metric] += [np.std(eval_dict['accs'])]
-            elif metric=='av_F1':
-                valid_metrics[metric] += [np.mean(eval_dict['F1s'])]
-            elif metric=='std_F1':
-                valid_metrics[metric] += [np.std(eval_dict['F1s'])]
-
+            if metric=='acc':
+                preds = np.concatenate(all_preds, axis=0)
+                masks = np.concatenate(all_masks, axis=0)
+                valid_metrics[metric] += [np.sum(preds==masks)/np.prod(preds.shape)]
+            elif metric=='F1':
+                preds = np.concatenate(all_preds, axis=0)
+                masks = np.concatenate(all_masks, axis=0)
+                valid_metrics[metric] += [F1_score(preds, masks)]
             elif 'loss' in metric:
                 valid_metrics[metric] += [eval_dict[metric]]
     else:

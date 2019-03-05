@@ -87,7 +87,7 @@ class regular(object):
         partitions into memory
         """
 
-        ntrain = len(self.train_inds)
+        ntrain = len(self.tr_img_paths)
         self.tr_imgs  = [[] for i in range(ntrain)]
         self.tr_masks = [[] for i in range(ntrain)]
         for i in range(len(self.tr_img_paths)):
@@ -147,8 +147,8 @@ class regular(object):
                  for i in range(len(self.tr_masks))])
             train_generator = gen_minibatch_labeled_unlabeled_inds(
                 self.slices_L_indic, batch_size, n_labeled_train)
-            train_gen_slices = lambda: self.generate_training_stuff(
-                img_shape, train_generator)
+            train_gen_slices = lambda: self.generate_images(
+                img_shape, train_generator, 'training')
 
             self.train_gen_fn = train_gen_slices
 
@@ -163,33 +163,45 @@ class regular(object):
                 # just follow what has been done above for training
                 self.valid_n_slices = [self.val_masks[i].shape[2] 
                                        for i in range(len(self.val_masks))]
-                valid_slices_L_indices = np.concatenate(
+                valid_slices_L_indic = np.concatenate(
                     [np.ones(self.valid_n_slices[i]) for i 
                      in range(len(self.valid_n_slices))])
-                self.valid_generator = gen_minibatch_labeled_unlabele_inds(
+                self.valid_generator = gen_minibatch_labeled_unlabeled_inds(
                     valid_slices_L_indic, batch_size, None)
-                valid_gen = lambda: generate_training_stuff(
-                    img_shape, self.valid_generator)
+                valid_gen = lambda: self.generate_images(
+                    img_shape, self.valid_generator, 'validation')
 
             self.valid_gen_fn = valid_gen
 
-    def generate_training_stuff(self,
-                                img_shape, 
-                                inds_generator):
+    def generate_images(self,
+                        img_shape, 
+                        inds_generator,
+                        mode='training'):
 
         inds = np.concatenate(next(inds_generator))
-        # extracting slice indices from the generated indices
-        img_slice_inds = global2local_inds(inds, self.train_n_slices)
-        img_inds = np.concatenate([
-            np.ones(len(img_slice_inds[i]),dtype=int)*i 
-            for i in range(len(img_slice_inds))])
-        img_slice_inds = np.concatenate(img_slice_inds)
-        imgs = [self.tr_imgs[int(i)] for i in img_inds]
-        masks = [self.tr_masks[int(i)] for i in img_inds]
-        if np.any(self.L_indic==0):
-            inds_L_indic = np.ones(len(img_inds))
-            inds_L_indic[self.L_indic[img_inds]==0] = 0
-        else:
+        if mode=='training':
+            # extracting slice indices from the generated indices
+            img_slice_inds = global2local_inds(inds, self.train_n_slices)
+            img_inds = np.concatenate([
+                np.ones(len(img_slice_inds[i]),dtype=int)*i 
+                for i in range(len(img_slice_inds))])
+            img_slice_inds = np.concatenate(img_slice_inds)
+            imgs = [self.tr_imgs[int(i)] for i in img_inds]
+            masks = [self.tr_masks[int(i)] for i in img_inds]
+            if np.any(self.L_indic==0):
+                inds_L_indic = np.ones(len(img_inds))
+                inds_L_indic[self.L_indic[img_inds]==0] = 0
+            else:
+                inds_L_indic=None
+
+        elif mode=='validation':
+            img_slice_inds = global2local_inds(inds, self.valid_n_slices)
+            img_inds = np.concatenate([
+                np.ones(len(img_slice_inds[i]),dtype=int)*i 
+                for i in range(len(img_slice_inds))])
+            img_slice_inds = np.concatenate(img_slice_inds)
+            imgs = [self.val_imgs[int(i)] for i in img_inds]
+            masks = [self.val_masks[int(i)] for i in img_inds]
             inds_L_indic=None
 
         return prepare_batch_BrVol(
