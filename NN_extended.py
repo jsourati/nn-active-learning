@@ -65,7 +65,7 @@ class CNN(object):
                  skips=[],
                  feature_layer=None,
                  dropout=None,
-                 probes=[{},{}],
+                 probes=[[],[]],
                  **kwargs):
         """Constructor takes the input placehoder, a dictionary
         whose keys are names of the layers and the items assigned to each
@@ -172,7 +172,8 @@ class CNN(object):
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
 
-        self.probes = probes
+        self.probes = [{layer:[] for layer in probes[0]},
+                       {layer:[] for layer in probes[1]}]
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
@@ -1084,6 +1085,39 @@ class CNN(object):
             batch_X,_ = sample_gen()
             feed_dict={self.x:batch_X, self.keep_prob:1., self.is_training:True}
             sess.run(BN_updates, feed_dict=feed_dict)
+
+    def create_branch(self, layer_dict, probed_layer_name, branch_name, **kwargs):
+        """
+        Creating a branch at the input of the specified layer; hence the input
+        of that layer has to be already probed to be accissble by the branch
+        """
+
+        assert probed_layer_name in self.probes[0], 'The input to layer '+\
+            '{} has not been probed when creating the main model, hence '+\
+            'cannot be accessed by branch constructor.'
+    
+        if not(hasattr(self, 'branches')):
+            self.branches = {}
+            
+        x = self.probes[0][probed_layer_name]
+        with tf.variable_scope(self.name):
+            branch = CNN(x, layer_dict, branch_name, [], None,
+                       [self.dropout_layers, self.dropout_rate],
+                       **kwargs)
+            # extension of var_dict in the branch
+            for layer_name in self.var_dict:
+                if probed_layer_name==layer_name:
+                    break
+                branch.var_dict[layer_name] = self.var_dict[layer_name]
+
+            self.branches[branch_name] = branch
+
+    def get_optimizer_for_branches(self):
+
+        for _,branch in self.branches.items():
+            if not(hasattr(branch, 'loss')):
+                branch.get_optimizer()
+            
 
 def combine_layer_outputs(model,
                           layer_index,

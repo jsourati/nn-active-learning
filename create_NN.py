@@ -186,7 +186,7 @@ def DenseNet_2block(growth_rate,
     return model
 
 def FCDenseNet_103Layers(input_shape, c, model_name, 
-                         probes=[{},{}], **kwargs):
+                         probes=[[],[]], **kwargs):
     """Also known as, Tiramisu network with 
     103 layers
     """
