@@ -273,3 +273,38 @@ class regular(object):
             self.tr_masks = self.tr_masks + dat_2.tr_masks
             self.val_imgs = self.val_imgs + dat_2.val_imgs
             self.val_masks = self.val_masks + dat_2.val_masks
+
+
+def get_dat_for_FT(dat,slice_img_inds):
+    """The slice indices in `slice_img_inds` is a list
+    of n arrays, where n is the size of `dat.train_inds`.
+    The i-th array contains slice indices of the i-th
+    image in `dat.tr_imgs`
+    """
+
+    LUV_inds = [dat.labeled_inds, 
+                np.array([], dtype=int), 
+                dat.valid_inds]
+    FT_dat = regular(dat.img_addrs,dat.mask_addrs,dat.reader,
+                     None,LUV_inds,dat.class_labels)
+    FT_dat.load_images()
+
+    # now adding the selected images
+    new_tr_imgs = []
+    new_tr_masks = []
+    for i in range(len(slice_img_inds)):
+        if len(slice_img_inds[i])==0:
+            continue
+            
+        new_imgs = []
+        for j in range(len(dat.mods)):
+            new_imgs += [dat.tr_imgs[i][j][:,:,slice_img_inds[i]]]
+        new_tr_imgs += [new_imgs]
+        new_tr_masks += [dat.tr_masks[i][:,:,slice_img_inds[i]]]
+
+    FT_dat.tr_imgs += new_tr_imgs
+    FT_dat.tr_masks += new_tr_masks
+    FT_dat.L_indic = np.concatenate((FT_dat.L_indic, 
+                                     np.ones(len(new_tr_masks))))
+    
+    return FT_dat
