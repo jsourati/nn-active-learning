@@ -312,6 +312,43 @@ def extract_iSeg2017_data_path(test_or_training='Training'):
     else:
         return {'T1': T1_addrs, 'T2': T2_addrs}
 
+def extract_GrandChallenge2016_data_path():
+    
+    root_dir = '/fileserver/segmentation/LesionSegmentation/grand-challenge-2016-training'
+
+    dat_common_dir = os.path.join(root_dir, 'Pre-processed')
+    mask_common_dir = os.path.join(root_dir, 'ManualSegmentation')
+    sub_codes = get_subdirs(dat_common_dir)
+
+    T1_addrs = []
+    T2_addrs = []
+    FLAIR_addrs = []
+    DP_addrs = []
+    GADO_addrs = []
+    mask_addrs = {'mask_{}'.format(i):[] for i in range(7)}
+    mask_addrs['Consensus'] = []
+
+    for i in range(len(sub_codes)):
+        T1_path  = os.path.join(dat_common_dir,sub_codes[i],'T1_preprocessed.nii.gz')
+        T1_addrs += [T1_path]
+        T2_path  = os.path.join(dat_common_dir,sub_codes[i],'T2_preprocessed.nii.gz')
+        T2_addrs += [T2_path]
+        FLAIR_path  = os.path.join(dat_common_dir,sub_codes[i],'FLAIR_preprocessed.nii.gz')
+        FLAIR_addrs += [FLAIR_path]
+        DP_path  = os.path.join(dat_common_dir,sub_codes[i],'DP_preprocessed.nii.gz')
+        DP_addrs += [DP_path]
+        GADO_path  = os.path.join(dat_common_dir,sub_codes[i],'GADO_preprocessed.nii.gz')
+        GADO_addrs += [GADO_path]
+
+        for j in range(7):
+            path = os.path.join(mask_common_dir, sub_codes[i],'ManualSegmentation_{}.nii.gz')
+            mask_addrs['mask_{}'.format(j)] = path
+        path = os.path.join(mask_common_dir, sub_codes[i],'Consensus.nii.gz')
+        mask_addrs['Consensus'] = path
+
+    img_addrs = {'T1': T1_addrs, 'T2': T2_addrs, 'FLAIR': FLAIR_addrs,
+                 'DP': DP_addrs, 'GADO': GADO_addrs}
+    return img_addrs, mask_addrs, sub_codes
 
 def get_subdirs(path, common_term=None):
     """returning all sub-directories of a 
