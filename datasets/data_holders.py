@@ -275,36 +275,59 @@ class regular(object):
             self.val_masks = self.val_masks + dat_2.val_masks
 
 
-def get_dat_for_FT(dat,slice_img_inds):
+def get_dat_for_FT(dat,slice_img_inds, 
+                      keep_unlabeled=False):
     """The slice indices in `slice_img_inds` is a list
     of n arrays, where n is the size of `dat.train_inds`.
     The i-th array contains slice indices of the i-th
-    image in `dat.tr_imgs`
+    image in `dat.tr_imgs[i+labeled_size]`. These slices are the selected
+    queries, which will be added to the labeled part of
+    the new data with the true labels (simulating the expert
+    by the available ground truth segmentations that are
+    already accessible for the images).
+
     """
 
-    LUV_inds = [dat.labeled_inds, 
-                np.array([], dtype=int), 
-                dat.valid_inds]
-    FT_dat = regular(dat.img_addrs,dat.mask_addrs,dat.reader,
-                     None,LUV_inds,dat.class_labels)
-    FT_dat.load_images()
+    labeled_size = int(np.sum(dat.L_indic))
+    assert len(slice_img_inds)==len(dat.tr_imgs[labeled_size:]), \
+        "The list of queried slices and list of unlabeled "+\
+        "images should have the same length."
 
-    # now adding the selected images
-    new_tr_imgs = []
-    new_tr_masks = []
-    for i in range(len(slice_img_inds)):
-        if len(slice_img_inds[i])==0:
-            continue
-            
-        new_imgs = []
-        for j in range(len(dat.mods)):
-            new_imgs += [dat.tr_imgs[i][j][:,:,slice_img_inds[i]]]
-        new_tr_imgs += [new_imgs]
-        new_tr_masks += [dat.tr_masks[i][:,:,slice_img_inds[i]]]
-
-    FT_dat.tr_imgs += new_tr_imgs
-    FT_dat.tr_masks += new_tr_masks
-    FT_dat.L_indic = np.concatenate((FT_dat.L_indic, 
-                                     np.ones(len(new_tr_masks))))
+    # although we don't care about the indices in the new data
+    LUV_inds = [dat.labeled_inds, dat.unlabeled_inds ,dat.valid_inds]
+    new_dat = regular(dat.img_addrs ,dat.mask_addrs, dat.reader,
+                      None, LUV_inds, dat.class_labels)
     
-    return FT_dat
+    # modifying the data object
+    new_labeled_imgs = dat.tr_imgs[:labeled_size]
+    new_labeled_masks = dat.tr_masks[:labeled_size]
+    new_unlabeled_imgs = []
+    new_unlabeled_masks = []
+    for i in range(len(slice_img_inds)):
+        if len(slice_img_inds[i])>0:
+            new_imgs = []
+            for j in range(len(dat.mods)):
+                new_imgs += [dat.tr_imgs[i+labeled_size][j][:,:,slice_img_inds[i]]]
+            new_labeled_imgs += [new_imgs]
+            new_labeled_masks += [dat.tr_masks[i+labeled_size][:,:,slice_img_inds[i]]]
+
+            # add the unlabeled slices too, if necessary
+            if keep_unlabeled:
+                z = dat.tr_masks[i+labeled_size].shape[2]
+                unlabeled_inds = np.delete(np.arange(z), slice_img_inds[i])
+                new_imgs = []
+                for j in range(len(dat.mods)):
+                    new_imgs += [dat.tr_imgs[i+labeled_size][j][:,:,unlabeled_inds]]
+                new_unlabeled_imgs += [new_imgs]
+                new_unlabeled_masks += [dat.tr_masks[i+labeled_size][:,:,unlabeled_inds]]
+
+    new_dat.tr_imgs = new_labeled_imgs + new_unlabeled_imgs
+    new_dat.tr_masks = new_labeled_masks + new_unlabeled_masks
+
+    new_dat.L_indic = np.concatenate((np.ones(len(new_labeled_masks)),
+                                      np.zeros(len(new_unlabeled_masks))))
+
+    new_dat.val_imgs = dat.val_imgs
+    new_dat.val_masks = dat.val_masks
+
+    return new_dat
