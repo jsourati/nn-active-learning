@@ -166,8 +166,7 @@ class CNN(object):
             self.dropout_rate = dropout[1]
         else:
             self.dropout_layers = []
-            self.dropout_rate = 1.
-        
+            self.dropout_rate = None
         # creating the network's variables
         self.var_dict = {}
         layer_names = list(layer_dict.keys())
@@ -1102,8 +1101,8 @@ class CNN(object):
         x = self.probes[0][probed_layer_name]
         with tf.variable_scope(self.name):
             branch = CNN(x, layer_dict, branch_name, [], None,
-                       [self.dropout_layers, self.dropout_rate],
-                       **kwargs)
+                         [self.dropout_layers, self.dropout_rate],
+                         **kwargs)
             # extension of var_dict in the branch
             for layer_name in self.var_dict:
                 if probed_layer_name==layer_name:
@@ -1204,11 +1203,26 @@ def get_loss(model):
         # Loss 
         # (for now, only cross entropy)
         if model.loss_name=='CE':
-            model.loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(
-                    labels=tf.transpose(model.y_), 
-                    logits=tf.transpose(model.output)),
-                name='CE_Loss')
+
+            model.labeled_loss_weights = tf.to_float(
+                tf.not_equal(tf.reduce_sum(tf.transpose(model.y_), axis=-1), 0.)
+            )
+
+            if hasattr(model, 'input_vox_weights'):
+                model.labeled_loss_weights = tf.multiply(
+                    model.labeled_loss_weights,
+                    model.input_weights)
+                
+            model.loss = tf.losses.sparse_softmax_cross_entropy(
+                labels=model.labels, logits=tf.transpose(model.output),
+                weights=model.labeled_loss_weights)
+
+
+            #model.loss = tf.reduce_mean(
+            #    tf.nn.softmax_cross_entropy_with_logits(
+            #        labels=tf.transpose(model.y_), 
+            #        logits=tf.transpose(model.output)),
+            #    name='CE_Loss')
 
 def get_FCN_loss(model):
     
@@ -1245,6 +1259,11 @@ def get_FCN_loss(model):
                 model.vox_labeled_loss_weights = tf.multiply(
                     model.vox_labeled_loss_weights,
                     class_weights_tensor)
+
+            if hasattr(model, 'input_vox_weights'):
+                model.vox_labeled_loss_weights = tf.multiply(
+                    model.vox_labeled_loss_weights,
+                    model.input_vox_weights)
                 
             model.loss = tf.losses.sparse_softmax_cross_entropy(
                 labels=model.labels, logits=model.output,
@@ -1280,7 +1299,7 @@ def get_FCN_loss(model):
                         'AU_4L': model.AU_4L}
             model.teacher = CNN(MT_x, model.layer_dict, model.name+'_teacher',
                                 model.skips, dropout=[model.dropout_layers,
-                                                 model.dropout_rate], **keywords)
+                                                      model.dropout_rate], **keywords)
             model.teacher.output = tf.stop_gradient(model.teacher.output)
             if len(model.teacher.output.shape)==2:
                 get_loss(model.teacher)
