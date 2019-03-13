@@ -1200,9 +1200,8 @@ def get_loss(model):
 
     with tf.name_scope(model.name):
             
-        # Loss 
-        # (for now, only cross entropy)
         if model.loss_name=='CE':
+            # this CE only takes exclusive class labels
 
             model.labeled_loss_weights = tf.to_float(
                 tf.not_equal(tf.reduce_sum(tf.transpose(model.y_), axis=-1), 0.)
@@ -1218,11 +1217,22 @@ def get_loss(model):
                 weights=model.labeled_loss_weights)
 
 
-            #model.loss = tf.reduce_mean(
-            #    tf.nn.softmax_cross_entropy_with_logits(
-            #        labels=tf.transpose(model.y_), 
-            #        logits=tf.transpose(model.output)),
-            #    name='CE_Loss')
+        elif model.loss_name=='CE_softclasses':
+            # this CE accepts soft class assignments as the
+            # target distribution too.
+            # NOTE: there is still no way to assign weights to the
+            # training samples with this loss function.
+
+            model.loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(
+                    labels=tf.transpose(model.y_), 
+                    logits=tf.transpose(model.output)),
+                name='CE_Loss')
+
+        else:
+            print("WARNING: No loss with name {} is found.".format(
+                model.loss_name))
+
 
 def get_FCN_loss(model):
     
