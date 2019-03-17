@@ -256,6 +256,7 @@ class CNN(object):
                 self.prediction = tf.argmax(
                     self.posteriors, 0, name='Prediction')
                 c = self.output.get_shape()[0].value
+                self.class_num = c
                 self.y_ = tf.placeholder(tf.float32, 
                                          [c, None],
                                          name='labels')
@@ -1097,7 +1098,9 @@ class CNN(object):
     
         if not(hasattr(self, 'branches')):
             self.branches = {}
+            self.branches_input_layer = {}
             
+        self.branches_input_layer[branch_name] = probed_layer_name
         x = self.probes[0][probed_layer_name]
         with tf.variable_scope(self.name):
             branch = CNN(x, layer_dict, branch_name, [], None,
@@ -1573,4 +1576,51 @@ def max_pool(x, w_size, stride):
         strides=[1, stride, stride, 1], 
         padding='SAME')
     
+
+def replicate_model(model, 
+                    name_extension='_2',
+                    same_input=False):
+    """Replicating architecture of a model including its 
+    branches. This function mainly replicates the structure 
+    of the input model, and does not copy the opimitzation
+    settings
+
+    If `same_input` flag is set to `True`, the replicated
+    model will have the same input as the main model.
+    """
+
+    # main body of the model
+    new_name = model.name + name_extension
+    layer_dict = model.layer_dict
+    if same_input:
+        x = model.x
+    else:
+        x = tf.placeholder(tf.float32, model.x.shape)
+    # put probes in the proper places in case
+    # there are branches in the source model
+    probes = [[], []]
+    if hasattr(model, 'branches_input_layer'):
+        for _,input_layer in model.branches_input_layer.items():
+            probes[0] += [input_layer]
+    
+    rep_model = CNN(x, layer_dict, new_name, model.skips,
+                    None, None, probes)
+
+    # branches, if any
+    if hasattr(model, 'branches'):
+        for bname, branch in model.branches.items():
+            b_layer_dict = branch.layer_dict
+            # take only those layers from the branch
+            b_layer_dict = {
+                s: branch.layer_dict[s] 
+                for s in list(branch.var_dict.keys())
+                if bname in branch.var_dict[s][0].name}
+            # location of the branch (name of the layer
+            # whose input will be the input of the branch)
+            branch_input_layer = model.branches_input_layer[bname]
+            rep_model.create_branch(b_layer_dict,
+                                    branch_input_layer,
+                                    bname)
+
+    return rep_model
 
