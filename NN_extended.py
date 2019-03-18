@@ -12,9 +12,6 @@ import sys
 #import cv2
 import os
 
-from eval_utils import eval_metrics
-import patch_utils
-import NNAL_tools
 import PW_NN
 import AL
 
@@ -652,7 +649,7 @@ class CNN(object):
             model_vars+self.optimizer.variables()))
                     
 
-    def save_weights(self, file_path, save_moments=False):
+    def save_weights(self, file_path):
         """Saving only the parameter values of the 
         current model into a .h5 file
         
@@ -664,36 +661,33 @@ class CNN(object):
         """
         
         f = h5py.File(file_path, 'w')
-        for layer_name in list(self.var_dict):
+        for layer_name, layer_vars in self.var_dict.items():
             L = f.create_group(layer_name)
-            layer_vars = self.var_dict[layer_name]
 
-            if save_moments:
-                # create three groups for parameter
-                # values, first and second moments
-                L0 = L.create_group('Values')
-                L1 = L.create_group('Moments1')
-                L2 = L.create_group('Moments2')
-                for var in layer_vars:
-                    # [:-2] is for ':0' in variable names
-                    var_name = var.name.split('/')[-1][:-2]
-                    L0.create_dataset(var_name, data=var.eval())
-                    L1.create_dataset(
-                        var_name, 
-                        data=self.optimizer.get_slot(var,'m').eval())
-                    L2.create_dataset(
-                        var_name, 
-                        data=self.optimizer.get_slot(var,'v').eval())
-            else:
-                for var in layer_vars:
-                    var_name = var.name.split('/')[-1][:-2]
-                    # if self is a MT model, ignore last name, which
-                    # is ExponentialMovingAverage for all variables
-                    if 'Exponential' in var.name:
-                        var_name = var.name.split('/')[-2]
-                    # last line, [:-2] accounts for ':0' in 
-                    # TF variables
-                    L.create_dataset(var_name, data=var.eval())
+            for var in layer_vars:
+                var_name = var.name.split('/')[-1][:-2]
+                # if self is a MT model, ignore last name, which
+                # is ExponentialMovingAverage for all variables
+                if 'Exponential' in var.name:
+                    var_name = var.name.split('/')[-2]
+                # last line, [:-2] accounts for ':0' in 
+                # TF variables
+                L.create_dataset(var_name, data=var.eval())
+
+        # save the weights in branches too, if any
+        if hasattr(self, 'branches'):
+            for bname, branch in self.branches.items():
+                B = f.create_group(bname)
+                for layer_name, layer_vars in branch.var_dict.items():
+                    # if the layer is from the main body,
+                    # ignore it
+                    if bname not in layer_vars[0].name:
+                        continue
+
+                    sub_B = B.create_group(layer_name)
+                    for var in layer_vars:
+                        var_name = var.name.split('/')[-1][:-2]
+                        sub_B.create_dataset(var_name, data=var.eval())
             
         f.close()
         
@@ -758,24 +752,27 @@ class CNN(object):
 
         In summary `assign_dict` has the following structure:
 
-            {'layer_name_1': 
-                             {'Weight': [<assign_op>,
+            {
+             'layer_name_1': {'Weight': [<assign_op>,
                                          <placeholder>],
                               'Bias':   [<assign_op>,
-                                         <placeholder>],
-                                 :
-                              }
+                                         <placeholder>]}
                  :
+             'branch_name_1': {layer_name_1: {'Weight': [<assign_op>,
+                                                         <placeholder>],
+                                              'Bias':   [<assign_op>,
+                                                         <placeholder>]}
+                               }
              }
         
         """
 
         self.assign_dict = {}
-        for layer_name in list(self.var_dict):
-            layer_vars = self.var_dict[layer_name]
+
+        # main body
+        for layer_name, layer_vars in self.var_dict.items():
 
             layer_dict = {}
-
             for var in layer_vars:
                 var_name = var.name.split('/')[-1][:-2]
 
@@ -786,46 +783,31 @@ class CNN(object):
                 assign_op = var.assign(var_placeholder)
                 layer_dict.update({var_name:[assign_op,
                                              var_placeholder]})
-
             self.assign_dict.update({layer_name: layer_dict})
 
-    def add_assign_ops_AdamMoments(self):
+        # network branches, if any
+        if hasattr(self, 'branches'):
+            for bname, branch in self.branches.items():
+                branch_dict = {}
+                for layer_name, layer_vars in branch.var_dict.items():
+                    # ignore those layers that are the main body too
+                    if bname not in layer_vars[0].name:
+                        continue
+                    layer_dict = {}
 
-        self.assign_dict_moments1 = {}
-        self.assign_dict_moments2 = {}
-        for layer_name in list(self.var_dict):
-            layer_vars = self.var_dict[layer_name]
+                    for var in layer_vars:
+                        var_name = var.name.split('/')[-1][:-2]
+                        # value placeholder
+                        var_placeholder = tf.placeholder(var.dtype,
+                                                         var.get_shape())
+                        # assigning ops
+                        assign_op = var.assign(var_placeholder)
 
-            if (len(self.train_layers)>0) and \
-               not(layer_name in self.train_layers):
-                continue
-
-            layer_dict_m = {}
-            layer_dict_v = {}
-            for var in layer_vars:
-                var_name = var.name.split('/')[-1][:-2]
-
-                # value placeholder
-                var_m_placeholder = tf.placeholder(var.dtype,
-                                                   var.get_shape())
-                var_v_placeholder = tf.placeholder(var.dtype,
-                                                   var.get_shape())
-                # assigning ops
-                assign_op_m = self.optimizer.get_slot(
-                    var,'m').assign(var_m_placeholder)
-                assign_op_v = self.optimizer.get_slot(
-                    var,'v').assign(var_v_placeholder)
-
-                layer_dict_m.update({var_name:[assign_op_m,
-                                               var_m_placeholder]})
-                layer_dict_v.update({var_name:[assign_op_v,
-                                               var_v_placeholder]})
-
-            self.assign_dict_moments1.update({layer_name: 
-                                              layer_dict_m})
-            self.assign_dict_moments2.update({layer_name: 
-                                              layer_dict_v})
-
+                        layer_dict[var_name] = [assign_op,
+                                                var_placeholder]
+                    branch_dict[layer_name] = layer_dict
+                self.assign_dict[bname] = branch_dict
+                
 
     def perform_assign_ops(self,file_path,sess):
         """Performing assignment operations that have
@@ -838,39 +820,32 @@ class CNN(object):
         """
 
         model_real_name = self.output.name.split('/')[0]
+        f = h5py.File(file_path)
 
-        f = h5py.File(file_path)        
+        # get a list of branch names, if any
+        if hasattr(self, 'branches'):
+            bnames = list(self.branches.keys())
 
         # preparing the operation list to be performed
         # and the necessary `feed_dict`
         feed_dict={}
         ops_list = []
-        for layer_name in list(self.assign_dict):
-            if 'Values' in list(f[layer_name].keys()):
-                var_names = list(f[layer_name]['Values'].keys())
-                for var_name in var_names:
-                    # for Values
-                    var_value = np.array(f[layer_name]['Values'][var_name])
-                    ops_list += [self.assign_dict[layer_name][var_name][0]]
-                    feed_dict.update({
-                        self.assign_dict[layer_name][var_name][1]: var_value})
-
-                    if (len(self.train_layers)>0) and \
-                       not(layer_name in self.train_layers):
-                        continue
-                    # for Moment 1
-                    var_value = np.array(f[layer_name]['Moments1'][var_name])
-                    ops_list += [self.assign_dict_moments1[
-                        layer_name][var_name][0]]
-                    feed_dict.update({self.assign_dict_moments1[
-                        layer_name][var_name][1]: var_value})
-                    # for Moment 2
-                    var_value = np.array(f[layer_name]['Moments2'][var_name])
-                    ops_list += [self.assign_dict_moments2[
-                        layer_name][var_name][0]]
-                    feed_dict.update({self.assign_dict_moments2[
-                        layer_name][var_name][1]: var_value})
+        for name in self.assign_dict:
+            # this `name` could be a layer name, or a branch name
+            if name in bnames:
+                branch_name = name
+                for layer_name in self.assign_dict[branch_name]:
+                    var_names = list(f[branch_name][layer_name].keys())
+                    for var_name in var_names:
+                        var_value = np.array(f[branch_name][layer_name][var_name])
+                        # adding the operation
+                        ops_list += [self.assign_dict[branch_name][layer_name][var_name][0]]
+                        # adding the corresponding value into feed_dict
+                        feed_dict.update({
+                            self.assign_dict[branch_name][layer_name][var_name][1]: 
+                            var_value})
             else:
+                layer_name = name
                 var_names = list(f[layer_name].keys())
                 for var_name in var_names:
                     var_value = np.array(f[layer_name][var_name])
@@ -1591,6 +1566,14 @@ def replicate_model(model,
 
     # main body of the model
     new_name = model.name + name_extension
+    suffix = 2
+    while exists_model_name(new_name):
+        if suffix==2:
+            new_name += '_{}'.format(suffix)
+        else:
+            new_name = new_name[:-2] + '_{}'.format(suffix)
+        suffix += 1
+
     layer_dict = model.layer_dict
     if same_input:
         x = model.x
@@ -1624,3 +1607,9 @@ def replicate_model(model,
 
     return rep_model
 
+
+def exists_model_name(name):
+    """Check if a model's name already exists
+    """
+    return np.any([name+'/' in v.name for v in 
+                   tf.trainable_variables()])
