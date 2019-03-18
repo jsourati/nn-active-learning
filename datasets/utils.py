@@ -9,7 +9,7 @@ import h5py
 import pdb
 import os
 
-from NNAL_tools import sample_query_dstr as sample_pmf
+#from NNAL_tools import sample_query_dstr as sample_pmf
 import patch_utils
 
 
@@ -249,3 +249,28 @@ def nrrd_reader(path):
 def nii_reader(path):
     dat = nib.load(path)
     return dat.get_data()
+
+
+def generator_complete_data(X, Y, batch_size, 
+                            eternality=False,
+                            sample_axis=-1):
+    """Generator for a data given in form of a feature 
+    vector `X`, and the label vector(s) `Y`, which could
+    be an array or a list of arrays
+    """
+
+    n = X.shape[sample_axis]
+    batches = gen_batch_inds(n, batch_size)
+
+    # dynamic indexing for a specified sample axis
+    sl = [slice(None)] * X.ndim
+    while True:
+        for batch in batches:
+            sl[sample_axis] = batch
+            if isinstance(Y, list):
+                yield X[tuple(sl)], [Yarr[tuple(sl)] for Yarr in Y], batch
+            else:
+                yield X[tuple(sl)], Y[tuple(sl)], batch
+
+        if not(eternality):
+            break
