@@ -825,6 +825,8 @@ class CNN(object):
         # get a list of branch names, if any
         if hasattr(self, 'branches'):
             bnames = list(self.branches.keys())
+        else:
+            bnames = []
 
         # preparing the operation list to be performed
         # and the necessary `feed_dict`
@@ -1566,12 +1568,9 @@ def replicate_model(model,
 
     # main body of the model
     new_name = model.name + name_extension
-    suffix = 2
+    suffix = 3
     while exists_model_name(new_name):
-        if suffix==2:
-            new_name += '_{}'.format(suffix)
-        else:
-            new_name = new_name[:-2] + '_{}'.format(suffix)
+        new_name = new_name[:-2] + '_{}'.format(suffix)
         suffix += 1
 
     layer_dict = model.layer_dict
