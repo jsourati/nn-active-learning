@@ -145,42 +145,39 @@ class CNN(object):
         """
 
         self.x = x
-        self.global_step = tf.Variable(0, trainable=False, name='global_step')
-
-        # setting the hyper-parameters
-        self.set_hypers(**kwargs)
-
-        self.learning_rate = self.lr_schedule(self.global_step)
+        self.name = name
         self.batch_size = tf.shape(x)[0]  # to be used in conv2d_transpose
         self.layer_dict = layer_dict
-        self.name = name
         self.skips = skips
-        
-        self.keep_prob = tf.placeholder(
-            tf.float32, name='keep_prob')
+        self.input_shapes = []
+        self.output_shapes = []
+
         if dropout:
             self.dropout_layers = dropout[0]
             self.dropout_rate = dropout[1]
         else:
             self.dropout_layers = []
             self.dropout_rate = None
-        # creating the network's variables
+
         self.var_dict = {}
-        layer_names = list(layer_dict.keys())
+        self.layer_names = list(layer_dict.keys())
 
         self.probes = [{layer:[] for layer in probes[0]},
                        {layer:[] for layer in probes[1]}]
+
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
-        self.layer_names = list(layer_dict.keys())
-        
-        self.input_shapes = []
-        self.output_shapes = []
-
-        self.output = x
         with tf.variable_scope(name):
+
+            self.global_step = tf.Variable(0, trainable=False, name='global_step')
+            # setting the hyper-parameters
+            self.set_hypers(**kwargs)
+            self.learning_rate = self.lr_schedule(self.global_step)
+            self.keep_prob = tf.placeholder(tf.float32, name='keep_prob')
             self.is_training = tf.placeholder(tf.bool, name='is_training')
+
+            self.output = x
             for i, layer_name in enumerate(layer_dict):
 
                 # before adding a layer check if this layer
@@ -245,13 +242,10 @@ class CNN(object):
             # creating the label node
             if len(self.output.shape)==2:
                 # posterior
-                posteriors = tf.nn.softmax(
-                    tf.transpose(self.output))
-                self.posteriors = tf.transpose(
-                    posteriors, name='Posteriors')
+                posteriors = tf.nn.softmax(tf.transpose(self.output))
+                self.posteriors = tf.transpose(posteriors, name='Posteriors')
                 # prediction node
-                self.prediction = tf.argmax(
-                    self.posteriors, 0, name='Prediction')
+                self.prediction = tf.argmax(self.posteriors, 0, name='Prediction')
                 c = self.output.get_shape()[0].value
                 self.class_num = c
                 self.y_ = tf.placeholder(tf.float32, 
@@ -617,36 +611,20 @@ class CNN(object):
         
         return self.var_dict[layer_name][op_loc_in_layer]
 
-    def initialize_graph(self, 
-                         session,
-                         path=None):
-        """Initializing the graph, and if given loading
-        a set of pre-trained weights into the model
-        
+    def initialize(self, sess):
+        """Initializing the model
+
         :Parameters:
         
-            **session** : Tensorflow session
+            **sess** : Tensorflow session
                 The active session in which the model is
                 running
-        
-            **pretr_name** : string (default: None)
-                Name of the model that has pre-trained
-                weights. It will be `None` if no pre-
-                trained weights are given
-        
-            **path** : string (default: None)
-                Path to the pre-trained weights, if the
-                the given model has one
         """
 
-        # initializing of variables of only this model
-        model_vars = list(np.concatenate(
-            [self.var_dict[layer_name] for layer_name
-             in self.var_dict]))
-
-        # model parameters and optimizer's variables
-        session.run(tf.variables_initializer(
-            model_vars+self.optimizer.variables()))
+        # initializing variables of this model only
+        model_vars = [var for var in tf.global_variables()
+                      if self.name in var.name]
+        sess.run(tf.variables_initializer(model_vars))
                     
 
     def save_weights(self, file_path):
@@ -876,19 +854,20 @@ class CNN(object):
                 be a subset of `self.var_dict.keys()`.
         """
 
-        if len(self.output.shape)==2:
-            get_loss(self)
-        else:
-            get_FCN_loss(self)
+        with tf.variable_scope(self.name):
+            if len(self.output.shape)==2:
+                get_loss(self)
+            else:
+                get_FCN_loss(self)
 
-        # adding regularization, if any
-        if self.regularizer is not None:
-            reg_term = tf.reduce_mean(
-                tf.get_collection(
-                    tf.GraphKeys.REGULARIZATION_LOSSES))
-            self.loss += self.weight_decay*reg_term
+            # adding regularization, if any
+            if self.regularizer is not None:
+                reg_term = tf.reduce_mean(
+                    tf.get_collection(
+                        tf.GraphKeys.REGULARIZATION_LOSSES))
+                self.loss += self.weight_decay*reg_term
 
-        get_optimizer(self)
+            get_optimizer(self)
 
 
     def perturb_input(self):
@@ -1177,148 +1156,145 @@ def concat_outputs(curr_output, prev_output):
 
 
 def get_loss(model):
-
-    with tf.name_scope(model.name):
             
-        if model.loss_name=='CE':
-            # this CE only takes exclusive class labels
+    if model.loss_name=='CE':
+        # this CE only takes exclusive class labels
 
-            model.labeled_loss_weights = tf.to_float(
-                tf.not_equal(tf.reduce_sum(tf.transpose(model.y_), axis=-1), 0.)
-            )
+        model.labeled_loss_weights = tf.to_float(
+            tf.not_equal(tf.reduce_sum(tf.transpose(model.y_), axis=-1), 0.)
+        )
 
-            if hasattr(model, 'input_vox_weights'):
-                model.labeled_loss_weights = tf.multiply(
-                    model.labeled_loss_weights,
-                    model.input_weights)
-                
-            model.loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=tf.transpose(model.output),
-                weights=model.labeled_loss_weights)
+        if hasattr(model, 'input_vox_weights'):
+            model.labeled_loss_weights = tf.multiply(
+                model.labeled_loss_weights,
+                model.input_weights)
+
+        model.loss = tf.losses.sparse_softmax_cross_entropy(
+            labels=model.labels, logits=tf.transpose(model.output),
+            weights=model.labeled_loss_weights)
 
 
-        elif model.loss_name=='CE_softclasses':
-            # this CE accepts soft class assignments as the
-            # target distribution too.
-            # NOTE: there is still no way to assign weights to the
-            # training samples with this loss function.
+    elif model.loss_name=='CE_softclasses':
+        # this CE accepts soft class assignments as the
+        # target distribution too.
+        # NOTE: there is still no way to assign weights to the
+        # training samples with this loss function.
 
-            model.loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(
-                    labels=tf.transpose(model.y_), 
-                    logits=tf.transpose(model.output)),
-                name='CE_Loss')
+        model.loss = tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits(
+                labels=tf.transpose(model.y_), 
+                logits=tf.transpose(model.output)),
+            name='CE_Loss')
 
-        else:
-            print("WARNING: No loss with name {} is found.".format(
-                model.loss_name))
+    else:
+        print("WARNING: No loss with name {} is found.".format(
+            model.loss_name))
 
 
 def get_FCN_loss(model):
     
-    with tf.name_scope(model.name):
-        # Loss 
-        if model.loss_name=='CE':
-            # vox_labeled_loss_weights will be the weights of
-            # labeled samples in CE loss or its imbalanced variants 
-            model.vox_labeled_loss_weights = tf.to_float(
-                tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
-            )
-            
-            # if focal loss is being used with CE
-            if model.focal_gamma is not None:
-                model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
-                                    model.posteriors[:,:,:,1],
-                                    model.posteriors[:,:,:,0])
-                focal_weights = tf.pow(1.-model.pt, model.focal_gamma)
-                model.vox_labeled_loss_weights = tf.multiply(
-                    focal_weights,
-                    model.vox_labeled_loss_weights)
+    # Loss 
+    if model.loss_name=='CE':
+        # vox_labeled_loss_weights will be the weights of
+        # labeled samples in CE loss or its imbalanced variants 
+        model.vox_labeled_loss_weights = tf.to_float(
+            tf.not_equal(tf.reduce_sum(model.y_, axis=-1), 0.)
+        )
 
-            if model.bin_class_weights is not None:
-                class_zero = tf.multiply(
-                    tf.ones_like(model.labels, dtype=tf.float32),
-                    model.bin_class_weights[0])
-                class_one = tf.multiply(
-                    tf.ones_like(model.labels, dtype=tf.float32),
-                    model.bin_class_weights[1])
-                class_weights_tensor = tf.where(
-                    tf.equal(tf.to_float(model.labels), 1.),
-                    class_one,
-                    class_zero)
-                model.vox_labeled_loss_weights = tf.multiply(
-                    model.vox_labeled_loss_weights,
-                    class_weights_tensor)
+        # if focal loss is being used with CE
+        if model.focal_gamma is not None:
+            model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
+                                model.posteriors[:,:,:,1],
+                                model.posteriors[:,:,:,0])
+            focal_weights = tf.pow(1.-model.pt, model.focal_gamma)
+            model.vox_labeled_loss_weights = tf.multiply(
+                focal_weights,
+                model.vox_labeled_loss_weights)
 
-            if hasattr(model, 'input_vox_weights'):
-                model.vox_labeled_loss_weights = tf.multiply(
-                    model.vox_labeled_loss_weights,
-                    model.input_vox_weights)
-                
-            model.loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=model.labels, logits=model.output,
-                weights=model.vox_labeled_loss_weights)
+        if model.bin_class_weights is not None:
+            class_zero = tf.multiply(
+                tf.ones_like(model.labels, dtype=tf.float32),
+                model.bin_class_weights[0])
+            class_one = tf.multiply(
+                tf.ones_like(model.labels, dtype=tf.float32),
+                model.bin_class_weights[1])
+            class_weights_tensor = tf.where(
+                tf.equal(tf.to_float(model.labels), 1.),
+                class_one,
+                class_zero)
+            model.vox_labeled_loss_weights = tf.multiply(
+                model.vox_labeled_loss_weights,
+                class_weights_tensor)
 
-        if model.MT_SSL:
+        if hasattr(model, 'input_vox_weights'):
+            model.vox_labeled_loss_weights = tf.multiply(
+                model.vox_labeled_loss_weights,
+                model.input_vox_weights)
 
-            model.labeled_loss = model.loss
+        model.loss = tf.losses.sparse_softmax_cross_entropy(
+            labels=model.labels, logits=model.output,
+            weights=model.vox_labeled_loss_weights)
 
-            # perturbing the input
-            if not(hasattr(model, 'perturbed_x')):
-                model.perturb_input()
+    if model.MT_SSL:
 
-            # building the teacher...
-            # set up the EMA operations and MT model too
-            model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
-            V = []
-            for _,Vars in model.var_dict.items():
-                for var in Vars:
-                    if 'moving' not in var.name:
-                        V += [var]
-            model.ema_apply = model.ema.apply(V)
+        model.labeled_loss = model.loss
 
-            MT_x = model.perturbed_x
-            def custom_getter(getter, name, *args, **kwargs):
-                var = getter(name, *args, **kwargs)
-                op_name = var.name.split('/')[2].split(':')[0]
-                layer_name = var.name.split('/')[1]
-                target_var = model.get_var_by_layer_and_op_name(layer_name, op_name)
-                return model.ema.average(target_var)
-            keywords = {'custom_getter': custom_getter,
-                        'AU_4U': model.AU_4U,
-                        'AU_4L': model.AU_4L}
-            model.teacher = CNN(MT_x, model.layer_dict, model.name+'_teacher',
-                                model.skips, dropout=[model.dropout_layers,
-                                                      model.dropout_rate], **keywords)
-            model.teacher.output = tf.stop_gradient(model.teacher.output)
-            if len(model.teacher.output.shape)==2:
-                get_loss(model.teacher)
-            else:
-                get_FCN_loss(model.teacher)
+        # perturbing the input
+        if not(hasattr(model, 'perturbed_x')):
+            model.perturb_input()
 
-            # forming the consistency loss
-            model.cons_loss = measure_output_perturbation(model)
-            if model.AU_4U:
-                # if AU should be used for unlabeled samples, include the
-                # AU values inside the MT consistency terms
-                # AU_vals = log(sigma(x)^2)
-                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
-                    tf.multiply(model.cons_loss,
-                                tf.exp(-model.AU_vals))+0.5*model.AU_log_rel_coeff*model.AU_vals, 
-                    axis=[1,2]))
-            else:
-                model.cons_loss = tf.reduce_mean(tf.reduce_mean(
-                    model.cons_loss, axis=[1,2]))
+        # building the teacher...
+        # set up the EMA operations and MT model too
+        model.ema = tf.train.ExponentialMovingAverage(decay=model.MT_ema_decay)
+        V = []
+        for _,Vars in model.var_dict.items():
+            for var in Vars:
+                if 'moving' not in var.name:
+                    V += [var]
+        model.ema_apply = model.ema.apply(V)
 
-            # consistency coefficient
-            sigmoid_rampup_value = sigmoid_rampup(model.global_step,
-                                                  model.rampup_length)
-            model.cons_coeff = tf.multiply(sigmoid_rampup_value,
-                                           model.max_cons_coeff)
+        MT_x = model.perturbed_x
+        def custom_getter(getter, name, *args, **kwargs):
+            var = getter(name, *args, **kwargs)
+            op_name = var.name.split('/')[2].split(':')[0]
+            layer_name = var.name.split('/')[1]
+            target_var = model.get_var_by_layer_and_op_name(layer_name, op_name)
+            return model.ema.average(target_var)
+        keywords = {'custom_getter': custom_getter,
+                    'AU_4U': model.AU_4U,
+                    'AU_4L': model.AU_4L}
+        model.teacher = CNN(MT_x, model.layer_dict, model.name+'_teacher',
+                            model.skips, dropout=[model.dropout_layers,
+                                                  model.dropout_rate], **keywords)
+        model.teacher.output = tf.stop_gradient(model.teacher.output)
+        if len(model.teacher.output.shape)==2:
+            get_loss(model.teacher)
+        else:
+            get_FCN_loss(model.teacher)
 
-            # ... finally, here's the total loss
-            model.loss = tf.add(model.loss, 
-                                tf.multiply(model.cons_coeff, model.cons_loss))
+        # forming the consistency loss
+        model.cons_loss = measure_output_perturbation(model)
+        if model.AU_4U:
+            # if AU should be used for unlabeled samples, include the
+            # AU values inside the MT consistency terms
+            # AU_vals = log(sigma(x)^2)
+            model.cons_loss = tf.reduce_mean(tf.reduce_mean(
+                tf.multiply(model.cons_loss,
+                            tf.exp(-model.AU_vals))+0.5*model.AU_log_rel_coeff*model.AU_vals, 
+                axis=[1,2]))
+        else:
+            model.cons_loss = tf.reduce_mean(tf.reduce_mean(
+                model.cons_loss, axis=[1,2]))
+
+        # consistency coefficient
+        sigmoid_rampup_value = sigmoid_rampup(model.global_step,
+                                              model.rampup_length)
+        model.cons_coeff = tf.multiply(sigmoid_rampup_value,
+                                       model.max_cons_coeff)
+
+        # ... finally, here's the total loss
+        model.loss = tf.add(model.loss, 
+                            tf.multiply(model.cons_coeff, model.cons_loss))
 
 def get_optimizer(model):
     """Creating an optimizer (if needed) together with
