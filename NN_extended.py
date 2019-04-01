@@ -1073,8 +1073,7 @@ class CNN(object):
     def get_optimizer_for_branches(self):
 
         for _,branch in self.branches.items():
-            if not(hasattr(branch, 'loss')):
-                branch.get_optimizer()
+            branch.get_optimizer()
             
 
 def combine_layer_outputs(model,
@@ -1329,16 +1328,15 @@ def get_optimizer(model):
 
     """check if only certain layers are to be modified
     in training/fine-tuning"""
-    if hasattr(model, 'train_layers'):
-        d = len(model.grads_vars)
-        # locating those parameters that belong to the
-        # specified train_layers
-        train_pars = np.zeros(d, dtype=bool)
-        for layer_name in model.train_layers:
-            train_pars += np.array([layer_name==model.grads_vars[
-                i][1].name.split('/')[1] for i in range(d)])
-        model.grads_vars = [model.grads_vars[i] for i in 
-                            np.where(train_pars)[0]] 
+    if hasattr(model, 'train_mask'):
+        new_grads_vars = []
+        # only keep those gradient-variable pairs whose name
+        # is part of the given training mask
+        for _,grad_var in enumerate(model.grads_vars):
+            if np.any([name in grad_var[1].name.split(':')[0] 
+                       for name in model.train_mask]):
+                new_grads_vars += [grad_var]
+        model.grads_vars = new_grads_vars
 
     """ doing partial fine-tuning (PFT) if needed"""
     if hasattr(model, 'PFT_bflag'):
