@@ -388,6 +388,26 @@ def multi_F1_score(preds,labels,C=None):
 
     return indiv_scores, av_score
 
+def simple_eval_model(model,sess,dat_gen):
+
+    preds = []
+    grounds = []
+    if model.dropout_rate is None:
+        feed_dict = {}
+    else:
+        feed_dict = {model.keep_prob: 1.}
+    
+    for Xb, Yb,_ in dat_gen:
+        feed_dict.update({model.x:Xb})
+        preds += [sess.run(model.prediction, 
+                           feed_dict=feed_dict)]
+        grounds += [np.argmax(Yb, axis=0)]
+    preds = np.concatenate(preds)
+    grounds = np.concatenate(grounds)
+    acc = np.sum(preds==grounds) / len(preds)
+
+    return acc, preds
+
     
 
 def models_dict_for_different_sizes(model_builder,
