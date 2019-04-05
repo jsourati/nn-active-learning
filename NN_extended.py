@@ -157,7 +157,7 @@ class CNN(object):
             self.dropout_rate = dropout[1]
         else:
             self.dropout_layers = []
-            self.dropout_rate = None
+            self.dropout_rate = 0.
 
         self.var_dict = {}
         self.layer_names = list(layer_dict.keys())
@@ -1180,7 +1180,7 @@ def get_loss(model):
         # training samples with this loss function.
 
         model.loss = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits(
+            tf.nn.softmax_cross_entropy_with_logits_v2(
                 labels=tf.transpose(model.y_), 
                 logits=tf.transpose(model.output)),
             name='CE_Loss')
