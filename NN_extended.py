@@ -168,7 +168,7 @@ class CNN(object):
         sources_idx = [skips[i][0] for i in range(len(skips))]
         sources_output = []
 
-        with tf.variable_scope(name):
+        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
 
             self.global_step = tf.Variable(0, trainable=False, name='global_step')
             # setting the hyper-parameters
@@ -307,7 +307,7 @@ class CNN(object):
                 any activation at the output
         """
         
-        with tf.variable_scope(layer_name):
+        with tf.variable_scope(layer_name, reuse=tf.AUTO_REUSE):
             for op in layer_op_order:
 
                 if op=='M':
@@ -623,7 +623,7 @@ class CNN(object):
 
         # initializing variables of this model only
         model_vars = [var for var in tf.global_variables()
-                      if self.name in var.name]
+                      if self.name in var.name] + [self.global_step]
         sess.run(tf.variables_initializer(model_vars))
                     
 
@@ -854,7 +854,7 @@ class CNN(object):
                 be a subset of `self.var_dict.keys()`.
         """
 
-        with tf.variable_scope(self.name):
+        with tf.variable_scope(self.name, reuse=tf.AUTO_REUSE):
             if len(self.output.shape)==2:
                 get_loss(self)
             else:
