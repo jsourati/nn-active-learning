@@ -1185,6 +1185,13 @@ def get_loss(model):
                 logits=tf.transpose(model.output)),
             name='CE_Loss')
 
+    elif model.loss_name=='GCE':
+
+        clipped_posts = tf.clip_by_value(model.posteriors,1e-4,1-1e-4)
+        model.Lq = compute_Lq(clipped_posts, model.q)
+        model.loss = tf.reduce_mean(model.y_*model.Lq, axis=0)
+
+
     else:
         print("WARNING: No loss with name {} is found.".format(
             model.loss_name))
@@ -1426,6 +1433,11 @@ def exponential_decay(init_lr, global_step, decay_rate):
     result = init_lr*tf.exp(-global_step*decay_rate)
     return tf.identity(result, name="exp_decay")
 
+
+def compute_Lq(likes, q):
+
+    assert q!=0, 'q cannot be equal to zero.'
+    return (1.-tf.pow(likes,q)) / q
 
 def measure_output_perturbation(model):
     """Computing divergence between the output class probability
