@@ -21,14 +21,20 @@ class CNN(object):
     """
 
     DEFAULT_HYPERS = {
+        # general parameters
+        'activation': 'ReLU',
         'custom_getter': None,
         'loss_name': 'CE',
         'optimizer_name': 'SGD',
         'lr_schedule': lambda t: exponential_decay(1e-3,t,0.1),
         'regularizer': None,
         'weight_decay': 1e-4,
+
+        # imbalanced optimization
         'bin_class_weights': None,
         'focal_gamma': None,
+
+        # batch normalization
         'BN_decay': 0.999,
         'BN_epsilon': 1e-3,
 
@@ -334,8 +340,13 @@ class CNN(object):
                     self.add_BN(layer_name, layer_specs)
 
                 elif op=='A':
-                    # activation (ReLU)
-                    self.output = tf.nn.relu(self.output)
+                    # activation
+                    if self.activation=='ReLU':
+                        self.output = tf.nn.relu(self.output)
+                    elif self.activation=='tanh':
+                        self.output = tf.nn.tanh(self.output)
+                    else:
+                        raise ValueError('The specified activation cannot be found.')
 
                 else:
                     raise ValueError(
@@ -563,6 +574,7 @@ class CNN(object):
 
     def set_hypers(self, **kwargs):
 
+        kwargs.setdefault('activation', self.DEFAULT_HYPERS['activation'])
         kwargs.setdefault('custom_getter', self.DEFAULT_HYPERS['custom_getter'])
         kwargs.setdefault('BN_decay', self.DEFAULT_HYPERS['BN_decay'])
         kwargs.setdefault('BN_epsilon', self.DEFAULT_HYPERS['BN_epsilon'])
@@ -1180,7 +1192,7 @@ def get_loss(model):
         # training samples with this loss function.
 
         model.loss = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(
+            tf.nn.softmax_cross_entropy_with_logits(
                 labels=tf.transpose(model.y_), 
                 logits=tf.transpose(model.output)),
             name='CE_Loss')
