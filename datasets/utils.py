@@ -251,6 +251,7 @@ def nii_reader(path):
     return dat.get_data()
 
 
+
 def generator_complete_data(X, Y, batch_size, 
                             eternality=False,
                             sample_axis=-1):
@@ -274,3 +275,73 @@ def generator_complete_data(X, Y, batch_size,
 
         if not(eternality):
             break
+
+
+def lesion_patch_gen(imgs,
+                     masks,
+                     legal_inds,
+                     square_patch_size,
+                     patch_num):
+    """
+    -------------------------
+    Format of input variables:
+    --------------------------
+    imgs = [[sub1_img1, sub1_img2,...,sub1_imgM],
+             ...,
+            [subS_img1, subS_img2,...,subS_imgM]]
+
+    masks = [mask1, ..., maskS]
+
+    legal_inds = [[array(sub1_x1,..., sub1_xN),
+                   array(sub1_y1,..., sub1_yN),
+                   array(sub1_z1,..., sub1_zN)],
+                  ...,
+                  [array(subS_x1,..., subS_xN),
+                   array(subS_y1,..., subS_yN),
+                   array(subS_z1,..., subS_zN)],
+                  
+    -------------------------
+    Format of output variables:
+    --------------------------
+    patches : array of patches
+              shape = (patch_num, 
+                       square_patch_size[0],
+                       square_path_size[1],
+                       #modalities)
+
+    sub_inds : list of selected subjects
+
+    cntr_coords : 3D coordinates of selected
+                  patch centers; i.e., the i-th
+                  coordinate points to the selected
+                  voxel in coordinate of images
+                  in `imgs[sub_inds[i]]`
+    """
+
+
+    s = len(imgs)    # number of subjects
+    m = len(imgs[0]) # number of modalities
+    half_size = int(square_patch_size/2)
+
+    while True:
+        # selecting subject to sample patches from
+        sub_inds = np.random.randint(0, s, patch_num)
+
+        # sampling central voxel of the patch
+        cntr_inds = [np.random.randint(len(legal_inds[i][0]))
+                     for i in sub_inds]
+        cntr_coords = [(legal_inds[sub_inds[i]][0][cntr_inds[i]], 
+                        legal_inds[sub_inds[i]][1][cntr_inds[i]],
+                        legal_inds[sub_inds[i]][2][cntr_inds[i]]) 
+                       for i in range(len(sub_inds))]
+
+        patches = np.stack([
+            np.stack([imgs[sub_inds[i]][j][
+                cntr_coords[i][0]-half_size:cntr_coords[i][0]+half_size+1,
+                cntr_coords[i][1]-half_size:cntr_coords[i][1]+half_size+1,
+                cntr_coords[i][2]]
+                      for j in range(m)], axis=2)
+            for i in range(len(sub_inds))], axis=0)
+
+        yield patches, sub_inds, cntr_coords
+    
