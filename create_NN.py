@@ -13,57 +13,78 @@ import os
 import NN_extended
 
 
-def create_VGG19(dropout_rate, learning_rate,
-                 n_class, grad_layers,
-                 train_layers):
-    """Creating a VGG19 model using CNN class
-
-    DEPRECATED: needs to be updated to be 
-    compatible with extended NN
+def create_VGG(class_num, 
+               model_name, 
+               layer_num=16,
+               dropout=None,
+               probes=[[],[]], 
+               **kwargs):
+    """Creating a VGG model using CNN class 
+    (supporting VGG-16 and VGG-19)
     """
     
     # architechture dictionary
-    vgg_dict = {'conv1':[64, 'conv', [3,3]],
-                'conv2':[64, 'conv', [3,3]],
-                'max1': [[2,2], 'pool'],
-                'conv3':[128, 'conv', [3,3]],
-                'conv4':[128, 'conv', [3,3]],
-                'max2' :[[2,2], 'pool'],
-                'conv5':[256, 'conv', [3,3]],
-                'conv6':[256, 'conv', [3,3]],
-                'conv7':[256, 'conv', [3,3]],
-                'conv8':[256, 'conv', [3,3]],
-                'max3': [[2,2], 'pool'],
-                'conv9': [512, 'conv', [3,3]],
-                'conv10':[512, 'conv', [3,3]],
-                'conv11':[512, 'conv', [3,3]],
-                'conv12':[512, 'conv', [3,3]],
-                'max4': [[2,2], 'pool'],
-                'conv13':[512, 'conv', [3,3]],
-                'conv14':[512, 'conv', [3,3]],
-                'conv15':[512, 'conv', [3,3]],
-                'conv16':[512, 'conv', [3,3]],
-                'max5':[[2,2], 'pool'],
-                'fc1':[4096,'fc'],
-                'fc2':[4096,'fc'],
-                'fc3':[n_class,'fc']}
+    if layer_num==16:
+        vgg_dict = {'conv_1': ['conv', [64, [3,3]], 'MA'],
+                    'conv_2': ['conv', [64, [3,3]], 'MA'],
+                    'pool_1': ['pool', [2,2]],
+                    'conv_3': ['conv', [128, [3,3]], 'MA'],
+                    'conv_4': ['conv', [128, [3,3]], 'MA'],
+                    'pool_2': ['pool', [2,2]],
+                    'conv_5': ['conv', [256, [3,3]], 'MA'],
+                    'conv_6': ['conv', [256, [3,3]], 'MA'],
+                    'conv_8': ['conv', [256, [1,1]], 'MA'],
+                    'pool_3': ['pool', [2,2]],
+                    'conv_9': ['conv', [512, [3,3]], 'MA'],
+                    'conv_10': ['conv', [512, [3,3]], 'MA'],
+                    'conv_11': ['conv', [512, [1,1]], 'MA'],
+                    'pool_4':  ['pool', [2,2]],
+                    'conv_13': ['conv', [512, [3,3]], 'MA'],
+                    'conv_14': ['conv', [512, [3,3]], 'MA'],
+                    'conv_15': ['conv', [512, [1,1]], 'MA'],
+                    'pool_5':  ['pool', [2,2]],
+                    'fc_1': ['fc', [4096], 'MA'],
+                    'fc_2': ['fc', [4096], 'MA'],
+                    'fc_3': ['fc', [class_num], 'MA']}
+    elif layer_num==19:
+        vgg_dict = {'conv_1': ['conv', [64, [3,3]], 'MA'],
+                    'conv_2': ['conv', [64, [3,3]], 'MA'],
+                    'pool_1': ['pool', [2,2]],
+                    'conv_3': ['conv', [128, [3,3]], 'MA'],
+                    'conv_4': ['conv', [128, [3,3]], 'MA'],
+                    'pool_2': ['pool', [2,2]],
+                    'conv_5': ['conv', [256, [3,3]], 'MA'],
+                    'conv_6': ['conv', [256, [3,3]], 'MA'],
+                    'conv_7': ['conv', [256, [3,3]], 'MA'],
+                    'conv_8': ['conv', [256, [3,3]], 'MA'],
+                    'pool_3': ['pool', [2,2]],
+                    'conv_9': ['conv', [512, [3,3]], 'MA'],
+                    'conv_10': ['conv', [512, [3,3]], 'MA'],
+                    'conv_11': ['conv', [512, [3,3]], 'MA'],
+                    'conv_12': ['conv', [512, [3,3]], 'MA'],
+                    'pool_4':  ['pool', [2,2]],
+                    'conv_13': ['conv', [512, [3,3]], 'MA'],
+                    'conv_14': ['conv', [512, [3,3]], 'MA'],
+                    'conv_15': ['conv', [512, [3,3]], 'MA'],
+                    'conv_16': ['conv', [512, [3,3]], 'MA'],
+                    'pool_5':  ['pool', [2,2]],
+                    'fc_1': ['fc', [4096], 'MA'],
+                    'fc_2': ['fc', [4096], 'MA'],
+                    'fc_3': ['fc', [class_num], 'MA']}
 
 
-    dropout = [[21,22], dropout_rate]
     x = tf.placeholder(tf.float32,
                        [None, 224, 224, 3],
                        name='input')
-    feature_layer = len(vgg_dict) - 2
     
     # creating the architecture
-    model = CNN(x, vgg_dict, 'VGG19', 
-                feature_layer, dropout)
-
-    # forming optimizer and gradient operator
-    print('Optimizers..')
-    model.get_optimizer(learning_rate, train_layers)
-    print('Gradients..')
-    model.get_gradients(grad_layers)
+    model = NN_extended.CNN(x, 
+                            vgg_dict, 
+                            model_name, 
+                            [],
+                            None, 
+                            dropout, 
+                            probes)
 
     return model
 
@@ -115,7 +136,8 @@ def create_PW1(nclass,
 def DenseNet_2block(growth_rate, 
                     input_shape,
                     nclass,
-                    model_name):
+                    model_name,
+                    **kwargs):
 
     k = growth_rate
 
@@ -181,7 +203,8 @@ def DenseNet_2block(growth_rate,
     x = tf.placeholder(tf.float32, [None,]+input_shape)
     model = NN_extended.CNN(x, pw_dict, model_name, 
                             skips,None,
-                            [[12, 26, 28], 0.2])
+                            [[12, 26, 28], 0.2],
+                            **kwargs)
 
     return model
 
