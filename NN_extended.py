@@ -12,6 +12,7 @@ import sys
 #import cv2
 import os
 
+#from eval_utils import eval_metrics
 import PW_NN
 import AL
 
@@ -385,10 +386,10 @@ class CNN(object):
 
         prev_depth = self.output.get_shape()[-1].value
         new_vars = [weight_variable('Weight',
-                                    [kernel_dim[0], 
-                                     kernel_dim[1], 
-                                     prev_depth, 
-                                     kernel_num], 
+                                    [kernel_dim[0],
+                                     kernel_dim[1],
+                                     prev_depth,
+                                     kernel_num],
                                     self.regularizer,
                                     self.custom_getter),
                     bias_variable('Bias', [kernel_num], 
@@ -1175,6 +1176,30 @@ def get_loss(model):
             tf.not_equal(tf.reduce_sum(tf.transpose(model.y_), axis=-1), 0.)
         )
 
+        if model.focal_gamma is not None:
+            model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
+                                model.posteriors[1,:],
+                                model.posteriors[0,:])
+            focal_weights = tf.pow(1.-model.pt, model.focal_gamma)
+            model.vox_labeled_loss_weights = tf.multiply(
+                focal_weights,
+                model.labeled_loss_weights)
+
+        if model.bin_class_weights is not None:
+            class_zero = tf.multiply(
+                tf.ones_like(model.labels, dtype=tf.float32),
+                model.bin_class_weights[0])
+            class_one = tf.multiply(
+                tf.ones_like(model.labels, dtype=tf.float32),
+                model.bin_class_weights[1])
+            class_weights_tensor = tf.where(
+                tf.equal(tf.to_float(model.labels), 1.),
+                class_one,
+                class_zero)
+            model.labeled_loss_weights = tf.multiply(
+                model.labeled_loss_weights,
+                class_weights_tensor)
+
         if hasattr(model, 'input_vox_weights'):
             model.labeled_loss_weights = tf.multiply(
                 model.labeled_loss_weights,
@@ -1183,7 +1208,6 @@ def get_loss(model):
         model.loss = tf.losses.sparse_softmax_cross_entropy(
             labels=model.labels, logits=tf.transpose(model.output),
             weights=model.labeled_loss_weights)
-
 
     elif model.loss_name=='CE_softclasses':
         # this CE accepts soft class assignments as the
@@ -1274,8 +1298,8 @@ def get_FCN_loss(model):
         MT_x = model.perturbed_x
         def custom_getter(getter, name, *args, **kwargs):
             var = getter(name, *args, **kwargs)
-            op_name = var.name.split('/')[2].split(':')[0]
-            layer_name = var.name.split('/')[1]
+            op_name = var.name.split('/')[-1].split(':')[0]
+            layer_name = var.name.split('/')[-2]
             target_var = model.get_var_by_layer_and_op_name(layer_name, op_name)
             return model.ema.average(target_var)
         keywords = {'custom_getter': custom_getter,
