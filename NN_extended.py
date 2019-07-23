@@ -201,13 +201,13 @@ class CNN(object):
 
                 layer = layer_dict[layer_name]
                 if len(layer)==2:
-                    layer += ['MA']
+                    layer += ['M']
 
                 self.input_shapes += [[self.output.shape[i].value for i
                                        in range(len(self.output.shape))]]
                 # layer[0]: layer type
                 # layer[1]: layer specs
-                # layer[2]: order of operations, default: 'MA'
+                # layer[2]: order of operations, default: 'M'
                 self.add_layer(
                     layer_name, layer[0], layer[1], layer[2])
 
@@ -260,27 +260,36 @@ class CNN(object):
                                          name='labels')
                 self.labels = tf.argmax(self.y_, axis=0)
             else:
-                h = self.output.shape[1].value
-                w = self.output.shape[2].value
-                c = self.output.shape[3].value
+                out_map_dim = [_.value for _ in self.output.shape[1:-1]]
+                c = self.output.shape[-1].value
                 if self.AU_4L or self.AU_4U:
                     if self.AU_4L:
                         # c is definitely even
                         c = int(c/2)
                     elif self.AU_4U:
                         c -= 1
-                    self.clean_output = self.output[:,:,:,:c]
-                    self.AU_vals = tf.nn.relu(self.output[:,:,:,c:])
+
+                    if len(out_map_dim)==2:
+                        self.clean_output = self.output[:,:,:,:c]
+                        self.AU_vals = tf.nn.relu(self.output[:,:,:,c:])
+                    elif len(out_map_dim)==3:
+                        self.clean_output = self.output[:,:,:,:,:c]
+                        self.AU_vals = tf.nn.relu(self.output[:,:,:,:,c:])
+
                     self.posteriors = tf.nn.softmax(self.clean_output)
                     # if AU values are to be used with labeled samples,
                     # corrupt the outputs with AU-dependent noise
                     if self.AU_4L:
                         corrupt_output_wAU_4L_FCN(self)
                     elif self.AU_4U:
-                        self.AU_vals = self.AU_vals[:,:,:,0]
+                        if len(out_map_dim)==2:
+                            self.AU_vals = self.AU_vals[:,:,:,0]
+                        elif len(out_map_dim)==3:
+                            self.AU_vals = self.AU_vals[:,:,:,:,0]
+
                 else:
                     self.posteriors = tf.nn.softmax(self.output, name='posterior')
-                self.y_ = tf.placeholder(tf.float32,[None,h,w,c], name='one_hot_labels')
+                self.y_ = tf.placeholder(tf.float32,[None,]+out_map_dim+[c,], name='one_hot_labels')
                 self.labels = tf.argmax(self.y_, axis=-1, name='labels')
                 self.prediction = tf.argmax(self.posteriors, axis=-1, name='prediction')
                 self.class_num = c
@@ -378,23 +387,22 @@ class CNN(object):
         kernel_num = layer_specs[0]
         kernel_dim = layer_specs[1]
         if len(layer_specs)==2:
-            strides = [1,1]
+            strides = [1]*len(kernel_dim)
             padding='SAME'
         elif len(layer_specs)==3:
             strides = layer_specs[2]
             padding='SAME'
 
         prev_depth = self.output.get_shape()[-1].value
-        new_vars = [weight_variable('Weight',
-                                    [kernel_dim[0],
-                                     kernel_dim[1],
-                                     prev_depth,
-                                     kernel_num],
-                                    self.regularizer,
-                                    self.custom_getter),
-                    bias_variable('Bias', [kernel_num], 
-                                  self.custom_getter)
-                ]
+        W = weight_variable('Weight',
+                            kernel_dim + 
+                            [prev_depth,
+                             kernel_num],
+                            self.regularizer,
+                            self.custom_getter)
+        b = bias_variable('Bias', [kernel_num], 
+                          self.custom_getter)
+        new_vars = [W,b]
 
         # there may have already been some variables
         # created for this layer (through BN)
@@ -405,11 +413,17 @@ class CNN(object):
 
 
         # output of the layer
-        self.output = tf.nn.conv2d(
-            self.output, 
-            self.var_dict[layer_name][-2], 
-            strides= [1,] + strides + [1,],
-            padding=padding) + self.var_dict[layer_name][-1]
+        if len(kernel_dim)==2:
+            self.output = tf.nn.conv2d(
+                self.output, W, 
+                strides= [1,] + strides + [1,],
+                padding=padding) + b
+
+        elif len(kernel_dim)==3:
+            self.output = tf.nn.conv3d(
+                self.output, W,
+                strides= [1,] + strides + [1,],
+                padding = padding) + b
     
     def add_fc(self, 
                layer_name,
@@ -438,11 +452,20 @@ class CNN(object):
             
     def add_pool(self, layer_specs):
         """Adding a (max-)pooling layer with given specifications
+        
+        * `layer_specs` : list
+            A list of integers representing window size (=strides)
+
+        NOTE: for now, the assumption here is that strides and
+        window sizes are equal in all directions (because almost
+        always we use max-pooling for reducing dimensioanlities)
         """
-        pool_size = layer_specs
+
+        w_sizes = layer_specs
+        strides = layer_specs
         self.output = max_pool(self.output, 
-                               pool_size[0], 
-                               pool_size[1])
+                               w_sizes, 
+                               strides)
 
     def add_BN(self, 
                layer_name,
@@ -529,16 +552,16 @@ class CNN(object):
 
         # adding new variables
         prev_depth = self.output.get_shape()[-1].value
-        new_vars = [weight_variable('Weight',
-                                    [kernel_dim[0],
-                                     kernel_dim[1],
-                                     kernel_num, 
-                                     prev_depth],
-                                    self.regularizer,
-                                    self.custom_getter),
-                    bias_variable('Bias', [kernel_num],
-                                  self.custom_getter)
-                ]
+        W = weight_variable('Weight',
+                            kernel_dim + 
+                            [kernel_num, 
+                             prev_depth],
+                            self.regularizer,
+                            self.custom_getter)
+        b = bias_variable('Bias', [kernel_num],
+                          self.custom_getter)
+        new_vars = [W,b]
+
         # there may have already been some variables
         # created for this layer (through BN)
         if layer_name in self.var_dict:
@@ -546,32 +569,36 @@ class CNN(object):
         else:
             self.var_dict.update({layer_name: new_vars})
 
-
         # output of the layer
+        dim = len(self.x.shape) - 2
         input_size = [self.output.shape[i].value for
-                      i in range(1,3)]
-        output_shape = [self.batch_size, 
-                        strides[0]*input_size[0],
-                        strides[1]*input_size[1],
-                        kernel_num]
+                      i in range(1,dim+1)]
+        output_shape = [self.batch_size,] + \
+                       [strides[i]*input_size[i] for i in range(dim)] +\
+                       [kernel_num,]
         strides = [1,] + strides + [1,]
+
         # padding will stay `SAME` for now
-        self.output = tf.nn.conv2d_transpose(
-            self.output, self.var_dict[layer_name][-2],
-            output_shape, strides) + \
-            self.var_dict[layer_name][-1] 
-        
+        if dim==2:
+            self.output = tf.nn.conv2d_transpose(
+                self.output, W, output_shape, strides) + b
+        elif dim==3:
+            self.output = tf.nn.conv3d_transpose(
+                self.output, W, output_shape, strides) + b
 
         # last line is adding zeros with the same size of the 
         # output (except batch size) only in order to
         # remove the size ambiguities that is created by 
         # tf.nn.conv2d_transpsoe
         if output_shape[-1]>1:
-            self.output += tf.constant(1., shape=[1,]+output_shape[1:])
+            self.output += tf.constant(0., shape=[1,]+output_shape[1:])
         else:
             output_shape[-1]=2
-            self.output += tf.constant(1., shape=[1,]+output_shape[1:])
-            self.output = self.output[:,:,:,:1]
+            self.output += tf.constant(0., shape=[1,]+output_shape[1:])
+            if dim==2:
+                self.output = self.output[:,:,:,:1]
+            elif dim==3:
+                self.output = self.output[:,:,:,:,:1]
 
     def set_hypers(self, **kwargs):
 
@@ -1102,6 +1129,17 @@ def combine_layer_outputs(model,
     combining 2D feature maps (not supporting
     1D feature vectors--this is mostly for 
     handling resizing issues)
+
+    Assumption for case of 3D images:
+    - - - - - - - - - - - - - - - -
+    For 3D images, i.e. 5-dimensional batches,
+    we assume that variables do not need to be resized
+    in depth:
+
+    output shape      = [?, zo, ho, wo, mo] 
+    shape of a source = [?, zs, hs, ws, ms]
+    
+    assumption: zo=zs (equal depths)
     """
 
     sources_for_sink = []
@@ -1113,24 +1151,35 @@ def combine_layer_outputs(model,
         return
     else:
         # get the shape of source variables
-        shapes = [tuple([shape.value for shape in par.shape[1:3]])
-                  for par in np.array(sources_output)[sources_for_sink]]
-        assert len(set(shapes))==1, pdb.set_trace() 
-        #'The skipped variables '+\
-        #    'should all have the same size.'
+        if len(model.output.shape)==4:
+            shapes = [tuple([shape.value for shape in par.shape[1:3]])
+                      for par in np.array(sources_output)[sources_for_sink]]
+            ho = model.output.shape[1].value
+            wo = model.output.shape[2].value
+        else:
+            shapes = [tuple([shape.value for shape in par.shape[2:4]])
+                      for par in np.array(sources_output)[sources_for_sink]]
+            ho = model.output.shape[2].value
+            wo = model.output.shape[3].value
         h = shapes[0][0]
         w = shapes[0][1]
+
+        assert len(set(shapes))==1, pdb.set_trace() 
         
-        # now compar size of the output with the skipped
+        # now compare size of the output with the skipped
         # variables, and resize if needed
-        ho = model.output.shape[1].value
-        wo = model.output.shape[2].value
         if (h != ho) or (w != wo):
             print('The output is resized from (%d,%d)'%
                   (ho,wo)+' to (%d,%d)'%(h,w))
             is_added = model.output==sources_output[-1]
-            model.output = tf.image.resize_image_with_crop_or_pad(
-                model.output, h, w)
+            if len(model.output.shape)==4:
+                model.output = tf.image.resize_image_with_crop_or_pad(
+                    model.output, h, w)
+            else:
+                # if 3D, do the resizes one-by-one for each depth
+                model.output = tf.stack([tf.image.resize_image_with_crop_or_pad(
+                    model.output[:,i,:,:,:], h, w) for i in range(model.output.shape[1].value)],
+                                        axis=1)
             # if model.output has already been added
             # to sources_output (and if so, this can be done only
             # by the previous layer) change that too
@@ -1245,9 +1294,17 @@ def get_FCN_loss(model):
 
         # if focal loss is being used with CE
         if model.focal_gamma is not None:
-            model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
-                                model.posteriors[:,:,:,1],
-                                model.posteriors[:,:,:,0])
+            if len(model.output.shape)==4:
+                # model including 2D CNN layers
+                model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
+                                    model.posteriors[:,:,:,1],
+                                    model.posteriors[:,:,:,0])
+            elif len(model.output.shape)==5:
+                # model including 3D CNN layers
+                model.pt = tf.where(tf.equal(tf.to_float(model.labels), 1.),
+                                    model.posteriors[:,:,:,:,1],
+                                    model.posteriors[:,:,:,:,0])
+
             focal_weights = tf.pow(1.-model.pt, model.focal_gamma)
             model.vox_labeled_loss_weights = tf.multiply(
                 focal_weights,
@@ -1541,10 +1598,9 @@ def weight_variable(name, shape, reg, custom_getter=None):
     # input tensors
     if len(shape)>2:
         # conv. layer
-        # shape[0] : kernel dim_1 
-        # shape[1] : kernel dim_2
-        # shape[2] : input channels
-        n = shape[0]*shape[1]*shape[2]
+        # shape : [kernel dim] (length = 2 or 3)
+        #         + [input_channels, output_channels]
+        n = np.prod(shape[:-1])
         std = np.sqrt(2/n)
     else:
         # fc layer
@@ -1569,11 +1625,53 @@ def bias_variable(name, shape, custom_getter=None):
                            custom_getter=custom_getter)
 
     
-def max_pool(x, w_size, stride):
-    return tf.nn.max_pool(
-        x, ksize=[1, w_size, w_size, 1],
-        strides=[1, stride, stride, 1], 
-        padding='SAME')
+def max_pool(x, w_sizes, strides, dim=None):
+    """Dimensionality of the max-pooling here will be primarily
+    determined by `w_sizes` and `strides`. `dim` will be used only when 
+    both `w_sizes` and `strides` are scalars.
+    """
+
+    if isinstance(w_sizes, int) and isinstance(strides, int):
+        if dim is None:
+            raise ValueError('Ambiguity in max-pooling dimension.')
+
+    if dim is None:
+        dim = len(x.shape) - 2
+
+    # Window search
+    if isinstance(w_sizes, int):
+        ksize = [1,] + [w_sizes]*dim + [1,]
+    elif isinstance(w_sizes, list):
+        if len(w_sizes)!=4 and len(w_sizes)!=5:
+            # len(w_sizes) = 2 or 3
+            ksize = [1,] + w_sizes + [1,]
+        elif len(w_sizes)==4 or len(w_sizes)==5:
+            # len(w_sizes) = 2 or 3
+            ksize = w_sizes
+        else:
+            raise ValueError('Wrong dimension for window size in a max-pool.')
+    else:
+        raise ValueError('Window size in max-pool should be either an integer or list.')
+
+    # Strides
+    if isinstance(strides, int):
+        strides = [1,] + [strides]*dim + [1,]
+    elif isinstance(strides, list):
+        if len(strides)!=4 and len(strides)!=5:
+            strides = [1,] + strides + [1,]
+    else:
+        raise ValueError('Strides in max-pool should be either an integer or list.')
+
+    if dim==2:
+        return tf.nn.max_pool(
+            x, ksize=ksize,
+            strides=strides, 
+            padding='SAME')
+    elif dim==3:
+        return tf.nn.max_pool3d(
+            x, ksize=ksize,
+            strides=strides,
+            padding='SAME')
     
 
 def replicate_model(model, 
