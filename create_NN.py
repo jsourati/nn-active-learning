@@ -208,54 +208,69 @@ def DenseNet_2block(growth_rate,
 
     return model
 
-def FCDenseNet_103Layers(input_shape, c, model_name, 
-                         probes=[[],[]], **kwargs):
-    """Also known as, Tiramisu network with 
+def FCDenseNet_103Layers(input_shape, 
+                         class_num, 
+                         growth_rate,
+                         layer_depths,
+                         model_name,
+                         probes=[[],[]], 
+                         **kwargs):
+    """Also known as Tiramisu network with 
     103 layers
+
+    * `layer_depths` : list
+        a list with 11 integers as number of layers in each
+        dense block in downward path (5 blocks), 
+        transition (1 block) and upward path (5 blocks)
     """
     
     # growth rate
-    k = 16
+    k = growth_rate
+
+    # dimension
+    dim = len(input_shape) - 1
 
     # first layer
-    pw_dict = {'first': ['conv', [48, [3,3]], 'MA']}
+    # dim=2 : [48, [3,3]]
+    # dim=3 : [48, [3,3,3]]
+    pw_dict = {'first': ['conv', [48, [3]*dim], 'MA']}
 
     
     ''' DB+TD  '''
-    # number of Dense block layers
-    Ls = [4, 5, 7, 10, 12]
+    # number of Dense block layers in the downward path
+    Ls = layer_depths[:5]
     for i in range(len(Ls)):
         # dense block
-        DB = {'DB%d_%d'%(i,j): ['conv', [k, [3,3]], 'BAM']
+        DB = {'DB%d_%d'%(i,j): ['conv', [k, [3]*dim], 'BAM']
               for j in range(Ls[i])}
         pw_dict.update(DB)
         # transition down
         nfmap = 48+np.sum(Ls[:i+1])*k
-        TD = {'T_%d'%i: ['conv', [nfmap, [1,1]], 'BMA'],
-              'pool_%d'%i: ['pool', [2,2]]}
+        TD = {'T_%d'%i: ['conv', [nfmap, [1]*dim], 'BMA'],
+              'pool_%d'%i: ['pool', [2]*dim]}
         pw_dict.update(TD)
 
     ''' Bottleneck Dense Block''' 
     L = 15
-    BT = {'BottleDB_%d'%j: ['conv', [k, [3,3]], 'BAM']
+    BT = {'BottleDB_%d'%j: ['conv', [k, [3]*dim], 'BAM']
           for j in range(L)}
     pw_dict.update(BT)
 
     ''' TU+DB '''
-    Ls = np.flip(Ls+[15], 0)
+    Ls = np.flip(Ls+[layer_depths[5]], 0)
     for i in range(1,len(Ls)):
         # transition up
         nfmap = Ls[i-1]*k
         TU = {'TU_%d'%(i-1): ['conv_transpose', 
-                          [nfmap, [3,3], [2,2]], 'M']}
+                              [nfmap, [3]*dim, [2]*dim], 'M']}
         pw_dict.update(TU)
         # dense block
-        DB = {'DB%d_%d'%(5+i-1,j): ['conv', [k, [3,3]], 'BAM']
+        DB = {'DB%d_%d'%(5+i-1,j): ['conv', [k, [3]*dim], 'BAM']
               for j in range(Ls[i])}
         pw_dict.update(DB)
 
     # last layer
-    pw_dict.update({'last': ['conv', [c,[1,1]], 'M']})
+    pw_dict.update({'last': ['conv', [class_num,[1]*dim], 'M']})
 
 
     ''' Establishing the Skip Connections '''
@@ -296,7 +311,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
                               range(len(skips))])
     # NOTE1: we know that output nodes of DBs in downward
     # path are not already skipped somewhere else, hence
-    # we don't need to check with an if
+    # we don't need to check that with an if
     #
     # NOTE2: more importantly, for source nodes, we only 
     # save their outuputs before combining them with other
@@ -315,7 +330,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     # output of DB4_11 + connections to T_4 
     # --> 
     # output of TU_0 (input of DB5_0)
-    DB4_end_node = np.where(layer_names=='DB4_11')[0][0]
+    DB4_end_node = np.where(layer_names=='DB4_{}'.format(layer_depths[4]-1))[0][0]
     DB5_start_node = np.where(layer_names=='DB5_0')[0][0]
     T4_node = np.where(layer_names=='T_4')[0][0]
     # go through all nodes, and if T_4 was in their
@@ -328,7 +343,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     # output of DB3 + connections to T_3
     # --> 
     # output of TU_1 (input of DB6_0)
-    DB3_end_node = np.where(layer_names=='DB3_9')[0][0]
+    DB3_end_node = np.where(layer_names=='DB3_{}'.format(layer_depths[3]-1))[0][0]
     DB6_start_node = np.where(layer_names=='DB6_0')[0][0]
     T3_node = np.where(layer_names=='T_3')[0][0]
     for i in range(len(skips)):
@@ -339,7 +354,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     # output of DB2 + connections to T_2 
     # --> 
     # output of TU_2 (input of DB7_0)
-    DB2_end_node = np.where(layer_names=='DB2_6')[0][0]
+    DB2_end_node = np.where(layer_names=='DB2_{}'.format(layer_depths[2]-1))[0][0]
     DB7_start_node = np.where(layer_names=='DB7_0')[0][0]
     T2_node =  np.where(layer_names=='T_2')[0][0]
     for i in range(len(skips)):
@@ -350,7 +365,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     # output of DB1 + connections to T_1 
     # -->
     # output of TU_3 (input of DB8_0)
-    DB1_end_node = np.where(layer_names=='DB1_4')[0][0]
+    DB1_end_node = np.where(layer_names=='DB1_{}'.format(layer_depths[1]-1))[0][0]
     DB8_start_node = np.where(layer_names=='DB8_0')[0][0]
     T1_node = np.where(layer_names=='T_1')[0][0]
     for i in range(len(skips)):
@@ -361,7 +376,7 @@ def FCDenseNet_103Layers(input_shape, c, model_name,
     # output of DB0 + connections to T_0
     # --> 
     # output of TU_4 (input of DB9_0)
-    DB0_end_node = np.where(layer_names=='DB0_3')[0][0]
+    DB0_end_node = np.where(layer_names=='DB0_{}'.format(layer_depths[0]-1))[0][0]
     DB9_start_node = np.where(layer_names=='DB9_0')[0][0]
     T0_node = np.where(layer_names=='T_0')[0][0]
     for i in range(len(skips)):
