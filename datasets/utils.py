@@ -43,6 +43,20 @@ def gen_batch_inds(data_size, batch_size):
 
 def gen_minibatch_labeled_unlabeled_inds(
         L_indic, batch_size, n_labeled=None):
+    """Generating "indices" with a specific batch size from a 
+    mixture of labeled and unlabeled sample
+
+    * L_inidc : array of binary values
+        indicating if a sample in the pool is labeled (1) or not (0)
+
+    * batch_size : int
+    
+
+    * n_labeled : None or int
+        if not None, an integer specifying a fixed number of labeled
+        samples in each generated batch
+    
+    """
     
     n = len(L_indic)
     if n_labeled is None:
@@ -75,26 +89,9 @@ def gen_minibatch_materials(gen, *args):
     return tuple([[arg[ind] for ind in inds]
                   for arg in args])
 
-def prepare_batch_CamVid(img_paths, grnd_paths, img_shape):
 
-    h,w = img_shape
-    batch_X = np.zeros((len(img_paths),h,w,3))
-    batch_grnd = np.zeros((len(img_paths),h,w))
-
-    for i in range(len(img_paths)):
-        # image
-        img = imageio.imread(img_paths[i])
-        crimg, init_h, init_w = random_crop(img,h,w)
-        batch_X[i,:,:,:] = crimg
-        # ground truth
-        grnd = imageio.imread(grnd_paths[i])
-        cgrnd,_,_ = random_crop(grnd,h,w,init_h,init_w)
-        batch_grnd[i,:,:] = cgrnd
-
-    return batch_X, batch_grnd
-
-def prepare_batch_BrVol(img_paths_or_mats,
-                        mask_paths_or_mats, 
+def prepare_batch_BrVol(imgs,
+                        masks, 
                         img_shape, 
                         one_hot_channels=None,
                         slice_choice='uniform',
@@ -102,11 +99,18 @@ def prepare_batch_BrVol(img_paths_or_mats,
     """Preparing a batch of image slices from multiple given
     brain volumes
 
-    Images and their masks could be provided by their paths
-    (list of strings), or loaded images (list of 3D arrays).
-    For now, if given as path strings, only nrrd format is
-    supported.
+    Second fully version which supports 3D sampling as well as 2D
 
+    This version only works with already-loaded images and
+    masks (for sake of simplicity).
+
+    NOTE 1 about `img_shape`:
+    If it is a list of 2 elements, 2D axial slices will be loaded,
+    and if it has 3 elements, a 3D volume will be loaded from the image.
+    In the 3D case, input indices are assumed to be generated in a way
+    that there are enough depth margins to take z-z_rad:z+z_rad
+
+    NOTE 2 about `img_shape`:
     If the image shape `img_shape` is not the same as the
     axial slices of the volumes, the slices will be randomly
     cropped.
@@ -127,22 +131,29 @@ def prepare_batch_BrVol(img_paths_or_mats,
     of unlabeled slices will be all-zero matrices.
     """
 
-    h,w = img_shape
-    m = len(img_paths_or_mats[0])
-    b = len(img_paths_or_mats)
-    batch_X = np.zeros((len(img_paths_or_mats),h,w,m))
-    nohot_batch_mask = np.zeros((b,h,w))
+    m = len(imgs[0])   # number of modalities
+    b = len(imgs)      # number of selected indices (=batch size)
+
+    if len(img_shape)==2:
+        h,w = img_shape
+        z = 1
+        batch_X = np.zeros((b,1,h,w,m))
+        nohot_batch_mask = np.zeros((b,1,h,w))
+    else:
+        h,w,z = img_shape
+        batch_X = np.zeros((b,z,h,w,m))
+        nohot_batch_mask = np.zeros((b,z,h,w))
+    z_rad = int(z/2)
+
     if labeled_indic is None:
         labeled_indic = np.ones(b)
 
+    # loop over selected indices
     for i in range(b):
-        # sampling a slice
-        # ----------------
-        if isinstance(mask_paths_or_mats[i], str):
-            grnd = nrrd.read(mask_paths_or_mats[i])[0]
-        else:
-            grnd = mask_paths_or_mats[i]
+        grnd = masks[i]
 
+        # NOTE:
+        # in this version, slice samling does not support 3D generators
         if isinstance(slice_choice, str):
             if slice_choice=='uniform':
                 slice_ind = np.random.randint(grnd.shape[-1])
@@ -154,33 +165,38 @@ def prepare_batch_BrVol(img_paths_or_mats,
         else:
             slice_ind = slice_choice[i]
 
-        for j in range(m):
-            # image (j'th modality)
-            if isinstance(img_paths_or_mats[i][j], str):
-                img = nrrd.read(img_paths_or_mats[i][j])[0]
-            else:
-                img = img_paths_or_mats[i][j]
-            img = img[:,:,slice_ind]
-            if j==0:
-                crimg, init_h, init_w = random_crop(img,h,w)
-            else:
-                crimg,_,_ = random_crop(img,h,w,init_h,init_w)
-            batch_X[i,:,:,j] = crimg
+        # depth jz with respect to the selected slice
+        for jz, offset in enumerate(np.arange(-z_rad, z_rad)):
+            # jm-th modality
+            for jm in range(m):
+                img = imgs[i][jm][:,:,slice_ind+offset]
 
-        # ground truth
-        if labeled_indic[i]==0:
-            nohot_batch_mask[i,:,:] = np.nan
-            continue
-        grnd = grnd[:,:,slice_ind]
-        cgrnd,_,_ = random_crop(grnd,h,w,init_h,init_w)
-        nohot_batch_mask[i,:,:] = cgrnd
+                if jm==0 and jz==0:
+                    crimg, init_h, init_w = random_crop(img,h,w)
+                else:
+                    crimg,_,_ = random_crop(img,h,w,init_h,init_w)
+
+                # if it's a 2D generator, it's done here
+                batch_X[i,jz,:,:,jm] = crimg
+
+            # ground truth for the jz-th slice
+            if labeled_indic[i]==0:
+                nohot_batch_mask[i,jz,:,:] = np.nan
+                continue
+            cgrnd,_,_ = random_crop(grnd[:,:,slice_ind+offset],
+                                    h,w,init_h,init_w)
+            nohot_batch_mask[i,jz,:,:] = cgrnd
 
     if one_hot_channels is not None:
         batch_mask = np.zeros(nohot_batch_mask.shape+(one_hot_channels,))
         for j in range(one_hot_channels):
-            batch_mask[:,:,:,j] = nohot_batch_mask==j
+            batch_mask[:,:,:,:,j] = nohot_batch_mask==j
     else:
         batch_mask = nohot_batch_mask
+
+    if z==1:
+        batch_X = np.squeeze(batch_X, axis=1)
+        batch_mask = np.squeeze(batch_mask, axis=1)
 
     return batch_X, batch_mask
 

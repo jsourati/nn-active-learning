@@ -145,6 +145,7 @@ class regular(object):
             self.slices_L_indic = np.concatenate(
                 [np.ones(self.train_n_slices[i])*self.L_indic[i] 
                  for i in range(len(self.tr_masks))])
+            # index generator
             train_generator = gen_minibatch_labeled_unlabeled_inds(
                 self.slices_L_indic, batch_size, n_labeled_train)
             train_gen_slices = lambda: self.generate_images(
@@ -230,17 +231,6 @@ class regular(object):
                                    img_shape, 
                                    self.C, slice_choice)
 
-
-    def test_generator(self, img_shape, batch_size=3, 
-                       slice_choice='uniform'):
-    
-        for inds in gen_batch_inds(len(self.test_inds), batch_size):
-            img_paths = [self.test_img_paths[i] for i in inds]
-            mask_paths = [self.test_mask_paths[i] for i in inds]
-            yield prepare_batch_BrVol(img_paths, mask_paths,
-                                      img_shape, self.C, 
-                                      slice_choice, None)
-
     def combine_with_other_data(self, dat_2):
 
         assert self.mods==dat_2.mods, 'The combining data sets should have '+\
@@ -273,6 +263,98 @@ class regular(object):
             self.tr_masks = self.tr_masks + dat_2.tr_masks
             self.val_imgs = self.val_imgs + dat_2.val_imgs
             self.val_masks = self.val_masks + dat_2.val_masks
+
+
+class D3(regular):
+    # same constructor as `regular`
+    
+    def create_train_valid_gens(self, 
+                                batch_size, 
+                                img_shape,
+                                valid_mode='random',
+                                n_labeled_train=None):
+        """Creating sample generator from training and validation
+        data sets. 
+
+        It is assumed that images are loaed through load_images().
+
+        NOTE: Although, `img_shape` has the format `[h,w,z,m]`, where
+        `h=height`, `w=width`, `z=depth` and `m=#modelities`, when
+        it is used with a CNN class, the generators should generate
+        batches in format `[b,z,h,w,m]` (with `b=batch size`).
+        """
+
+        assert len(img_shape)==3, 'Three values are needed for img_shape in this class'
+        assert img_shape[0]%2==img_shape[1]%2, 'Height and Width sizes'+\
+            'in img_shape should be odd.'
+
+        # NOTE: the reason that we do not push for odd depth is that in our U-net-style  
+        # 3D FCN model (Tiramisu), we can only work with depths that are 
+        # multiplications of 64
+
+        # training
+        if len(self.tr_masks)>0:
+            z = img_shape[2]
+            z_rad = int(z/2)
+            # we should ignore 2*z_rad slices in total 
+            # (indices of valid slices: z_rad:-z_rad (Z-z_rad-1) )
+            self.train_n_slices = [self.tr_masks[i].shape[2]-2*z_rad
+                                   for i in range(len(self.tr_masks))]
+            self.slices_L_indic = np.concatenate(
+                [np.ones(self.train_n_slices[i])*self.L_indic[i] 
+                 for i in range(len(self.tr_masks))])
+            # index generator
+            train_generator = gen_minibatch_labeled_unlabeled_inds(
+                self.slices_L_indic, batch_size, n_labeled_train)
+            # patch generator
+            train_gen_slices = lambda: self.generate_images(
+                img_shape, train_generator, 'training')
+
+            self.train_gen_fn = train_gen_slices
+
+
+    def generate_images(self,
+                        img_shape, 
+                        inds_generator,
+                        mode='training'):
+        """Loading a patch (slices) based on indices generated
+        by a given index-generator
+        """
+
+        # generate indices
+        z_rad = int(img_shape[2]/2)
+        inds = np.concatenate(next(inds_generator))
+
+        if mode=='training':
+            # extracting slice indices from the generated indices
+            img_slice_inds = global2local_inds(inds, self.train_n_slices)
+            img_inds = np.concatenate([
+                np.ones(len(img_slice_inds[i]),dtype=int)*i 
+                for i in range(len(img_slice_inds))])
+            # adjusting the indices by adding z/2 
+            # (we already excluded z/2 from beginning and z/2 from
+            #  the end of the indices)
+            img_slice_inds = np.concatenate(img_slice_inds) + z_rad
+            imgs = [self.tr_imgs[int(i)] for i in img_inds]
+            masks = [self.tr_masks[int(i)] for i in img_inds]
+            if np.any(self.L_indic==0):
+                inds_L_indic = np.ones(len(img_inds))
+                inds_L_indic[self.L_indic[img_inds]==0] = 0
+            else:
+                inds_L_indic=None
+
+        elif mode=='validation':
+            img_slice_inds = global2local_inds(inds, self.valid_n_slices)
+            img_inds = np.concatenate([
+                np.ones(len(img_slice_inds[i]),dtype=int)*i 
+                for i in range(len(img_slice_inds))])
+            img_slice_inds = np.concatenate(img_slice_inds)
+            imgs = [self.val_imgs[int(i)] for i in img_inds]
+            masks = [self.val_masks[int(i)] for i in img_inds]
+            inds_L_indic=None
+
+        return prepare_batch_BrVol(
+            imgs, masks, img_shape, self.C, img_slice_inds, inds_L_indic)
 
 
 def get_dat_for_FT(dat,slice_img_inds, 
